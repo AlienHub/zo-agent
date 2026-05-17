@@ -36,7 +36,7 @@ import { useSessionSelection, useIsMultiSelectActive, useSelectedIds, useSelecti
 import { sourceSelection, skillSelection, automationSelection } from '@/hooks/useEntitySelection'
 import { extractLabelId } from '@craft-agent/shared/labels'
 import type { SessionStatusId } from '@/config/session-status-config'
-import { SourceInfoPage, ChatPage } from '@/pages'
+import { SourceInfoPage, ChatPage, SessionResourcePreviewPage } from '@/pages'
 import SkillInfoPage from '@/pages/SkillInfoPage'
 import { getSettingsPageComponent } from '@/pages/settings/settings-pages'
 import { AutomationInfoPage } from '../automations/AutomationInfoPage'
@@ -230,9 +230,13 @@ export function MainContentPanel({
     </StoplightProvider>
   )
 
-  // Settings navigator - uses component map from settings-pages.ts
+  // Settings navigator - uses component map from settings-pages.ts.
+  // Bare `settings` route (subpage === null) means navigator-only view in compact mode;
+  // PanelStackContainer hides the content panel entirely. On desktop the panel still
+  // mounts, so fall back to the App page so it isn't empty.
   if (isSettingsNavigation(navState)) {
-    const SettingsPageComponent = getSettingsPageComponent(navState.subpage)
+    const subpage = navState.subpage ?? 'app'
+    const SettingsPageComponent = getSettingsPageComponent(subpage)
     return wrapWithStoplight(
       <Panel variant="grow" className={className}>
         <SettingsPageComponent />
@@ -375,7 +379,11 @@ export function MainContentPanel({
     if (navState.details) {
       return wrapWithStoplight(
         <Panel variant="grow" className={className}>
-          <ChatPage sessionId={navState.details.sessionId} />
+          {navState.details.type === 'resource' ? (
+            <SessionResourcePreviewPage resourceDetails={navState.details} />
+          ) : (
+            <ChatPage sessionId={navState.details.sessionId} />
+          )}
         </Panel>
       )
     }

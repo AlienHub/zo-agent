@@ -64,6 +64,7 @@ import {
   CodePreviewOverlay,
   DocumentFormattedMarkdownOverlay,
   JSONPreviewOverlay,
+  HTMLPreviewOverlay,
 } from '@craft-agent/ui'
 import { useLinkInterceptor, type FilePreviewState } from '@/hooks/useLinkInterceptor'
 import { useTransportConnectionState } from '@/hooks/useTransportConnectionState'
@@ -73,6 +74,7 @@ import { getFileManagerName } from '@/lib/platform'
 import { rendererLog } from '@/lib/logger'
 import { ActionRegistryProvider } from '@/actions'
 import { toast } from 'sonner'
+import { openInAppBrowser } from '@/lib/browser-pane'
 
 type AppState = 'loading' | 'onboarding' | 'reauth' | 'workspace-picker' | 'ready'
 
@@ -1880,6 +1882,15 @@ export default function App() {
     onReadFileDataUrl: (path: string) => window.electronAPI.readFileDataUrl(path),
     // Read file as binary Uint8Array (used by PDF preview blocks)
     onReadFileBinary: (path: string) => window.electronAPI.readFileBinary(path),
+    // Open a URL or local HTML file in the dedicated in-app browser surface
+    onOpenInAppBrowser: async (target: { url?: string; filePath?: string }) => {
+      try {
+        await openInAppBrowser(target)
+      } catch (error) {
+        console.error('[App] Failed to open in-app browser preview:', error)
+        toast.error(t('toast.failedToCreateBrowser'))
+      }
+    },
     // Reveal a file in the system file manager (Finder on macOS, Explorer on Windows, etc.)
     onRevealInFinder: (path: string) => {
       window.electronAPI.showInFolder(path).catch(() => {})
@@ -1890,7 +1901,7 @@ export default function App() {
     onSetTrafficLightsVisible: (visible: boolean) => {
       window.electronAPI.setTrafficLightsVisible(visible)
     },
-  }), [handleOpenFile, handleOpenUrl, linkInterceptor.openFileExternal])
+  }), [handleOpenFile, handleOpenUrl, linkInterceptor.openFileExternal, t])
 
   // Loading state - show splash screen
   if (appState === 'loading') {
@@ -2005,7 +2016,10 @@ export default function App() {
           )}
 
           {/* Main UI - always rendered, splash fades away to reveal it */}
-          <div className="h-full flex flex-col pt-[48px] text-foreground">
+          <div
+            className="h-full flex flex-col text-foreground"
+            style={{ paddingTop: 'var(--topbar-height)' }}
+          >
             {showTransportConnectionBanner && connectionState && (
               <TransportConnectionBanner
                 state={connectionState}
@@ -2112,6 +2126,17 @@ function FilePreviewRenderer({
           filePath={state.filePath}
           loadPdfData={loadPdfData}
           theme={theme}
+        />
+      )
+
+    case 'html':
+      return (
+        <HTMLPreviewOverlay
+          isOpen
+          onClose={onClose}
+          html={state.content ?? ''}
+          sourcePath={state.filePath}
+          title={state.filePath.split('/').pop() || state.filePath}
         />
       )
 

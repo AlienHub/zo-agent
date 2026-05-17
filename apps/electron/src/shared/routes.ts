@@ -17,6 +17,7 @@
 
 import type { SettingsSubpage } from './settings-registry'
 import type { PermissionMode } from '@craft-agent/shared/agent/mode-types'
+import type { SessionFilter } from './types'
 
 // Helper to build query strings from params
 function toQueryString(params?: Record<string, string | undefined>): string {
@@ -121,6 +122,34 @@ export const routes = {
       sessionId
         ? `view/${encodeURIComponent(viewId)}/session/${sessionId}` as const
         : `view/${encodeURIComponent(viewId)}` as const,
+
+    /** Session resource preview view (keeps sessions navigator context while rendering a file or URL preview) */
+    sessionResource: (params: {
+      sessionId: string
+      resourceKind: 'file' | 'url'
+      target: string
+      filter?: SessionFilter
+    }) => {
+      const { sessionId, resourceKind, target, filter } = params
+      const encodedTarget = encodeURIComponent(target)
+      const resolvedFilter = filter ?? { kind: 'allSessions' as const }
+
+      switch (resolvedFilter.kind) {
+        case 'flagged':
+          return `flagged/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
+        case 'archived':
+          return `archived/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
+        case 'state':
+          return `state/${resolvedFilter.stateId}/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
+        case 'label':
+          return `label/${encodeURIComponent(resolvedFilter.labelId)}/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
+        case 'view':
+          return `view/${encodeURIComponent(resolvedFilter.viewId)}/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
+        case 'allSessions':
+        default:
+          return `allSessions/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
+      }
+    },
 
     /** Sources view (sources navigator) - supports type filtering */
     sources: (params?: { sourceSlug?: string; type?: 'api' | 'mcp' | 'local' }) => {

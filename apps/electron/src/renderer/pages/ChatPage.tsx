@@ -12,6 +12,7 @@ import { AlertCircle, Globe, Copy, RefreshCw, Link2Off, Info } from 'lucide-reac
 import { ChatDisplay, type ChatDisplayHandle } from '@/components/app-shell/ChatDisplay'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { SessionMenu } from '@/components/app-shell/SessionMenu'
+import { CompactSessionMenu } from '@/components/app-shell/CompactSessionMenu'
 import { SessionInfoPopover } from '@/components/app-shell/SessionInfoPopover'
 import { RenameDialog } from '@/components/ui/rename-dialog'
 import { toast } from 'sonner'
@@ -20,11 +21,13 @@ import { DropdownMenu, DropdownMenuTrigger } from '@/components/ui/dropdown-menu
 import { StyledDropdownMenuContent, StyledDropdownMenuItem, StyledDropdownMenuSeparator } from '@/components/ui/styled-dropdown'
 import { useAppShellContext, usePendingPermission, usePendingCredential, useSessionOptionsFor, useSession as useSessionData } from '@/context/AppShellContext'
 import { rendererPerf } from '@/lib/perf'
-import { routes } from '@/lib/navigate'
+import { navigate, routes } from '@/lib/navigate'
 import { coerceInputText } from '@/lib/input-text'
 import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/session-load'
+import { normalizeLocalFileTarget } from '@/lib/file-link-target'
 import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
 import { getSessionTitle } from '@/utils/session'
+import { useNavigationState, isSessionsNavigation } from '@/contexts/NavigationContext'
 // Model resolution: connection.defaultModel (no hardcoded defaults)
 import { resolveEffectiveConnectionSlug, isSessionConnectionUnavailable } from '@config/llm-connections'
 
@@ -44,7 +47,6 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     llmConnections,
     workspaceDefaultLlmConnection,
     onSendMessage,
-    onOpenFile,
     onOpenUrl,
     workspaces,
     onRespondToPermission,
@@ -79,6 +81,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     onChatMatchInfoChange,
     isFocusedPanel,
   } = useAppShellContext()
+  const navigationState = useNavigationState()
 
   // Use the unified session options hook for clean access
   const {
@@ -330,16 +333,18 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
   const handleOpenFile = React.useCallback(
     async (path: string) => {
+      const normalizedPath = normalizeLocalFileTarget(path)
+
       // Resolve bare relative paths against session working directory,
       // or workspace root as a fallback when workingDirectory is not set.
       const resolved = (() => {
-        if (path.startsWith('/') || path.startsWith('~/')) return path
+        if (normalizedPath.startsWith('/') || normalizedPath.startsWith('~/')) return normalizedPath
 
         const baseDir = workingDirectory || activeWorkspace?.rootPath
-        if (!baseDir) return path
+        if (!baseDir) return normalizedPath
 
         const cleanedBase = baseDir.replace(/\/+$/, '')
-        const cleanedPath = path.replace(/^\.\//, '')
+        const cleanedPath = normalizedPath.replace(/^\.\//, '')
         return `${cleanedBase}/${cleanedPath}`
       })()
 
@@ -356,12 +361,22 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
             const files = matches.filter((m) => m.type === 'file' && m.name === fileName)
             const exact = files.find((m) => m.path === resolved)
             if (exact) {
-              onOpenFile(exact.path)
+              navigate(routes.view.sessionResource({
+                sessionId,
+                resourceKind: 'file',
+                target: exact.path,
+                filter: isSessionsNavigation(navigationState) ? navigationState.filter : undefined,
+              }), { newPanel: true })
               return
             }
 
             if (files.length === 1) {
-              onOpenFile(files[0].path)
+              navigate(routes.view.sessionResource({
+                sessionId,
+                resourceKind: 'file',
+                target: files[0].path,
+                filter: isSessionsNavigation(navigationState) ? navigationState.filter : undefined,
+              }), { newPanel: true })
               toast.info(t('chat.openedClosestMatch', { path: files[0].relativePath }))
               return
             }
@@ -371,9 +386,14 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         }
       }
 
-      onOpenFile(resolved)
+      navigate(routes.view.sessionResource({
+        sessionId,
+        resourceKind: 'file',
+        target: resolved,
+        filter: isSessionsNavigation(navigationState) ? navigationState.filter : undefined,
+      }), { newPanel: true })
     },
-    [onOpenFile, workingDirectory, activeWorkspace?.rootPath]
+    [workingDirectory, activeWorkspace?.rootPath, navigationState, sessionId, t]
   )
 
   const handleOpenUrl = React.useCallback(
@@ -601,8 +621,11 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
   const headerActions = isCompactMode ? compactInfoButton : shareButton
 
-  // Build title menu content for chat sessions using shared SessionMenu
-  const titleMenu = React.useMemo(() => sessionMeta ? (
+  // Build title menu content for chat sessions using shared SessionMenu.
+  // Desktop uses Radix DropdownMenu via PanelHeader; compact mode uses a
+  // vaul Drawer (CompactSessionMenu) so submenus aren't clipped by the
+  // panel container query on narrow viewports.
+  const titleMenu = React.useMemo(() => (sessionMeta && !isCompactMode) ? (
     <SessionMenu
       item={sessionMeta}
       sessionStatuses={sessionStatuses ?? []}
@@ -620,6 +643,44 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     />
   ) : null, [
     sessionMeta,
+    isCompactMode,
+    sessionStatuses,
+    labels,
+    handleLabelsChange,
+    handleRename,
+    handleFlag,
+    handleUnflag,
+    handleArchive,
+    handleUnarchive,
+    handleMarkUnread,
+    handleSessionStatusChange,
+    handleOpenInNewWindow,
+    handleDelete,
+  ])
+
+  const compactTitleMenu = React.useMemo(() => (sessionMeta && isCompactMode) ? (
+    <CompactSessionMenu
+      title={displayTitle}
+      isRegeneratingTitle={isAsyncOperationOngoing}
+      item={sessionMeta}
+      sessionStatuses={sessionStatuses ?? []}
+      labels={labels ?? []}
+      onLabelsChange={handleLabelsChange}
+      onRename={handleRename}
+      onFlag={handleFlag}
+      onUnflag={handleUnflag}
+      onArchive={handleArchive}
+      onUnarchive={handleUnarchive}
+      onMarkUnread={handleMarkUnread}
+      onSessionStatusChange={handleSessionStatusChange}
+      onOpenInNewWindow={handleOpenInNewWindow}
+      onDelete={handleDelete}
+    />
+  ) : null, [
+    sessionMeta,
+    isCompactMode,
+    displayTitle,
+    isAsyncOperationOngoing,
     sessionStatuses,
     labels,
     handleLabelsChange,
@@ -655,7 +716,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       return (
         <>
           <div className="h-full flex flex-col">
-            <PanelHeader  title={displayTitle} titleMenu={titleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
+            <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
             <div className="flex-1 flex flex-col min-h-0">
               <ChatDisplay
                 ref={chatDisplayRef}
@@ -727,7 +788,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   return (
     <>
       <div className="h-full flex flex-col">
-        <PanelHeader  title={displayTitle} titleMenu={titleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
+        <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
         <div className="flex-1 flex flex-col min-h-0">
           <ChatDisplay
             ref={chatDisplayRef}

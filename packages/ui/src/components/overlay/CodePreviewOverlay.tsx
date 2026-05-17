@@ -37,6 +37,8 @@ export interface CodePreviewOverlayProps {
   error?: string
   /** Render inline without dialog (for playground) */
   embedded?: boolean
+  /** Hide embedded header chrome and let parent provide page-level controls */
+  hideHeader?: boolean
   /** Original shell command (for Codex reads) - shown above code */
   command?: string
 }
@@ -54,6 +56,7 @@ export function CodePreviewOverlay({
   theme = 'light',
   error,
   embedded,
+  hideHeader,
   command,
 }: CodePreviewOverlayProps) {
   const { t } = useTranslation()
@@ -78,6 +81,7 @@ export function CodePreviewOverlay({
       subtitle={subtitle}
       error={error ? { label: mode === 'write' ? 'Write Failed' : 'Read Failed', message: error } : undefined}
       embedded={embedded}
+      hideHeader={hideHeader}
       className="bg-foreground-3"
     >
       {/* Show command if present (Codex reads via shell commands) */}

@@ -23,6 +23,13 @@ describe('resolveMarkdownLinkTarget', () => {
     })
   })
 
+  it('resolves unicode repo-relative file paths with percent-encoded spaces', () => {
+    expect(resolveMarkdownLinkTarget('主题/零信任网关（AI%20Agent%20版本）.md')).toEqual({
+      kind: 'file',
+      path: '主题/零信任网关（AI Agent 版本）.md',
+    })
+  })
+
   it('resolves unix file URLs as file targets', () => {
     expect(resolveMarkdownLinkTarget('file:///Users/tester/report.xlsx')).toEqual({
       kind: 'file',

@@ -29,6 +29,14 @@ function resolveFileUrlPath(target: string): string | null {
   }
 }
 
+function decodePathTarget(target: string): string {
+  try {
+    return decodeURIComponent(target)
+  } catch {
+    return target
+  }
+}
+
 /**
  * Resolve markdown link targets for click dispatch.
  *
@@ -44,8 +52,9 @@ export function resolveMarkdownLinkTarget(target: string): ResolvedMarkdownLinkT
     return { kind: 'file', path: fileUrlPath }
   }
 
-  if (isFilePathTarget(trimmed)) {
-    return { kind: 'file', path: trimmed }
+  const decodedPath = decodePathTarget(trimmed)
+  if (isFilePathTarget(decodedPath)) {
+    return { kind: 'file', path: decodedPath }
   }
 
   return { kind: 'url', url: trimmed }

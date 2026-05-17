@@ -8,6 +8,7 @@
 
 import { join, parse as parsePath } from 'path'
 import { existsSync, mkdirSync } from 'fs'
+import { fileURLToPath, pathToFileURL } from 'url'
 import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
 import { BrowserView, BrowserWindow, app, ipcMain, nativeTheme, session, shell, type Session as ElectronSession } from 'electron'
 import { mainLog } from './logger'
@@ -688,7 +689,18 @@ export class BrowserPaneManager implements IBrowserPaneManager {
     let normalizedUrl = url.trim()
     const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(normalizedUrl)
     const isAbout = normalizedUrl.startsWith('about:')
-    if (!hasScheme && !isAbout) {
+    const isFileUrl = /^file:/i.test(normalizedUrl)
+    const looksLikeAbsoluteFilePath =
+      normalizedUrl.startsWith('/') ||
+      normalizedUrl.startsWith('~/') ||
+      /^[A-Za-z]:[\\/]/.test(normalizedUrl)
+
+    if (isFileUrl || looksLikeAbsoluteFilePath) {
+      const workspaceId = this.resolveLaunchWorkspaceId()
+      const candidatePath = isFileUrl ? fileURLToPath(normalizedUrl) : normalizedUrl
+      const safePath = await validateFilePath(candidatePath, getWorkspaceAllowedDirs(workspaceId))
+      normalizedUrl = pathToFileURL(safePath).toString()
+    } else if (!hasScheme && !isAbout) {
       const looksLikeHost = /^(localhost|\d{1,3}(?:\.\d{1,3}){3}|[\w-]+(?:\.[\w-]+)+)(?::\d+)?(?:\/|$)/i.test(normalizedUrl)
       if (looksLikeHost) {
         normalizedUrl = `https://${normalizedUrl}`

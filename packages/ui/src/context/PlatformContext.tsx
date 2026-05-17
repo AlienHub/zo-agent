@@ -37,6 +37,12 @@ export interface PlatformActions {
   onOpenUrl?: (url: string) => void
 
   /**
+   * Open a URL or local HTML file in the app's live browser surface.
+   * Electron can route this to BrowserPane; web viewers can omit it.
+   */
+  onOpenInAppBrowser?: (target: { url?: string; filePath?: string }) => Promise<void> | void
+
+  /**
    * Open a code preview in a new window (Electron: opens Monaco window)
    * Web: Could show inline modal with syntax highlighting
    */

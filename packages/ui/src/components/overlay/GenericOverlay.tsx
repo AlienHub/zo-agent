@@ -35,6 +35,8 @@ export interface GenericOverlayProps {
   modifiedContent?: string
   /** Render inline without dialog (for playground) */
   embedded?: boolean
+  /** Hide embedded header chrome and let parent provide page-level controls */
+  hideHeader?: boolean
   /** Error message if the tool failed */
   error?: string
 }
@@ -123,6 +125,7 @@ export function GenericOverlay({
   originalContent = '',
   modifiedContent = '',
   embedded,
+  hideHeader,
   error,
 }: GenericOverlayProps) {
   const { t } = useTranslation()
@@ -151,6 +154,7 @@ export function GenericOverlay({
       }}
       title={resolvedTitle}
       embedded={embedded}
+      hideHeader={hideHeader}
       error={error ? { label: 'Tool Failed', message: error } : undefined}
       className="bg-foreground-3"
     >

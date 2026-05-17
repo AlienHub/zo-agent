@@ -72,6 +72,7 @@ import {
 import { SessionList, type ChatGroupingMode } from "./SessionList"
 import { MainContentPanel } from "./MainContentPanel"
 import { PanelStackContainer } from "./PanelStackContainer"
+import { CompactSessionListFilter } from "./CompactSessionListFilter"
 import type { ChatDisplayHandle } from "./ChatDisplay"
 import { LeftSidebar } from "./LeftSidebar"
 import { useSession } from "@/hooks/useSession"
@@ -122,6 +123,7 @@ import { APP_EVENTS, AGENT_EVENTS, type AutomationFilterKind, AUTOMATION_TYPE_TO
 import { useAutomations } from "@/hooks/useAutomations"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { PanelHeader } from "./PanelHeader"
+import { FabNewChat } from "./FabNewChat"
 import { SendToWorkspaceDialog } from "./SendToWorkspaceDialog"
 import { MessagingDialogHost } from "@/components/messaging/MessagingDialogHost"
 import { EditPopover, getEditConfig, type EditContextKey } from "@/components/ui/EditPopover"
@@ -540,6 +542,9 @@ function AppShellContent({
   const [sessionListWidth, setSessionListWidth] = React.useState(() => {
     return storage.get(storage.KEYS.sessionListWidth, 300)
   })
+  const sidebarWidthRef = React.useRef(sidebarWidth)
+  const sessionListWidthRef = React.useRef(sessionListWidth)
+  const isSidebarVisibleRef = React.useRef(isSidebarVisible)
 
   // Hides both sidebar and navigator (CMD+. toggle)
   // Seed from either focused window param or persisted preference, then keep it toggleable.
@@ -576,9 +581,23 @@ function AppShellContent({
   const [sessionListHandleY, setSessionListHandleY] = React.useState<number | null>(null)
   const resizeHandleRef = React.useRef<HTMLDivElement>(null)
   const sessionListHandleRef = React.useRef<HTMLDivElement>(null)
+  const resizeRafRef = React.useRef<number | null>(null)
+  const pendingResizePointRef = React.useRef<{ x: number; y: number } | null>(null)
   const [session, setSession] = useSession()
   const { resolvedMode, isDark, setMode } = useTheme()
   const { canGoBack, canGoForward, goBack, goForward, navigateToSource, navigateToSession } = useNavigation()
+
+  React.useEffect(() => {
+    sidebarWidthRef.current = sidebarWidth
+  }, [sidebarWidth])
+
+  React.useEffect(() => {
+    sessionListWidthRef.current = sessionListWidth
+  }, [sessionListWidth])
+
+  React.useEffect(() => {
+    isSidebarVisibleRef.current = isSidebarVisible
+  }, [isSidebarVisible])
 
   // Double-Esc interrupt feature: first Esc shows warning, second Esc interrupts
   const { handleEscapePress } = useEscapeInterrupt()
@@ -1225,48 +1244,79 @@ function AppShellContent({
   React.useEffect(() => {
     if (!isResizing) return
 
-    const handleMouseMove = (e: MouseEvent) => {
+    const applyResize = () => {
+      resizeRafRef.current = null
+      const point = pendingResizePointRef.current
+      if (!point) return
+
       if (isResizing === 'sidebar') {
-        const newWidth = Math.min(Math.max(e.clientX, 180), 320)
-        setSidebarWidth(newWidth)
+        const newWidth = Math.min(Math.max(point.x, 180), 320)
+        sidebarWidthRef.current = newWidth
+        setSidebarWidth((prev) => prev === newWidth ? prev : newWidth)
         if (resizeHandleRef.current) {
           const rect = resizeHandleRef.current.getBoundingClientRect()
-          setSidebarHandleY(e.clientY - rect.top)
+          const nextY = point.y - rect.top
+          setSidebarHandleY((prev) => prev === nextY ? prev : nextY)
         }
       } else if (isResizing === 'session-list') {
-        const offset = isSidebarVisible ? sidebarWidth : 0
-        const newWidth = Math.min(Math.max(e.clientX - offset, 240), 480)
-        setSessionListWidth(newWidth)
+        const offset = isSidebarVisibleRef.current ? sidebarWidthRef.current : 0
+        const newWidth = Math.min(Math.max(point.x - offset, 240), 480)
+        sessionListWidthRef.current = newWidth
+        setSessionListWidth((prev) => prev === newWidth ? prev : newWidth)
         if (sessionListHandleRef.current) {
           const rect = sessionListHandleRef.current.getBoundingClientRect()
-          setSessionListHandleY(e.clientY - rect.top)
+          const nextY = point.y - rect.top
+          setSessionListHandleY((prev) => prev === nextY ? prev : nextY)
         }
       }
+    }
+
+    const scheduleResize = (x: number, y: number) => {
+      pendingResizePointRef.current = { x, y }
+      if (resizeRafRef.current !== null) return
+      resizeRafRef.current = window.requestAnimationFrame(applyResize)
+    }
+
+    const handleMouseMove = (e: MouseEvent) => {
+      scheduleResize(e.clientX, e.clientY)
     }
 
     const handleMouseUp = () => {
+      if (resizeRafRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafRef.current)
+        resizeRafRef.current = null
+      }
+      applyResize()
+
       if (isResizing === 'sidebar') {
-        storage.set(storage.KEYS.sidebarWidth, sidebarWidth)
+        storage.set(storage.KEYS.sidebarWidth, sidebarWidthRef.current)
         setSidebarHandleY(null)
       } else if (isResizing === 'session-list') {
-        storage.set(storage.KEYS.sessionListWidth, sessionListWidth)
+        storage.set(storage.KEYS.sessionListWidth, sessionListWidthRef.current)
         setSessionListHandleY(null)
       }
+      pendingResizePointRef.current = null
       setIsResizing(null)
     }
 
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
 
     return () => {
+      if (resizeRafRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafRef.current)
+        resizeRafRef.current = null
+      }
+      pendingResizePointRef.current = null
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
   }, [
     isResizing,
-    sidebarWidth,
-    sessionListWidth,
-    isSidebarVisible,
   ])
 
   // Spring transition config - shared between sidebar and header
@@ -1714,8 +1764,9 @@ function AppShellContent({
     navigate(routes.view.automationsAgentic())
   }, [])
 
-  // Handler for settings view
-  const handleSettingsClick = useCallback((subpage: SettingsSubpage = 'app') => {
+  // Handler for settings view. With no arg → bare `settings` route (navigator-only
+  // in compact mode, App fallback on desktop). With an arg → `settings/<subpage>`.
+  const handleSettingsClick = useCallback((subpage?: SettingsSubpage) => {
     navigate(routes.view.settings(subpage))
   }, [])
 
@@ -1958,7 +2009,7 @@ function AppShellContent({
     result.push({ id: 'nav:sources', type: 'nav', action: handleSourcesClick })
     result.push({ id: 'nav:skills', type: 'nav', action: handleSkillsClick })
     result.push({ id: 'nav:automations', type: 'nav', action: handleAutomationsClick })
-    result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick('app') })
+    result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick() })
     result.push({ id: 'nav:whats-new', type: 'nav', action: handleWhatsNewClick })
 
     return result
@@ -2202,7 +2253,13 @@ function AppShellContent({
       <div
         ref={shellRef}
         className="flex items-stretch relative"
-        style={{ height: '100%', paddingRight: PANEL_EDGE_INSET, paddingBottom: PANEL_EDGE_INSET, paddingLeft: 0, gap: PANEL_GAP }}
+        style={{
+          height: '100%',
+          paddingRight: isAutoCompact ? 0 : PANEL_EDGE_INSET,
+          paddingBottom: isAutoCompact ? 0 : PANEL_EDGE_INSET,
+          paddingLeft: 0,
+          gap: PANEL_GAP,
+        }}
       >
         <PanelStackContainer
           sidebarSlot={
@@ -2467,7 +2524,7 @@ function AppShellContent({
                       title: t("sidebar.settings"),
                       icon: Settings,
                       variant: isSettingsNavigation(navState) ? "default" : "ghost",
-                      onClick: () => handleSettingsClick('app'),
+                      onClick: () => handleSettingsClick(),
                     },
                     // --- What's New ---
                     {
@@ -2519,6 +2576,22 @@ function AppShellContent({
                       Shows user-added filters (removable) and pinned filters (non-removable, derived from route).
                       Pinned filters: state views pin a status, label views pin a label, flagged pins the flag. */}
                   {isSessionsNavigation(navState) && (
+                    isAutoCompact ? (
+                      <CompactSessionListFilter
+                        listFilter={listFilter}
+                        setListFilter={setListFilter}
+                        labelFilter={labelFilter}
+                        setLabelFilter={setLabelFilter}
+                        pinnedFilters={pinnedFilters}
+                        effectiveSessionStatuses={effectiveSessionStatuses}
+                        displayLabelConfigs={displayLabelConfigs}
+                        labelConfigs={labelConfigs}
+                        chatGroupingMode={chatGroupingMode}
+                        setChatGroupingMode={setChatGroupingMode}
+                        isStateSubView={isStateSubView}
+                        onOpenSearch={() => setSearchActive(true)}
+                      />
+                    ) : (
                     <DropdownMenu onOpenChange={(open) => { if (!open) { setFilterDropdownQuery(''); setFilterAltHeld(false) } }}>
                       <DropdownMenuTrigger asChild>
                         <HeaderIconButton
@@ -3081,6 +3154,7 @@ function AppShellContent({
                         )}
                       </StyledDropdownMenuContent>
                     </DropdownMenu>
+                    )
                   )}
                   {/* Add Source button (only for sources mode) - uses filter-aware edit config */}
                   {isSourcesNavigation(navState) && activeWorkspace && (
@@ -3227,6 +3301,12 @@ function AppShellContent({
                   activeChatMatchInfo={chatMatchInfo}
                 />
               </>
+            )}
+            {/* Mobile/compact-only FAB for starting a new chat — only on the
+                session list itself, not when a chat is open (it would overlap
+                the chat input). */}
+            {isAutoCompact && isSessionsNavigation(navState) && !navState.details && (
+              <FabNewChat onClick={() => handleNewChat()} />
             )}
             </div>
           }

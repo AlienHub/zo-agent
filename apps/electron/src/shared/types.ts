@@ -554,6 +554,12 @@ export interface ElectronAPI {
   getEnable1MContext(): Promise<boolean>
   setEnable1MContext(enabled: boolean): Promise<void>
 
+  // RTK token optimization
+  getRtkEnabled(): Promise<boolean>
+  setRtkEnabled(enabled: boolean): Promise<void>
+  getRtkStatus(opts?: { forceRecheck?: boolean }): Promise<{ installed: boolean; path: string | null; version: string | null }>
+  getRtkGain(): Promise<{ totalCommands: number; totalInput: number; totalOutput: number; totalSaved: number; avgSavingsPct: number; totalTimeMs: number; avgTimeMs: number } | null>
+
   // Network proxy settings
   getNetworkProxySettings(): Promise<NetworkProxySettings | undefined>
   setNetworkProxySettings(settings: NetworkProxySettings): Promise<void>
@@ -777,13 +783,26 @@ export type SessionFilter =
 export type { SettingsSubpage } from './settings-registry'
 import { isValidSettingsSubpage, type SettingsSubpage } from './settings-registry'
 
+export interface SessionResourceDetails {
+  type: 'resource'
+  sessionId: string
+  resource: {
+    kind: 'file' | 'url'
+    target: string
+  }
+}
+
+export type SessionsNavigationDetails =
+  | { type: 'session'; sessionId: string }
+  | SessionResourceDetails
+
 /**
  * Sessions navigation state
  */
 export interface SessionsNavigationState {
   navigator: 'sessions'
   filter: SessionFilter
-  details: { type: 'session'; sessionId: string } | null
+  details: SessionsNavigationDetails | null
   rightSidebar?: RightSidebarPanel
 }
 
@@ -815,10 +834,14 @@ export interface SourcesNavigationState {
 
 /**
  * Settings navigation state
+ *
+ * `subpage: null` means the bare `settings` route — navigator-only view in compact
+ * mode. On desktop, the content panel falls back to the App page so it isn't empty.
+ * Sources/Skills/Automations use `details: null` for the same purpose.
  */
 export interface SettingsNavigationState {
   navigator: 'settings'
-  subpage: SettingsSubpage
+  subpage: SettingsSubpage | null
   rightSidebar?: RightSidebarPanel
 }
 
@@ -897,6 +920,7 @@ export const getNavigationStateKey = (state: NavigationState): string => {
     return 'automations'
   }
   if (state.navigator === 'settings') {
+    if (state.subpage === null) return 'settings'
     return `settings:${state.subpage}`
   }
   // Chats
@@ -907,6 +931,9 @@ export const getNavigationStateKey = (state: NavigationState): string => {
   else if (f.kind === 'view') base = `view:${f.viewId}`
   else base = f.kind
   if (state.details) {
+    if (state.details.type === 'resource') {
+      return `${base}/chat/${state.details.sessionId}/resource/${state.details.resource.kind}/${encodeURIComponent(state.details.resource.target)}`
+    }
     return `${base}/chat/${state.details.sessionId}`
   }
   return base
@@ -944,7 +971,7 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
   }
 
   // Handle settings
-  if (key === 'settings') return { navigator: 'settings', subpage: 'app' }
+  if (key === 'settings') return { navigator: 'settings', subpage: null }
   if (key.startsWith('settings:')) {
     const subpage = key.slice(9)
     if (isValidSettingsSubpage(subpage)) {
@@ -953,7 +980,12 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
   }
 
   // Handle sessions
-  const parseSessionsKey = (filterKey: string, sessionId?: string): NavigationState | null => {
+  const parseSessionsKey = (
+    filterKey: string,
+    sessionId?: string,
+    resourceKind?: 'file' | 'url',
+    resourceTarget?: string,
+  ): NavigationState | null => {
     let filter: SessionFilter
     if (filterKey === 'allSessions') filter = { kind: 'allSessions' }
     else if (filterKey === 'flagged') filter = { kind: 'flagged' }
@@ -976,11 +1008,41 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
     return {
       navigator: 'sessions',
       filter,
-      details: sessionId ? { type: 'session', sessionId } : null,
+      details: sessionId
+        ? (resourceKind && resourceTarget !== undefined
+          ? {
+              type: 'resource',
+              sessionId,
+              resource: { kind: resourceKind, target: decodeURIComponent(resourceTarget) },
+            }
+          : { type: 'session', sessionId })
+        : null,
+    }
+  }
+
+  if (key.includes('/chat/') && key.includes('/resource/')) {
+    const segments = key.split('/')
+    const filterPart = segments[0]
+    const sessionIndex = segments.indexOf('chat')
+    const resourceIndex = segments.indexOf('resource')
+    const sessionId = sessionIndex >= 0 ? segments[sessionIndex + 1] : undefined
+    const resourceKind = segments[resourceIndex + 1]
+    const resourceTarget = segments[resourceIndex + 2]
+    if (
+      sessionId &&
+      (resourceKind === 'file' || resourceKind === 'url') &&
+      resourceTarget
+    ) {
+      return parseSessionsKey(filterPart, sessionId, resourceKind, resourceTarget)
     }
   }
 
   // Check for session details
+  if (key.includes('/chat/')) {
+    const [filterPart, , sessionId] = key.split('/')
+    return parseSessionsKey(filterPart, sessionId)
+  }
+
   if (key.includes('/session/')) {
     const [filterPart, , sessionId] = key.split('/')
     return parseSessionsKey(filterPart, sessionId)

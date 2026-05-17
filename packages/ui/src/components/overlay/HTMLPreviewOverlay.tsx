@@ -12,24 +12,66 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Globe } from 'lucide-react'
+import { Globe, Monitor } from 'lucide-react'
 import { PreviewOverlay } from './PreviewOverlay'
 import { CopyButton } from './CopyButton'
 import { ItemNavigator } from './ItemNavigator'
+import { usePlatform } from '../../context/PlatformContext'
 
 /**
- * Inject `<base target="_top">` so link clicks navigate the top frame,
- * which Electron's will-navigate handler intercepts → system browser.
+ * Inject a base href for file-backed previews so relative stylesheets, images,
+ * and links resolve next to the source HTML file.
  */
-function injectBaseTarget(html: string): string {
-  if (/<base\s/i.test(html)) return html
+function injectPreviewBase(html: string, sourcePath?: string): string {
+  const baseHref = getPreviewBaseHref(sourcePath)
+  if (!baseHref || /<base\s/i.test(html)) return html
   if (/<head[^>]*>/i.test(html)) {
-    return html.replace(/(<head[^>]*>)/i, '$1<base target="_top">')
+    return html.replace(/(<head[^>]*>)/i, `$1<base href="${baseHref}">`)
   }
   if (/<html[^>]*>/i.test(html)) {
-    return html.replace(/(<html[^>]*>)/i, '$1<head><base target="_top"></head>')
+    return html.replace(/(<html[^>]*>)/i, `$1<head><base href="${baseHref}"></head>`)
   }
-  return `<head><base target="_top"></head>${html}`
+  return `<head><base href="${baseHref}"></head>${html}`
+}
+
+function getPreviewBaseHref(sourcePath?: string): string | null {
+  if (!sourcePath) return null
+
+  if (/^file:/i.test(sourcePath)) {
+    try {
+      const parsed = new URL(sourcePath)
+      parsed.search = ''
+      parsed.hash = ''
+      parsed.pathname = parsed.pathname.replace(/[^/]*$/, '')
+      return parsed.toString()
+    } catch {
+      return null
+    }
+  }
+
+  const normalized = sourcePath.replace(/\\/g, '/')
+  const slashIndex = normalized.lastIndexOf('/')
+  if (slashIndex === -1) return null
+
+  const directory = normalized.slice(0, slashIndex + 1)
+  const encoded = encodeURI(directory)
+
+  if (/^[A-Za-z]:\//.test(directory)) {
+    return `file:///${encoded}`
+  }
+
+  if (directory.startsWith('/')) {
+    return `file://${encoded}`
+  }
+
+  return null
+}
+
+function toBrowserTarget(sourcePath: string): { url?: string; filePath?: string } {
+  if (/^(?:https?:|file:)/i.test(sourcePath)) {
+    return { url: sourcePath }
+  }
+  return { filePath: sourcePath }
 }
 
 interface PreviewItem {
@@ -44,6 +86,8 @@ export interface HTMLPreviewOverlayProps {
   onClose: () => void
   /** Single HTML content (backward compat for link interceptor usage) */
   html?: string
+  /** Source path for single-file previews, used for relative asset resolution */
+  sourcePath?: string
   /** Multiple items for tabbed navigation */
   items?: PreviewItem[]
   /** Pre-loaded content cache (src → html string) */
@@ -62,6 +106,7 @@ export function HTMLPreviewOverlay({
   isOpen,
   onClose,
   html,
+  sourcePath,
   items,
   contentCache: externalCache,
   onLoadContent,
@@ -71,6 +116,7 @@ export function HTMLPreviewOverlay({
 }: HTMLPreviewOverlayProps) {
   // Normalize: single html prop → single item, or use items array
   const { t } = useTranslation()
+  const { onOpenInAppBrowser } = usePlatform()
   const resolvedItems = React.useMemo<PreviewItem[]>(() => {
     if (items && items.length > 0) return items
     if (html) return [{ src: '__single__' }]
@@ -96,6 +142,7 @@ export function HTMLPreviewOverlay({
 
   const activeItem = resolvedItems[activeIdx]
   const activeContent = activeItem ? mergedCache[activeItem.src] : undefined
+  const activeSourcePath = activeItem?.src === '__single__' ? sourcePath : activeItem?.src
 
   // Reset index when overlay opens
   React.useEffect(() => {
@@ -131,9 +178,16 @@ export function HTMLPreviewOverlay({
 
   // Preprocess active HTML
   const processedHtml = React.useMemo(
-    () => activeContent ? injectBaseTarget(activeContent) : null,
-    [activeContent]
+    () => activeContent ? injectPreviewBase(activeContent, activeSourcePath) : null,
+    [activeContent, activeSourcePath]
   )
+
+  const handleOpenInAppBrowser = React.useCallback(() => {
+    if (!activeSourcePath || !onOpenInAppBrowser) return
+    void Promise.resolve(onOpenInAppBrowser(toBrowserTarget(activeSourcePath))).catch((error) => {
+      console.warn('[HTMLPreviewOverlay] Failed to open live browser preview:', error)
+    })
+  }, [activeSourcePath, onOpenInAppBrowser])
 
   // Read iframe content dimensions after it loads
   const handleLoad = React.useCallback(() => {
@@ -165,6 +219,17 @@ export function HTMLPreviewOverlay({
   const headerActions = (
     <div className="flex items-center gap-2">
       <ItemNavigator items={resolvedItems} activeIndex={activeIdx} onSelect={setActiveIdx} size="md" />
+      {activeSourcePath && onOpenInAppBrowser && (
+        <button
+          type="button"
+          onClick={handleOpenInAppBrowser}
+          className="inline-flex items-center gap-1.5 rounded-[8px] bg-background px-3 py-1.5 text-sm shadow-minimal transition-colors hover:bg-muted"
+          title="Open Live Browser"
+        >
+          <Monitor className="h-4 w-4" />
+          <span>Live Browser</span>
+        </button>
+      )}
       <CopyButton content={activeContent || ''} label="Copy HTML" className="bg-background shadow-minimal" />
     </div>
   )
@@ -201,7 +266,7 @@ export function HTMLPreviewOverlay({
           >
             <iframe
               ref={iframeRef}
-              sandbox="allow-same-origin allow-top-navigation-by-user-activation"
+              sandbox="allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"
               srcDoc={processedHtml}
               onLoad={handleLoad}
               title={activeItem?.label || title || 'HTML Preview'}

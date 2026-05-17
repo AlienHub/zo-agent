@@ -77,6 +77,8 @@ export interface JSONPreviewOverlayProps {
   error?: string
   /** Render inline without dialog (for playground) */
   embedded?: boolean
+  /** Hide embedded header chrome and let parent provide page-level controls */
+  hideHeader?: boolean
 }
 
 /**
@@ -104,6 +106,7 @@ export function JSONPreviewOverlay({
   theme = 'dark',
   error,
   embedded,
+  hideHeader,
 }: JSONPreviewOverlayProps) {
   const { t } = useTranslation()
   // Select theme based on mode
@@ -135,6 +138,7 @@ export function JSONPreviewOverlay({
       theme={theme}
       error={error ? { label: t('preview.parseError'), message: error } : undefined}
       embedded={embedded}
+      hideHeader={hideHeader}
       className="bg-foreground-3"
     >
       <ContentFrame title="JSON">

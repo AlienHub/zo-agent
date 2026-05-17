@@ -23,6 +23,7 @@ import { CollapsibleSection } from './CollapsibleSection'
 import { useCollapsibleMarkdown } from './CollapsibleMarkdownContext'
 import { wrapWithSafeProxy } from './safe-components'
 import { MARKDOWN_MATH_OPTIONS } from './math-options'
+import { preserveFileUrlTransform } from './url-transform'
 
 /**
  * Render modes for markdown content:
@@ -161,6 +162,7 @@ function createComponents(
     a: ({ href, children }) => {
       const handleClick = (e: React.MouseEvent) => {
         e.preventDefault()
+        e.stopPropagation()
 
         // Some AI outputs include raw HTML anchors with empty href but path text content.
         // Fallback to the anchor text when href is missing/empty.
@@ -184,6 +186,8 @@ function createComponents(
         <a
           href={href}
           onClick={handleClick}
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
           className="text-accent hover:underline cursor-pointer"
         >
           {children}
@@ -560,6 +564,7 @@ export function Markdown({
         remarkPlugins={remarkPlugins}
         rehypePlugins={[rehypeKatex, rehypeRaw]}
         components={components}
+        urlTransform={preserveFileUrlTransform}
       >
         {processedContent}
       </ReactMarkdown>

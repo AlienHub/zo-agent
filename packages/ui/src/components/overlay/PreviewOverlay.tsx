@@ -69,6 +69,9 @@ export interface PreviewOverlayProps {
   /** Render inline (no dialog/portal) — for embedding in design system playground */
   embedded?: boolean
 
+  /** Hide the standard header chrome while still reusing the overlay body layout */
+  hideHeader?: boolean
+
   /** Custom class names for the overlay container (e.g., to override bg-background) */
   className?: string
 }
@@ -86,6 +89,7 @@ export function PreviewOverlay({
   headerActions,
   children,
   embedded = false,
+  hideHeader = false,
   className,
 }: PreviewOverlayProps) {
   // Use custom className if provided, otherwise fall back to default bg
@@ -158,7 +162,7 @@ export function PreviewOverlay({
   if (embedded) {
     return (
       <div className={`flex flex-col ${bgClass} h-full w-full overflow-hidden rounded-lg border border-foreground/5`}>
-        {header}
+        {!hideHeader && header}
         {contentArea}
       </div>
     )
@@ -201,7 +205,7 @@ export function PreviewOverlay({
           borderRadius: 16,
         }}
       >
-        {header}
+        {!hideHeader && header}
         {contentArea}
       </div>
     </div>,

@@ -50,6 +50,8 @@ export interface ParsedCompoundRoute {
   details: {
     type: string
     id: string
+    resourceKind?: 'file' | 'url'
+    resourceTarget?: string
   } | null
 }
 
@@ -78,6 +80,7 @@ export function isCompoundRoute(route: string): boolean {
  * Examples:
  *   'allSessions' -> { navigator: 'sessions', sessionFilter: { kind: 'allSessions' }, details: null }
  *   'allSessions/session/abc123' -> { navigator: 'sessions', sessionFilter: { kind: 'allSessions' }, details: { type: 'session', id: 'abc123' } }
+ *   'allSessions/session/abc123/resource/file/%2Ftmp%2Freport.md' -> { navigator: 'sessions', sessionFilter: { kind: 'allSessions' }, details: { type: 'resource', id: 'abc123', resourceKind: 'file', resourceTarget: '/tmp/report.md' } }
  *   'flagged/session/abc123' -> { navigator: 'sessions', sessionFilter: { kind: 'flagged' }, details: { type: 'session', id: 'abc123' } }
  *   'sources' -> { navigator: 'sources', details: null }
  *   'sources/api' -> { navigator: 'sources', sourceFilter: { kind: 'type', sourceType: 'api' }, details: null }
@@ -85,7 +88,7 @@ export function isCompoundRoute(route: string): boolean {
  *   'sources/local' -> { navigator: 'sources', sourceFilter: { kind: 'type', sourceType: 'local' }, details: null }
  *   'sources/source/github' -> { navigator: 'sources', details: { type: 'source', id: 'github' } }
  *   'sources/api/source/gmail' -> { navigator: 'sources', sourceFilter: { kind: 'type', sourceType: 'api' }, details: { type: 'source', id: 'gmail' } }
- *   'settings' -> { navigator: 'settings', details: { type: 'app', id: 'app' } }
+ *   'settings' -> { navigator: 'settings', details: null }  // navigator-only view
  *   'settings/shortcuts' -> { navigator: 'settings', details: { type: 'shortcuts', id: 'shortcuts' } }
  */
 export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
@@ -96,7 +99,11 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
 
   // Settings navigator
   if (first === 'settings') {
-    const subpage = segments[1] || 'app'
+    const subpage = segments[1]
+    if (subpage === undefined) {
+      // Bare `settings` route — navigator-only view (compact) / App fallback (desktop).
+      return { navigator: 'settings', details: null }
+    }
     if (!isValidSettingsSubpage(subpage)) return null
     return {
       navigator: 'settings',
@@ -236,6 +243,26 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
     const detailsType = segments[detailsStartIndex]
     const detailsId = segments[detailsStartIndex + 1]
     if (detailsType === 'session' && detailsId) {
+      const resourceType = segments[detailsStartIndex + 2]
+      const resourceKind = segments[detailsStartIndex + 3]
+      const resourceTarget = segments[detailsStartIndex + 4]
+      if (
+        resourceType === 'resource' &&
+        (resourceKind === 'file' || resourceKind === 'url') &&
+        resourceTarget
+      ) {
+        return {
+          navigator: 'sessions',
+          sessionFilter,
+          details: {
+            type: 'resource',
+            id: detailsId,
+            resourceKind,
+            resourceTarget: decodeURIComponent(resourceTarget),
+          },
+        }
+      }
+
       return {
         navigator: 'sessions',
         sessionFilter,
@@ -256,8 +283,8 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
  */
 export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
   if (parsed.navigator === 'settings') {
-    const detailsType = parsed.details?.type || 'app'
-    return `settings/${detailsType}`
+    if (!parsed.details) return 'settings'
+    return `settings/${parsed.details.type}`
   }
 
   if (parsed.navigator === 'sources') {
@@ -314,6 +341,13 @@ export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
   }
 
   if (!parsed.details) return base
+  if (parsed.details.type === 'resource') {
+    const { id, resourceKind, resourceTarget } = parsed.details
+    if (!resourceKind || !resourceTarget) {
+      return `${base}/session/${id}`
+    }
+    return `${base}/session/${id}/resource/${resourceKind}/${encodeURIComponent(resourceTarget)}`
+  }
   return `${base}/session/${parsed.details.id}`
 }
 
@@ -412,6 +446,38 @@ function convertCompoundToViewRoute(compound: ParsedCompoundRoute): ParsedRoute 
   if (compound.sessionFilter) {
     const filter = compound.sessionFilter
     if (compound.details) {
+      if (compound.details.type === 'resource') {
+        const resourceKind = compound.details.resourceKind
+        const resourceTarget = compound.details.resourceTarget
+        if (!resourceKind || !resourceTarget) {
+          return {
+            type: 'view',
+            name: 'session',
+            id: compound.details.id,
+            params: {
+              filter: filter.kind,
+              ...(filter.kind === 'state' ? { stateId: filter.stateId } : {}),
+              ...(filter.kind === 'label' ? { labelId: filter.labelId } : {}),
+              ...(filter.kind === 'view' ? { viewId: filter.viewId } : {}),
+            },
+          }
+        }
+
+        return {
+          type: 'view',
+          name: 'session-resource',
+          id: compound.details.id,
+          params: {
+            filter: filter.kind,
+            resourceKind,
+            target: resourceTarget,
+            ...(filter.kind === 'state' ? { stateId: filter.stateId } : {}),
+            ...(filter.kind === 'label' ? { labelId: filter.labelId } : {}),
+            ...(filter.kind === 'view' ? { viewId: filter.viewId } : {}),
+          },
+        }
+      }
+
       return {
         type: 'view',
         name: 'session',
@@ -494,8 +560,10 @@ export function parseRouteToNavigationState(
 function convertCompoundToNavigationState(compound: ParsedCompoundRoute): NavigationState {
   // Settings
   if (compound.navigator === 'settings') {
-    const subpage = (compound.details?.type || 'app') as SettingsSubpage
-    return { navigator: 'settings', subpage }
+    if (!compound.details) {
+      return { navigator: 'settings', subpage: null }
+    }
+    return { navigator: 'settings', subpage: compound.details.type as SettingsSubpage }
   }
 
   // Sources - include filter if present
@@ -544,6 +612,31 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
   // Sessions
   const filter = compound.sessionFilter || { kind: 'allSessions' as const }
   if (compound.details) {
+    if (compound.details.type === 'resource') {
+      const resourceKind = compound.details.resourceKind
+      const resourceTarget = compound.details.resourceTarget
+      if (!resourceKind || !resourceTarget) {
+        return {
+          navigator: 'sessions',
+          filter,
+          details: { type: 'session', sessionId: compound.details.id },
+        }
+      }
+
+      return {
+        navigator: 'sessions',
+        filter,
+        details: {
+          type: 'resource',
+          sessionId: compound.details.id,
+          resource: {
+            kind: resourceKind,
+            target: resourceTarget,
+          },
+        },
+      }
+    }
+
     return {
       navigator: 'sessions',
       filter,
@@ -619,6 +712,7 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
       }
       return { navigator: 'automations', details: null }
     case 'session':
+    case 'session-resource':
       if (parsed.id) {
         // Reconstruct filter from params
         const filterKind = (parsed.params.filter || 'allSessions') as SessionFilter['kind']
@@ -632,6 +726,25 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
         } else {
           filter = { kind: filterKind as 'allSessions' | 'flagged' | 'archived' }
         }
+        if (
+          parsed.name === 'session-resource' &&
+          (parsed.params.resourceKind === 'file' || parsed.params.resourceKind === 'url') &&
+          typeof parsed.params.target === 'string'
+        ) {
+          return {
+            navigator: 'sessions',
+            filter,
+            details: {
+              type: 'resource',
+              sessionId: parsed.id,
+              resource: {
+                kind: parsed.params.resourceKind,
+                target: parsed.params.target,
+              },
+            },
+          }
+        }
+
         return {
           navigator: 'sessions',
           filter,
@@ -694,6 +807,9 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
  */
 function navigationStateToCompoundRoute(state: NavigationState): ParsedCompoundRoute {
   if (state.navigator === 'settings') {
+    if (state.subpage === null) {
+      return { navigator: 'settings', details: null }
+    }
     return {
       navigator: 'settings',
       details: { type: state.subpage, id: state.subpage },
@@ -727,7 +843,16 @@ function navigationStateToCompoundRoute(state: NavigationState): ParsedCompoundR
   return {
     navigator: 'sessions',
     sessionFilter: state.filter,
-    details: state.details ? { type: 'session', id: state.details.sessionId } : null,
+    details: state.details
+      ? (state.details.type === 'resource'
+        ? {
+            type: 'resource',
+            id: state.details.sessionId,
+            resourceKind: state.details.resource.kind,
+            resourceTarget: state.details.resource.target,
+          }
+        : { type: 'session', id: state.details.sessionId })
+      : null,
   }
 }
 

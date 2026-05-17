@@ -77,6 +77,8 @@ export interface StoredConfig {
   // Prompt caching & context
   extendedPromptCache?: boolean;  // Use 1h prompt cache TTL instead of 5m (default: false)
   enable1MContext?: boolean;  // Enable 1M context window for supported models (default: false — opt-in; requires Anthropic Tier 4+)
+  // Token optimization
+  rtkEnabled?: boolean;  // Route Bash commands through rtk to compress tool output (default: false). https://github.com/rtk-ai/rtk
   // Network proxy
   networkProxy?: import('./types.ts').NetworkProxySettings;
   // Windows: path to Git Bash (bash.exe) for the SDK subprocess
@@ -495,6 +497,28 @@ export function setEnable1MContext(enabled: boolean): void {
   const config = loadStoredConfig();
   if (!config) return;
   config.enable1MContext = enabled;
+  saveConfig(config);
+}
+
+/**
+ * Get whether rtk Bash-output compression is enabled.
+ * When enabled, the PreToolUse pipeline rewrites Bash commands to their `rtk` equivalents
+ * to reduce token consumption on common dev commands (git, ls, grep, test runners, etc.).
+ * Defaults to false — opt-in. Requires the `rtk` binary on PATH or bundled with the app.
+ * https://github.com/rtk-ai/rtk
+ */
+export function getRtkEnabled(): boolean {
+  const config = loadStoredConfig();
+  return config?.rtkEnabled === true;
+}
+
+/**
+ * Set whether rtk Bash-output compression is enabled.
+ */
+export function setRtkEnabled(enabled: boolean): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+  config.rtkEnabled = enabled;
   saveConfig(config);
 }
 
@@ -986,7 +1010,7 @@ export function clearWorkspacePlan(workspaceId: string): void {
 const DRAFTS_FILE = join(CONFIG_DIR, 'drafts.json');
 
 export interface DraftAttachmentContent {
-  type: 'image' | 'pdf' | 'text' | 'office' | 'unknown';
+  type: 'image' | 'pdf' | 'text' | 'office' | 'audio' | 'unknown';
   mimeType: string;
   size: number;
   base64?: string;
@@ -1012,7 +1036,7 @@ interface DraftsData {
   updatedAt: number;
 }
 
-const ATTACHMENT_CONTENT_TYPES = new Set(['image', 'pdf', 'text', 'office', 'unknown']);
+const ATTACHMENT_CONTENT_TYPES = new Set(['image', 'pdf', 'text', 'office', 'audio', 'unknown']);
 
 function isAbsoluteDraftPath(p: string): boolean {
   if (!p) return false;

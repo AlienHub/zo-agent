@@ -67,6 +67,9 @@ import {
   type PreToolUseCheckResult,
   BUILT_IN_TOOLS,
 } from './core/pre-tool-use.ts';
+import { getRtkPath } from './core/rtk-detector.ts';
+import { getRtkEnabled } from '../config/storage.ts';
+import type { RtkContext } from './core/rtk-rewrite.ts';
 import { type ThinkingLevel, THINKING_TO_EFFORT, getThinkingTokens, DEFAULT_THINKING_LEVEL } from './thinking-levels.ts';
 import { generateConversationSummary } from './conversation-summary.ts';
 import type { LoadedSource } from '../sources/types.ts';
@@ -464,6 +467,10 @@ export class ClaudeAgent extends BaseAgent {
   private currentQueryAbortController: AbortController | null = null;
   private lastAbortReason: AbortReason | null = null;
   private sessionId: string | null = null;
+  // Whether the most recent user turn included image/PDF attachments. Read by
+  // mapSDKErrorToTypedError to decide whether attachment-related hints belong
+  // in the invalid_request error message.
+  private lastTurnHadAttachments: boolean = false;
   private branchFromSdkSessionId: string | null = null;
   private branchFromSdkCwd: string | null = null;
   private branchFromSdkTurnId: string | null = null;
@@ -825,6 +832,7 @@ export class ClaudeAgent extends BaseAgent {
 
       // Check if we have binary attachments that need the AsyncIterable interface
       const hasBinaryAttachments = attachments?.some(a => a.type === 'image' || a.type === 'pdf');
+      this.lastTurnHadAttachments = !!hasBinaryAttachments;
 
       // Validate we have something to send
       if (!userMessage.trim() && (!attachments || attachments.length === 0)) {
@@ -1090,6 +1098,13 @@ export class ClaudeAgent extends BaseAgent {
 
               const toolInput = input.tool_input as Record<string, unknown>;
 
+              // Build RTK context fresh per call so toggling the preference
+              // takes effect without restart. `getRtkPath()` is cached per
+              // process; only the storage read happens each time.
+              const rtkContext: RtkContext | undefined = getRtkEnabled()
+                ? { enabled: true, path: getRtkPath(), exclude: [] }
+                : undefined;
+
               // Run centralized PreToolUse checks
               const checkResult = runPreToolUseChecks({
                 toolName: input.tool_name,
@@ -1106,6 +1121,7 @@ export class ClaudeAgent extends BaseAgent {
                 hasSourceActivation: !!this.onSourceActivationRequest,
                 permissionManager: this.permissionManager,
                 prerequisiteManager: this.prerequisiteManager,
+                rtkContext,
                 onDebug: (msg) => this.onDebug?.(msg),
               });
 
@@ -2346,6 +2362,7 @@ This is a branched conversation. All prior messages in this conversation are par
     const error = mapClaudeSdkAssistantError(errorCode, {
       actualError,
       capturedApiError,
+      userTurnHadAttachments: this.lastTurnHadAttachments,
     });
 
     return {
@@ -2505,7 +2522,7 @@ This is a branched conversation. All prior messages in this conversation are par
 
   /**
    * Check if running in mini agent mode.
-   * Uses centralized detection for consistency with CodexAgent.
+   * Uses the centralized `systemPromptPreset` flag from BaseAgent.
    */
   isMiniAgent(): boolean {
     return this.config.systemPromptPreset === 'mini';

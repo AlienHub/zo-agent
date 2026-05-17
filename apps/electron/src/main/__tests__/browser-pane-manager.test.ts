@@ -6,6 +6,8 @@
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { tmpdir } from 'os'
+import { pathToFileURL } from 'url'
 
 const createdWindows: any[] = []
 let toolbarLoadFailuresRemaining = 0
@@ -424,6 +426,22 @@ describe('BrowserPaneManager', () => {
     expect(instance.pageView.webContents.loadURL).toHaveBeenCalledWith(
       'https://duckduckgo.com/?q=craft%20agents%20browser%20tools'
     )
+  })
+
+  it('navigate accepts absolute local html paths', async () => {
+    const localPath = `${tmpdir()}/mock preview.html`
+    manager.createInstance('nav-local-path')
+    await manager.navigate('nav-local-path', localPath)
+    const instance = (manager as any).instances.get('nav-local-path')
+    expect(instance.pageView.webContents.loadURL).toHaveBeenCalledWith(pathToFileURL(localPath).toString())
+  })
+
+  it('navigate accepts file URLs for local html files', async () => {
+    const localPath = `${tmpdir()}/mock preview.html`
+    manager.createInstance('nav-file-url')
+    await manager.navigate('nav-file-url', pathToFileURL(localPath).toString())
+    const instance = (manager as any).instances.get('nav-file-url')
+    expect(instance.pageView.webContents.loadURL).toHaveBeenCalledWith(pathToFileURL(localPath).toString())
   })
 
   it('clears navigation timeout timer on success', async () => {

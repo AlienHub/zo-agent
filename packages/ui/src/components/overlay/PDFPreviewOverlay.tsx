@@ -39,6 +39,8 @@ export interface PDFPreviewOverlayProps {
   /** Async loader that returns PDF data as Uint8Array */
   loadPdfData: (path: string) => Promise<Uint8Array>
   theme?: 'light' | 'dark'
+  embedded?: boolean
+  hideHeader?: boolean
 }
 
 export function PDFPreviewOverlay({
@@ -49,6 +51,8 @@ export function PDFPreviewOverlay({
   initialIndex = 0,
   loadPdfData,
   theme = 'light',
+  embedded = false,
+  hideHeader = false,
 }: PDFPreviewOverlayProps) {
   const { t } = useTranslation()
 
@@ -135,6 +139,8 @@ export function PDFPreviewOverlay({
       filePath={activeItem?.src || filePath}
       error={error ? { label: 'Load Failed', message: error } : undefined}
       headerActions={headerActions}
+      embedded={embedded}
+      hideHeader={hideHeader}
     >
       <div className="h-full flex flex-col items-center overflow-auto">
         {isLoading && (

@@ -20,7 +20,7 @@ import { getLanguageFromPath } from '@/lib/file-utils'
 
 // ── Preview state types ────────────────────────────────────────────────────────
 // Each variant carries the data needed to render its specific overlay.
-// For text-based files (code, markdown, json, text), content starts as null
+// For text-based files (html, code, markdown, json, text), content starts as null
 // while the file is being read, then gets populated.
 
 interface ImagePreview {
@@ -38,6 +38,13 @@ interface CodePreview {
   filePath: string
   content: string | null
   language: string
+  error?: string
+}
+
+interface HTMLPreview {
+  type: 'html'
+  filePath: string
+  content: string | null
   error?: string
 }
 
@@ -65,6 +72,7 @@ interface TextPreview {
 export type FilePreviewState =
   | ImagePreview
   | PDFPreview
+  | HTMLPreview
   | CodePreview
   | MarkdownPreview
   | JSONPreview
@@ -132,7 +140,7 @@ export function useLinkInterceptor(options: LinkInterceptorOptions): LinkInterce
    * Classifies the file by extension, then either opens a preview overlay
    * or falls back to opening externally.
    *
-   * For text-based files (code, markdown, json, text), reads the content BEFORE
+   * For text-based files (html, code, markdown, json, text), reads the content BEFORE
    * showing the overlay — local filesystem reads are near-instant, so no loading
    * state is needed. This avoids null-content issues in overlay components
    * (e.g., @uiw/react-json-view crashes on null value).
@@ -229,6 +237,8 @@ export function useLinkInterceptor(options: LinkInterceptorOptions): LinkInterce
  */
 function buildInitialTextState(type: FilePreviewType, path: string): FilePreviewState {
   switch (type) {
+    case 'html':
+      return { type: 'html', filePath: path, content: null }
     case 'code':
       return { type: 'code', filePath: path, content: null, language: getLanguageFromPath(path) }
     case 'markdown':

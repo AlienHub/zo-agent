@@ -27,6 +27,8 @@ export interface ImagePreviewOverlayProps {
   title?: string
   loadDataUrl: (path: string) => Promise<string>
   theme?: 'light' | 'dark'
+  embedded?: boolean
+  hideHeader?: boolean
 }
 
 export function ImagePreviewOverlay({
@@ -38,6 +40,8 @@ export function ImagePreviewOverlay({
   title,
   loadDataUrl,
   theme = 'light',
+  embedded = false,
+  hideHeader = false,
 }: ImagePreviewOverlayProps) {
   const { t } = useTranslation()
   const resolvedItems = useMemo<PreviewItem[]>(() => {
@@ -162,6 +166,8 @@ export function ImagePreviewOverlay({
       title={title}
       error={error ? { label: 'Load Failed', message: error } : undefined}
       headerActions={headerActions}
+      embedded={embedded}
+      hideHeader={hideHeader}
     >
       <div
         ref={containerRef}

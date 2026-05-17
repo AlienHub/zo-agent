@@ -14,8 +14,6 @@ import {
   FileText,
   ArrowUpRight,
   Ban,
-  Copy,
-  Check,
   Maximize2,
   CircleCheck,
   ListTodo,
@@ -81,6 +79,7 @@ import { useAnnotationIslandEvents } from '../annotations/use-annotation-island-
 import { useAnnotationCancelRestore } from '../annotations/use-annotation-cancel-restore'
 import { DocumentFormattedMarkdownOverlay } from '../overlay'
 import { AcceptPlanDropdown } from './AcceptPlanDropdown'
+import { MarkdownActionBar } from './MarkdownActionBar'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -2478,70 +2477,38 @@ export function ResponseCard({
 
           {/* Footer with actions - hidden in compact mode */}
           {!compactMode && (
-            <div className={cn(
-              "pl-4 pr-2.5 py-2 border-t border-border/30 flex items-center justify-between bg-muted/20",
-              SIZE_CONFIG.fontSize
-            )}>
-              {/* Left side - Copy, View as Markdown, Annotation hint */}
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={handleCopy}
-                  className={cn(
-                    "turn-action-btn flex items-center gap-1.5 transition-colors select-none",
-                    copied ? "text-success" : "text-muted-foreground hover:text-foreground",
-                    "focus:outline-none focus-visible:underline"
+            <MarkdownActionBar
+              onCopy={handleCopy}
+              copied={copied}
+              secondaryAction={onPopOut ? {
+                icon: <FileText className={SIZE_CONFIG.iconSize} />,
+                label: <span>Markdown</span>,
+                onClick: onPopOut,
+              } : undefined}
+              textClassName={SIZE_CONFIG.fontSize}
+              rightSlot={(
+                <>
+                  {isPlan && showAcceptPlan && onAccept && onAcceptWithCompact && (
+                    <div
+                      className={cn(
+                        "flex items-center gap-3 transition-all duration-200",
+                        isLastResponse
+                          ? "opacity-100 translate-x-0"
+                          : "opacity-0 translate-x-2 pointer-events-none"
+                      )}
+                    >
+                      <AcceptPlanDropdown
+                        onAccept={onAccept}
+                        onAcceptWithCompact={onAcceptWithCompact}
+                        acceptLabel={hasActiveFollowUpAnnotations ? t('plan.acceptAndSendFollowups') : t('plan.acceptPlan')}
+                        acceptOptionLabel={hasActiveFollowUpAnnotations ? t('plan.acceptAndSendFollowups') : t('plan.accept')}
+                      />
+                    </div>
                   )}
-                >
-                  {copied ? (
-                    <>
-                      <Check className={SIZE_CONFIG.iconSize} />
-                      <span>{t("common.copied")}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className={SIZE_CONFIG.iconSize} />
-                      <span>{t("common.copy")}</span>
-                    </>
-                  )}
-                </button>
-                {onPopOut && (
-                  <button
-                    onClick={onPopOut}
-                    className={cn(
-                      "turn-action-btn flex items-center gap-1.5 transition-colors select-none",
-                      "text-muted-foreground hover:text-foreground",
-                      "focus:outline-none focus-visible:underline"
-                    )}
-                  >
-                    <FileText className={SIZE_CONFIG.iconSize} />
-                    <span>Markdown</span>
-                  </button>
-                )}
-              </div>
-
-              {/* Right side */}
-              <div className="flex items-center gap-3">
-                {/* Accept Plan dropdown (plan variant only, last response) */}
-                {isPlan && showAcceptPlan && onAccept && onAcceptWithCompact && (
-                  <div
-                    className={cn(
-                      "flex items-center gap-3 transition-all duration-200",
-                      isLastResponse
-                        ? "opacity-100 translate-x-0"
-                        : "opacity-0 translate-x-2 pointer-events-none"
-                    )}
-                  >
-                    <AcceptPlanDropdown
-                      onAccept={onAccept}
-                      onAcceptWithCompact={onAcceptWithCompact}
-                      acceptLabel={hasActiveFollowUpAnnotations ? t('plan.acceptAndSendFollowups') : t('plan.acceptPlan')}
-                      acceptOptionLabel={hasActiveFollowUpAnnotations ? t('plan.acceptAndSendFollowups') : t('plan.accept')}
-                    />
-                  </div>
-                )}
-                {onBranch && <BranchDropdown onBranch={onBranch} />}
-              </div>
-            </div>
+                  {onBranch && <BranchDropdown onBranch={onBranch} />}
+                </>
+              )}
+            />
           )}
         </div>
 

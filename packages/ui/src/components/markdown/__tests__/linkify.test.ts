@@ -262,6 +262,10 @@ describe('isFilePathTarget', () => {
     expect(isFilePathTarget('apps/electron/resources/docs/browser-tools.md')).toBe(true)
   })
 
+  it('accepts unicode markdown paths with percent-encoded spaces', () => {
+    expect(isFilePathTarget('主题/零信任网关（AI%20Agent%20版本）.md')).toBe(true)
+  })
+
   it('rejects web URLs', () => {
     expect(isFilePathTarget('https://example.com/image.jpg')).toBe(false)
   })

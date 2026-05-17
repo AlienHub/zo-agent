@@ -24,12 +24,12 @@
  * Switching tabs toggles CSS visibility — no re-parse, no flash.
  *
  * Security: iframe uses `sandbox` attribute without `allow-scripts`,
- * blocking all JavaScript execution. `allow-same-origin` is included
- * so CSS and images resolve correctly.
+ * blocking all JavaScript execution. A separate "Live Browser" action
+ * can open the same file in the app's dedicated browser surface instead.
  */
 
 import * as React from 'react'
-import { Globe, Maximize2 } from 'lucide-react'
+import { Globe, Maximize2, Monitor } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { CodeBlock } from './CodeBlock'
 import { HTMLPreviewOverlay } from '../overlay/HTMLPreviewOverlay'
@@ -70,20 +70,59 @@ class HtmlBlockErrorBoundary extends React.Component<
 // ── HTML preprocessing ───────────────────────────────────────────────────────
 
 /**
- * Inject `<base target="_top">` into HTML so link clicks navigate the top frame
- * instead of the iframe. Combined with `allow-top-navigation-by-user-activation`
- * in the sandbox, this lets Electron's `will-navigate` handler intercept the
- * navigation and open the URL in the system browser.
+ * Inject a base href for file-backed previews so relative stylesheets, images,
+ * and links resolve next to the source HTML file.
  */
-function injectBaseTarget(html: string): string {
-  if (/<base\s/i.test(html)) return html
+function injectPreviewBase(html: string, sourcePath?: string): string {
+  const baseHref = getPreviewBaseHref(sourcePath)
+  if (!baseHref || /<base\s/i.test(html)) return html
   if (/<head[^>]*>/i.test(html)) {
-    return html.replace(/(<head[^>]*>)/i, '$1<base target="_top">')
+    return html.replace(/(<head[^>]*>)/i, `$1<base href="${baseHref}">`)
   }
   if (/<html[^>]*>/i.test(html)) {
-    return html.replace(/(<html[^>]*>)/i, '$1<head><base target="_top"></head>')
+    return html.replace(/(<html[^>]*>)/i, `$1<head><base href="${baseHref}"></head>`)
   }
-  return `<head><base target="_top"></head>${html}`
+  return `<head><base href="${baseHref}"></head>${html}`
+}
+
+function getPreviewBaseHref(sourcePath?: string): string | null {
+  if (!sourcePath) return null
+
+  if (/^file:/i.test(sourcePath)) {
+    try {
+      const parsed = new URL(sourcePath)
+      parsed.search = ''
+      parsed.hash = ''
+      parsed.pathname = parsed.pathname.replace(/[^/]*$/, '')
+      return parsed.toString()
+    } catch {
+      return null
+    }
+  }
+
+  const normalized = sourcePath.replace(/\\/g, '/')
+  const slashIndex = normalized.lastIndexOf('/')
+  if (slashIndex === -1) return null
+
+  const directory = normalized.slice(0, slashIndex + 1)
+  const encoded = encodeURI(directory)
+
+  if (/^[A-Za-z]:\//.test(directory)) {
+    return `file:///${encoded}`
+  }
+
+  if (directory.startsWith('/')) {
+    return `file://${encoded}`
+  }
+
+  return null
+}
+
+function toBrowserTarget(sourcePath: string): { url?: string; filePath?: string } {
+  if (/^(?:https?:|file:)/i.test(sourcePath)) {
+    return { url: sourcePath }
+  }
+  return { filePath: sourcePath }
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
@@ -95,7 +134,7 @@ export interface MarkdownHtmlBlockProps {
 
 export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
   const { t } = useTranslation()
-  const { onReadFile } = usePlatform()
+  const { onReadFile, onOpenInAppBrowser } = usePlatform()
 
   // Parse the JSON spec — supports single src or items array
   const spec = React.useMemo<HtmlPreviewSpec | null>(() => {
@@ -151,17 +190,24 @@ export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
       .finally(() => setLoading(false))
   }, [activeItem?.src, onReadFile, contentCache])
 
-  // Preprocess all cached HTML (inject base target for links)
+  // Preprocess all cached HTML (inject base href for relative assets)
   const processedCache = React.useMemo(() => {
     const result: Record<string, string> = {}
     for (const [src, html] of Object.entries(contentCache)) {
-      result[src] = injectBaseTarget(html)
+      result[src] = injectPreviewBase(html, src)
     }
     return result
   }, [contentCache])
 
   const hasCachedContent = Object.keys(contentCache).length > 0
   const hasMultiple = items.length > 1
+
+  const handleOpenInAppBrowser = React.useCallback(() => {
+    if (!activeItem?.src || !onOpenInAppBrowser) return
+    void Promise.resolve(onOpenInAppBrowser(toBrowserTarget(activeItem.src))).catch((error) => {
+      console.warn('[MarkdownHtmlBlock] Failed to open live browser preview:', error)
+    })
+  }, [activeItem?.src, onOpenInAppBrowser])
 
   // Stable onLoadContent callback for the overlay
   const handleLoadContent = React.useCallback(async (src: string) => {
@@ -190,7 +236,23 @@ export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
           </span>
           <div className="flex items-center gap-1">
             <ItemNavigator items={items} activeIndex={activeIndex} onSelect={setActiveIndex} />
+            {activeItem?.src && onOpenInAppBrowser && (
+              <button
+                type="button"
+                onClick={handleOpenInAppBrowser}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] transition-all select-none",
+                  "bg-background shadow-minimal",
+                  "text-muted-foreground/70 hover:text-foreground"
+                )}
+                title="Open Live Browser"
+              >
+                <Monitor className="w-3.5 h-3.5" />
+                <span>Live Browser</span>
+              </button>
+            )}
             <button
+              type="button"
               onClick={() => setIsFullscreen(true)}
               className={cn(
                 "p-1 rounded-[6px] transition-all select-none",
@@ -215,7 +277,7 @@ export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
             return (
               <iframe
                 key={item.src}
-                sandbox="allow-same-origin allow-top-navigation-by-user-activation"
+                sandbox="allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"
                 srcDoc={processed}
                 title={item.label || spec.title || t('preview.htmlPreview')}
                 className="w-full border-0 bg-white"
@@ -262,4 +324,3 @@ export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
     </HtmlBlockErrorBoundary>
   )
 }
-

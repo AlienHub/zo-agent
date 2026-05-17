@@ -123,7 +123,7 @@ export function PanelResizeSash({
   return (
     <div
       ref={ref}
-      className="relative w-0 h-full cursor-col-resize flex justify-center shrink-0"
+      className="relative z-panel w-0 h-full cursor-col-resize flex justify-center shrink-0 pointer-events-none"
       style={{ margin: `0 ${PANEL_SASH_FLEX_MARGIN}px` }}
       onMouseDown={handleMouseDown}
       onMouseMove={handlers.onMouseMove}
@@ -132,7 +132,7 @@ export function PanelResizeSash({
     >
       {/* Touch area — wider than visible line for easier grabbing */}
       <div
-        className="absolute inset-y-0 flex justify-center cursor-col-resize"
+        className="absolute inset-y-0 flex justify-center cursor-col-resize pointer-events-auto"
         style={{ left: -PANEL_SASH_HALF_HIT_WIDTH, right: -PANEL_SASH_HALF_HIT_WIDTH }}
       >
         <div

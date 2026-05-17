@@ -21,9 +21,20 @@ const FILE_PATH_PRETEST_REGEX = new RegExp(FILE_PATH_REGEX_SOURCE, 'i')
 // File-path regex for markdown anchor targets (entire href/text value)
 // Used by Markdown.tsx click handler to route file links to onFileClick.
 const FILE_PATH_TARGET_REGEX = new RegExp(
-  `^(?!https?://|mailto:|ftp://|data:)(?:/|~/|\./|\.\./|[A-Za-z0-9_][\\w\\-./@]*)[\\w\\-./@]*\\.(?:${FILE_EXTENSIONS_PATTERN})$`,
+  `^(?:/|~/|\./|\.\./|[A-Za-z]:[/\\\\]|[A-Za-z0-9_][\\w\\-./@]*)[\\w\\-./@]*\\.(?:${FILE_EXTENSIONS_PATTERN})$`,
   'i'
 )
+const FILE_PATH_SUFFIX_REGEX = new RegExp(`\\.(?:${FILE_EXTENSIONS_PATTERN})$`, 'i')
+const URI_SCHEME_REGEX = /^[A-Za-z][A-Za-z0-9+.-]*:/
+const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[/\\]/
+
+function decodePathTarget(target: string): string {
+  try {
+    return decodeURIComponent(target)
+  } catch {
+    return target
+  }
+}
 
 interface DetectedLink {
   type: 'url' | 'email' | 'file'
@@ -280,5 +291,19 @@ export function hasLinks(text: string): boolean {
  * Used by click handlers to route local paths to onFileClick instead of onUrlClick.
  */
 export function isFilePathTarget(target: string): boolean {
-  return FILE_PATH_TARGET_REGEX.test(target.trim())
+  const trimmed = target.trim()
+  if (!trimmed) return false
+
+  if (URI_SCHEME_REGEX.test(trimmed) && !WINDOWS_DRIVE_PATH_REGEX.test(trimmed)) {
+    return false
+  }
+
+  const decoded = decodePathTarget(trimmed)
+  const withoutQueryOrHash = decoded.split(/[?#]/, 1)[0] ?? decoded
+
+  if (FILE_PATH_TARGET_REGEX.test(withoutQueryOrHash)) {
+    return true
+  }
+
+  return FILE_PATH_SUFFIX_REGEX.test(withoutQueryOrHash)
 }
