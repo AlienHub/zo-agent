@@ -17,55 +17,7 @@ import { PreviewOverlay } from './PreviewOverlay'
 import { CopyButton } from './CopyButton'
 import { ItemNavigator } from './ItemNavigator'
 import { usePlatform } from '../../context/PlatformContext'
-
-/**
- * Inject a base href for file-backed previews so relative stylesheets, images,
- * and links resolve next to the source HTML file.
- */
-function injectPreviewBase(html: string, sourcePath?: string): string {
-  const baseHref = getPreviewBaseHref(sourcePath)
-  if (!baseHref || /<base\s/i.test(html)) return html
-  if (/<head[^>]*>/i.test(html)) {
-    return html.replace(/(<head[^>]*>)/i, `$1<base href="${baseHref}">`)
-  }
-  if (/<html[^>]*>/i.test(html)) {
-    return html.replace(/(<html[^>]*>)/i, `$1<head><base href="${baseHref}"></head>`)
-  }
-  return `<head><base href="${baseHref}"></head>${html}`
-}
-
-function getPreviewBaseHref(sourcePath?: string): string | null {
-  if (!sourcePath) return null
-
-  if (/^file:/i.test(sourcePath)) {
-    try {
-      const parsed = new URL(sourcePath)
-      parsed.search = ''
-      parsed.hash = ''
-      parsed.pathname = parsed.pathname.replace(/[^/]*$/, '')
-      return parsed.toString()
-    } catch {
-      return null
-    }
-  }
-
-  const normalized = sourcePath.replace(/\\/g, '/')
-  const slashIndex = normalized.lastIndexOf('/')
-  if (slashIndex === -1) return null
-
-  const directory = normalized.slice(0, slashIndex + 1)
-  const encoded = encodeURI(directory)
-
-  if (/^[A-Za-z]:\//.test(directory)) {
-    return `file:///${encoded}`
-  }
-
-  if (directory.startsWith('/')) {
-    return `file://${encoded}`
-  }
-
-  return null
-}
+import { htmlRequiresBrowserRuntime, injectHtmlPreviewBase } from '../../lib/html-preview'
 
 function toBrowserTarget(sourcePath: string): { url?: string; filePath?: string } {
   if (/^(?:https?:|file:)/i.test(sourcePath)) {
@@ -178,8 +130,12 @@ export function HTMLPreviewOverlay({
 
   // Preprocess active HTML
   const processedHtml = React.useMemo(
-    () => activeContent ? injectPreviewBase(activeContent, activeSourcePath) : null,
+    () => activeContent ? injectHtmlPreviewBase(activeContent, activeSourcePath) : null,
     [activeContent, activeSourcePath]
+  )
+  const requiresBrowserRuntime = React.useMemo(
+    () => activeContent ? htmlRequiresBrowserRuntime(activeContent) : false,
+    [activeContent]
   )
 
   const handleOpenInAppBrowser = React.useCallback(() => {
@@ -254,7 +210,7 @@ export function HTMLPreviewOverlay({
         {loadError && !activeContent && (
           <div className="py-12 text-center text-destructive/70 text-sm">{loadError}</div>
         )}
-        {processedHtml && (
+        {processedHtml && !requiresBrowserRuntime && (
           <div
             className="bg-white rounded-[12px] overflow-hidden shadow-minimal mx-auto"
             style={{
@@ -273,6 +229,28 @@ export function HTMLPreviewOverlay({
               className="w-full border-0"
               style={{ height: iframeHeight, minHeight: '400px' }}
             />
+          </div>
+        )}
+        {processedHtml && requiresBrowserRuntime && (
+          <div className="mx-auto flex min-h-[400px] max-w-[720px] items-center justify-center rounded-[12px] border border-border/60 bg-muted/20 px-8 text-center">
+            <div className="space-y-3">
+              <div className="text-base font-medium text-foreground">This HTML requires JavaScript to render.</div>
+              <div className="text-sm text-muted-foreground">
+                Static preview is disabled here to avoid a blank page inside the app renderer.
+              </div>
+              {activeSourcePath && onOpenInAppBrowser && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleOpenInAppBrowser}
+                    className="inline-flex items-center gap-1.5 rounded-[8px] bg-background px-3 py-1.5 text-sm shadow-minimal transition-colors hover:bg-muted"
+                  >
+                    <Monitor className="h-4 w-4" />
+                    <span>Open Live Browser</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

@@ -36,6 +36,7 @@ import { HTMLPreviewOverlay } from '../overlay/HTMLPreviewOverlay'
 import { ItemNavigator } from '../overlay/ItemNavigator'
 import { usePlatform } from '../../context/PlatformContext'
 import { useTranslation } from 'react-i18next'
+import { htmlRequiresBrowserRuntime, injectHtmlPreviewBase } from '../../lib/html-preview'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,57 +66,6 @@ class HtmlBlockErrorBoundary extends React.Component<
     if (this.state.hasError) return this.props.fallback
     return this.props.children
   }
-}
-
-// ── HTML preprocessing ───────────────────────────────────────────────────────
-
-/**
- * Inject a base href for file-backed previews so relative stylesheets, images,
- * and links resolve next to the source HTML file.
- */
-function injectPreviewBase(html: string, sourcePath?: string): string {
-  const baseHref = getPreviewBaseHref(sourcePath)
-  if (!baseHref || /<base\s/i.test(html)) return html
-  if (/<head[^>]*>/i.test(html)) {
-    return html.replace(/(<head[^>]*>)/i, `$1<base href="${baseHref}">`)
-  }
-  if (/<html[^>]*>/i.test(html)) {
-    return html.replace(/(<html[^>]*>)/i, `$1<head><base href="${baseHref}"></head>`)
-  }
-  return `<head><base href="${baseHref}"></head>${html}`
-}
-
-function getPreviewBaseHref(sourcePath?: string): string | null {
-  if (!sourcePath) return null
-
-  if (/^file:/i.test(sourcePath)) {
-    try {
-      const parsed = new URL(sourcePath)
-      parsed.search = ''
-      parsed.hash = ''
-      parsed.pathname = parsed.pathname.replace(/[^/]*$/, '')
-      return parsed.toString()
-    } catch {
-      return null
-    }
-  }
-
-  const normalized = sourcePath.replace(/\\/g, '/')
-  const slashIndex = normalized.lastIndexOf('/')
-  if (slashIndex === -1) return null
-
-  const directory = normalized.slice(0, slashIndex + 1)
-  const encoded = encodeURI(directory)
-
-  if (/^[A-Za-z]:\//.test(directory)) {
-    return `file:///${encoded}`
-  }
-
-  if (directory.startsWith('/')) {
-    return `file://${encoded}`
-  }
-
-  return null
 }
 
 function toBrowserTarget(sourcePath: string): { url?: string; filePath?: string } {
@@ -194,13 +144,21 @@ export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
   const processedCache = React.useMemo(() => {
     const result: Record<string, string> = {}
     for (const [src, html] of Object.entries(contentCache)) {
-      result[src] = injectPreviewBase(html, src)
+      result[src] = injectHtmlPreviewBase(html, src)
+    }
+    return result
+  }, [contentCache])
+  const runtimeRequiredBySrc = React.useMemo(() => {
+    const result: Record<string, boolean> = {}
+    for (const [src, html] of Object.entries(contentCache)) {
+      result[src] = htmlRequiresBrowserRuntime(html)
     }
     return result
   }, [contentCache])
 
   const hasCachedContent = Object.keys(contentCache).length > 0
   const hasMultiple = items.length > 1
+  const activeRequiresBrowserRuntime = activeItem ? (runtimeRequiredBySrc[activeItem.src] ?? false) : false
 
   const handleOpenInAppBrowser = React.useCallback(() => {
     if (!activeItem?.src || !onOpenInAppBrowser) return
@@ -273,7 +231,7 @@ export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
           {/* Render all cached items as hidden iframes — prevents flash on tab switch */}
           {items.map((item, i) => {
             const processed = processedCache[item.src]
-            if (!processed) return null
+            if (!processed || runtimeRequiredBySrc[item.src]) return null
             return (
               <iframe
                 key={item.src}
@@ -289,6 +247,30 @@ export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
             )
           })}
 
+          {activeHtml && activeRequiresBrowserRuntime && (
+            <div className="flex h-[400px] items-center justify-center bg-white px-6 text-center">
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-foreground">This HTML requires JavaScript to render.</div>
+                <div className="text-[13px] text-muted-foreground">
+                  Open it in Live Browser for a full interactive preview.
+                </div>
+                {activeItem?.src && onOpenInAppBrowser && (
+                  <button
+                    type="button"
+                    onClick={handleOpenInAppBrowser}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-[8px] px-3 py-1.5 text-[13px] transition-colors",
+                      "bg-background shadow-minimal text-foreground hover:bg-muted"
+                    )}
+                  >
+                    <Monitor className="w-3.5 h-3.5" />
+                    <span>Open Live Browser</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Loading state for uncached active item */}
           {!activeHtml && loading && (
             <div className="py-8 text-center text-muted-foreground text-[13px]">{t('common.loading')}</div>
@@ -300,7 +282,7 @@ export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
           )}
 
           {/* Bottom fade gradient */}
-          {hasCachedContent && (
+          {hasCachedContent && !activeRequiresBrowserRuntime && (
             <div
               className="absolute bottom-0 left-0 right-0 h-8 pointer-events-none"
               style={{

@@ -10,6 +10,8 @@ import {
   PDFPreviewOverlay,
   Spinner,
   classifyFile,
+  htmlRequiresBrowserRuntime,
+  injectHtmlPreviewBase,
 } from '@craft-agent/ui'
 import { AlertCircle, ChevronDown, Copy, ExternalLink, FileText, FolderOpen, Globe, Monitor } from 'lucide-react'
 import { useNavigationState, isSessionsNavigation } from '@/contexts/NavigationContext'
@@ -81,49 +83,6 @@ function getUrlDisplay(target: string): string {
   } catch {
     return target
   }
-}
-
-function injectHtmlPreviewBase(html: string, sourcePath: string): string {
-  const baseHref = getHtmlPreviewBaseHref(sourcePath)
-  if (!baseHref || /<base\s/i.test(html)) return html
-  if (/<head[^>]*>/i.test(html)) {
-    return html.replace(/(<head[^>]*>)/i, `$1<base href="${baseHref}">`)
-  }
-  if (/<html[^>]*>/i.test(html)) {
-    return html.replace(/(<html[^>]*>)/i, `$1<head><base href="${baseHref}"></head>`)
-  }
-  return `<head><base href="${baseHref}"></head>${html}`
-}
-
-function getHtmlPreviewBaseHref(sourcePath: string): string | null {
-  if (/^file:/i.test(sourcePath)) {
-    try {
-      const parsed = new URL(sourcePath)
-      parsed.search = ''
-      parsed.hash = ''
-      parsed.pathname = parsed.pathname.replace(/[^/]*$/, '')
-      return parsed.toString()
-    } catch {
-      return null
-    }
-  }
-
-  const normalized = sourcePath.replace(/\\/g, '/')
-  const slashIndex = normalized.lastIndexOf('/')
-  if (slashIndex === -1) return null
-
-  const directory = normalized.slice(0, slashIndex + 1)
-  const encoded = encodeURI(directory)
-
-  if (/^[A-Za-z]:\//.test(directory)) {
-    return `file:///${encoded}`
-  }
-
-  if (directory.startsWith('/')) {
-    return `file://${encoded}`
-  }
-
-  return null
 }
 
 interface CompactResourceMenuProps {
@@ -233,6 +192,10 @@ export default function SessionResourcePreviewPage({
   const classificationType = classification?.type ?? null
   const canPreview = classification?.canPreview ?? false
   const supportsLiveBrowser = resource.kind === 'url' || classificationType === 'html'
+  const htmlNeedsBrowserRuntime = React.useMemo(
+    () => classificationType === 'html' && !!textContent && htmlRequiresBrowserRuntime(textContent),
+    [classificationType, textContent]
+  )
 
   const openResourcePanel = React.useCallback((kind: 'file' | 'url', target: string) => {
     navigate(routes.view.sessionResource({
@@ -573,12 +536,33 @@ export default function SessionResourcePreviewPage({
       return (
         <div className="h-full bg-foreground-3 p-4">
           <div className="mx-auto h-full w-full max-w-[1280px] overflow-hidden rounded-[16px] bg-white shadow-strong">
-            <iframe
-              srcDoc={injectHtmlPreviewBase(textContent ?? '', resource.target)}
-              title={fileTitle}
-              className="h-full w-full border-0"
-              sandbox="allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"
-            />
+            {htmlNeedsBrowserRuntime ? (
+              <div className="flex h-full items-center justify-center px-8 text-center">
+                <div className="max-w-[520px] space-y-3">
+                  <div className="text-lg font-medium text-foreground">This HTML requires JavaScript to render.</div>
+                  <div className="text-sm text-muted-foreground">
+                    The in-panel preview stays sandboxed, so interactive pages should be opened in Live Browser.
+                  </div>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => { void handleOpenInAppBrowser() }}
+                      className="inline-flex items-center gap-2 rounded-[10px] border border-border/70 bg-background px-4 py-2 text-sm font-medium text-foreground shadow-minimal transition-colors hover:bg-muted"
+                    >
+                      <Monitor className="h-4 w-4" />
+                      <span>Open Live Browser</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <iframe
+                srcDoc={injectHtmlPreviewBase(textContent ?? '', resource.target)}
+                title={fileTitle}
+                className="h-full w-full border-0"
+                sandbox="allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"
+              />
+            )}
           </div>
         </div>
       )

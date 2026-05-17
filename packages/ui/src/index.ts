@@ -234,6 +234,11 @@ export {
   type FilePreviewType,
   type FileClassification,
 } from './lib/file-classification'
+export {
+  injectHtmlPreviewBase,
+  getHtmlPreviewBaseHref,
+  htmlRequiresBrowserRuntime,
+} from './lib/html-preview'
 
 // Utilities
 export { cn } from './lib/utils'
