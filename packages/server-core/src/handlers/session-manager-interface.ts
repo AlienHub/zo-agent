@@ -85,7 +85,7 @@ export interface ISessionManager {
     storedAttachments?: StoredAttachment[],
     options?: SendMessageOptions,
     existingMessageId?: string,
-    _isAuthRetry?: boolean,
+    _retryMode?: boolean | 'auth' | 'network',
     onAck?: (messageId: string) => void,
   ): Promise<void>
   cancelProcessing(sessionId: string, silent?: boolean): Promise<void>

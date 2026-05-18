@@ -304,6 +304,21 @@ const HTML_PROXY_HINTS = [
   'akamai',
 ] as const;
 const HTML_STATUS_PATTERN = /\b(400|401|403|407|408|409|429|500|502|503|504)\b/;
+const NETWORK_TIMEOUT_HINTS = [
+  'the operation timed out',
+  'operation timed out',
+  'request timed out',
+  'socket timed out',
+  'keepalive ping timeout',
+  'opening handshake has timed out',
+  'handshake timeout',
+  'etimedout',
+] as const;
+const WEBSOCKET_DROP_HINTS = [
+  'websocket closed 1006',
+  'websocket closed 1011',
+  'connection ended',
+] as const;
 
 function looksLikeHtmlPayload(textLower: string): boolean {
   if (textLower.includes('<!doctype html') || textLower.includes('<html')) {
@@ -345,6 +360,14 @@ function isLikelyProxyInterception(textLower: string): boolean {
   }
 
   return hasHtmlErrorPageSignals(textLower);
+}
+
+function isLikelyTimeoutOrDroppedTransport(textLower: string): boolean {
+  return NETWORK_TIMEOUT_HINTS.some((hint) => textLower.includes(hint))
+    || (
+      textLower.includes('websocket')
+      && WEBSOCKET_DROP_HINTS.some((hint) => textLower.includes(hint))
+    );
 }
 
 function buildProxyErrorMessage(errorMessage: string, fullErrorText: string): string {
@@ -421,7 +444,14 @@ export function parseError(
     code = 'rate_limited';
   } else if (lowerMessage.includes('500') || lowerMessage.includes('502') || lowerMessage.includes('503') || lowerMessage.includes('504') || lowerMessage.includes('internal server error') || lowerMessage.includes('service unavailable')) {
     code = 'service_error';
-  } else if (lowerMessage.includes('network') || lowerMessage.includes('econnrefused') || lowerMessage.includes('enotfound') || lowerMessage.includes('fetch failed') || lowerMessage.includes('connection')) {
+  } else if (
+    lowerMessage.includes('network')
+    || lowerMessage.includes('econnrefused')
+    || lowerMessage.includes('enotfound')
+    || lowerMessage.includes('fetch failed')
+    || lowerMessage.includes('connection')
+    || isLikelyTimeoutOrDroppedTransport(lowerMessage)
+  ) {
     code = 'network_error';
   } else if (lowerMessage.includes('mcp') && (lowerMessage.includes('auth') || lowerMessage.includes('401'))) {
     code = 'mcp_auth_required';

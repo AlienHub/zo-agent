@@ -34,4 +34,18 @@ describe('parseError proxy interception handling', () => {
 
     expect(parsed.code).toBe('invalid_api_key')
   })
+
+  it('maps bare timeout text to network_error', () => {
+    const parsed = parseError(new Error('The operation timed out.'))
+
+    expect(parsed.code).toBe('network_error')
+    expect(parsed.message).toContain('internet connection')
+  })
+
+  it('maps Codex websocket keepalive timeouts to network_error', () => {
+    const parsed = parseError(new Error('WebSocket closed 1011 keepalive ping timeout'))
+
+    expect(parsed.code).toBe('network_error')
+    expect(parsed.originalError).toBe('WebSocket closed 1011 keepalive ping timeout')
+  })
 })

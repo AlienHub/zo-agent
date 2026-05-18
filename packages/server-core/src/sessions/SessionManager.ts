@@ -771,6 +771,11 @@ interface ManagedSession {
   model?: string
   // LLM connection slug for this session (locked after first message)
   llmConnection?: string
+  // Resolved connection metadata for the current live runtime.
+  // Kept in-memory so recovery paths can make provider-specific decisions
+  // without re-reading global config or guessing from model IDs.
+  activeProviderType?: string
+  activePiAuthProvider?: string
   // Whether the connection is locked (cannot be changed after first agent creation)
   connectionLocked?: boolean
   // Thinking level for this session ('off', 'think', 'max')
@@ -826,6 +831,9 @@ interface ManagedSession {
   authRetryAttempted?: boolean
   // Flag indicating auth retry is in progress (to prevent complete handler from interfering)
   authRetryInProgress?: boolean
+  // One-shot reconnect/retry for Pi + OpenAI Codex transport failures.
+  networkRetryAttempted?: boolean
+  networkRetryInProgress?: boolean
   // Whether this session is hidden from session list (e.g., mini edit sessions)
   hidden?: boolean
   branchFromMessageId?: string
@@ -2741,6 +2749,8 @@ export class SessionManager implements ISessionManager {
     managed.agentReadyResolve = undefined
     managed.backendRuntimeSignature = undefined
     managed.backendRestartSignature = undefined
+    managed.activeProviderType = undefined
+    managed.activePiAuthProvider = undefined
     unregisterSessionScopedToolCallbacks(sessionId)
   }
 
@@ -2785,6 +2795,8 @@ export class SessionManager implements ISessionManager {
       managedModel: managed.model,
     })
     const connection = backendContext.connection
+    managed.activeProviderType = connection?.providerType ?? backendContext.provider
+    managed.activePiAuthProvider = connection?.piAuthProvider
     const sigInput = {
       connection,
       provider: backendContext.provider,
@@ -5189,7 +5201,7 @@ export class SessionManager implements ISessionManager {
     storedAttachments?: StoredAttachment[],
     options?: SendMessageOptions,
     existingMessageId?: string,
-    _isAuthRetry?: boolean,
+    _retryMode?: boolean | 'auth' | 'network',
     /**
      * Internal hook fired after the user message has been pushed to
      * `managed.messages` and persisted to disk, but before the model-streaming
@@ -5395,8 +5407,13 @@ export class SessionManager implements ISessionManager {
     // IMPORTANT: Skip reset if this is an auth retry call - the flag is already true
     // and resetting it would allow infinite retry loops
     // Note: authRetryInProgress is NOT reset here - it's managed by the retry logic
-    if (!_isAuthRetry) {
+    const retryMode = _retryMode === true ? 'auth' : _retryMode
+
+    if (retryMode !== 'auth') {
       managed.authRetryAttempted = false
+    }
+    if (retryMode !== 'network') {
+      managed.networkRetryAttempted = false
     }
 
     // Store message/attachments for potential retry after auth refresh
@@ -5619,8 +5636,8 @@ export class SessionManager implements ISessionManager {
         if (event.type === 'complete') {
           // Skip normal completion handling if auth retry is in progress
           // The retry will handle its own completion
-          if (managed.authRetryInProgress) {
-            sessionLog.info('Chat completed but auth retry is in progress, skipping normal completion handling')
+          if (this.isAutomaticRetryInProgress(managed)) {
+            sessionLog.info('Chat completed but automatic retry is in progress, skipping normal completion handling')
             sendSpan.mark('chat.complete.auth_retry_pending')
             sendSpan.end()
             return  // Exit function - retry will handle completion
@@ -5741,6 +5758,13 @@ export class SessionManager implements ISessionManager {
         sessionLog.error('Error in chat:', error)
         sessionLog.error('Error message:', error instanceof Error ? error.message : String(error))
         sessionLog.error('Error stack:', error instanceof Error ? error.stack : 'No stack')
+
+        const rawErrorMessage = error instanceof Error ? error.message : String(error)
+        if (this.attemptCodexTransportRetry(sessionId, managed, managed.workspace.id, rawErrorMessage)) {
+          sendSpan.mark('chat.error.retrying')
+          sendSpan.end()
+          return
+        }
 
         // Report chat/SDK errors via runtime hooks (Electron can forward to Sentry)
         sessionRuntimeHooks.captureException(error, { errorSource: 'chat', sessionId })
@@ -5908,7 +5932,7 @@ export class SessionManager implements ISessionManager {
             retryStoredAttachments,
             retryOptions,
             undefined,  // existingMessageId
-            true        // _isAuthRetry - prevents infinite retry loop
+            'auth'      // prevents infinite auth-retry loops
           )
           sessionLog.info(`[auth-retry] Retry completed for session ${sessionId}`)
         } else {
@@ -5930,6 +5954,122 @@ export class SessionManager implements ISessionManager {
           type: 'error',
           sessionId,
           error: 'Authentication failed. Please check your credentials.',
+          timestamp: failedMessage.timestamp,
+        }, workspaceId)
+        this.onProcessingStopped(sessionId, 'error')
+      }
+    })
+
+    return true
+  }
+
+  private isAutomaticRetryInProgress(managed: ManagedSession): boolean {
+    return !!managed.authRetryInProgress || !!managed.networkRetryInProgress
+  }
+
+  private isPiCodexTransportFailure(managed: ManagedSession, errorMessage: string): boolean {
+    if (managed.activeProviderType !== 'pi' || managed.activePiAuthProvider !== 'openai-codex') {
+      return false
+    }
+
+    const lower = errorMessage.toLowerCase().trim()
+    return lower === 'the operation timed out.'
+      || lower === 'the operation timed out'
+      || lower === 'request timed out.'
+      || lower === 'request timed out'
+      || lower.includes('websocket closed 1006')
+      || lower.includes('websocket closed 1011')
+      || lower.includes('keepalive ping timeout')
+      || lower.includes('connection ended')
+      || lower.includes('opening handshake has timed out')
+      || lower.includes('handshake timeout')
+  }
+
+  /**
+   * Attempt a single automatic reconnect/retry for transient Pi/Codex
+   * transport failures. Rebuilds the backend runtime, removes the failed
+   * optimistic user message, and resends the last turn once.
+   */
+  private attemptCodexTransportRetry(
+    sessionId: string,
+    managed: ManagedSession,
+    workspaceId: string,
+    rawErrorMessage: string,
+  ): boolean {
+    if (managed.networkRetryAttempted || !managed.lastSentMessage) return false
+    if (!this.isPiCodexTransportFailure(managed, rawErrorMessage)) return false
+
+    sessionLog.info(`Codex transport error detected, attempting reconnect and retry for session ${sessionId}`)
+    managed.networkRetryAttempted = true
+    managed.networkRetryInProgress = true
+
+    this.sendEvent({
+      type: 'info',
+      sessionId,
+      message: 'Connection dropped, reconnecting…',
+      timestamp: this.monotonic(),
+    }, workspaceId)
+
+    setImmediate(async () => {
+      try {
+        await this.disposeManagedAgentRuntime(managed, 'codex transport retry')
+
+        const retryMessage = managed.lastSentMessage
+        const retryAttachments = managed.lastSentAttachments
+        const retryStoredAttachments = managed.lastSentStoredAttachments
+        const retryOptions = managed.lastSentOptions
+
+        if (retryMessage) {
+          this.setProcessing(managed, false)
+
+          const lastUserMsgIndex = managed.messages.findLastIndex(m => m.role === 'user')
+          if (lastUserMsgIndex !== -1) {
+            managed.messages.splice(lastUserMsgIndex, 1)
+          }
+
+          managed.networkRetryInProgress = false
+
+          await this.sendMessage(
+            sessionId,
+            retryMessage,
+            retryAttachments,
+            retryStoredAttachments,
+            retryOptions,
+            undefined,
+            'network',
+          )
+          sessionLog.info(`[network-retry] Retry completed for session ${sessionId}`)
+        } else {
+          managed.networkRetryInProgress = false
+        }
+      } catch (retryError) {
+        managed.networkRetryInProgress = false
+        sessionLog.error(`[network-retry] Failed to retry after reconnect for session ${sessionId}:`, retryError)
+        sessionRuntimeHooks.captureException(retryError, { errorSource: 'network-retry', sessionId })
+
+        const finalMessage = 'Connection dropped and automatic reconnect failed. Please retry.'
+        const failedMessage: Message = {
+          id: generateMessageId(),
+          role: 'error',
+          content: finalMessage,
+          timestamp: this.monotonic(),
+          errorCode: 'network_error',
+          errorTitle: 'Connection Error',
+          errorOriginal: rawErrorMessage,
+          errorCanRetry: true,
+        }
+        managed.messages.push(failedMessage)
+        this.sendEvent({
+          type: 'typed_error',
+          sessionId,
+          error: {
+            code: 'network_error',
+            title: 'Connection Error',
+            message: finalMessage,
+            actions: [{ key: 'r', label: 'Retry', action: 'retry' }],
+            canRetry: true,
+            originalError: rawErrorMessage,
+          },
           timestamp: failedMessage.timestamp,
         }, workspaceId)
         this.onProcessingStopped(sessionId, 'error')
@@ -6929,6 +7069,10 @@ export class SessionManager implements ISessionManager {
           break
         }
 
+        if (this.attemptCodexTransportRetry(sessionId, managed, workspaceId, event.message)) {
+          break
+        }
+
         // AgentEvent uses `message` not `error`
         const errorMessage: Message = {
           id: generateMessageId(),
@@ -6968,6 +7112,11 @@ export class SessionManager implements ISessionManager {
 
         if (isAuthError && this.attemptAuthRetry(sessionId, managed, workspaceId, event.error.code)) {
           // Don't add error message or send to renderer - we're handling it via retry
+          break
+        }
+
+        const networkRetrySource = event.error.originalError || typedErrorMsg
+        if (event.error.code === 'network_error' && this.attemptCodexTransportRetry(sessionId, managed, workspaceId, networkRetrySource)) {
           break
         }
 
