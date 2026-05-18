@@ -17,7 +17,7 @@
 
 import type { SettingsSubpage } from './settings-registry'
 import type { PermissionMode } from '@craft-agent/shared/agent/mode-types'
-import type { SessionFilter } from './types'
+import type { ArtifactViewMode, SessionFilter } from './types'
 
 // Helper to build query strings from params
 function toQueryString(params?: Record<string, string | undefined>): string {
@@ -123,33 +123,48 @@ export const routes = {
         ? `view/${encodeURIComponent(viewId)}/session/${sessionId}` as const
         : `view/${encodeURIComponent(viewId)}` as const,
 
-    /** Session resource preview view (keeps sessions navigator context while rendering a file or URL preview) */
+    /** Artifact viewer route (keeps sessions navigator context while rendering a file or URL artifact) */
+    artifact: (params: {
+      sessionId: string
+      artifactKind: 'file' | 'url'
+      target: string
+      filter?: SessionFilter
+      mode?: ArtifactViewMode
+    }) => {
+      const { sessionId, artifactKind, target, filter, mode } = params
+      const encodedTarget = encodeURIComponent(target)
+      const modeSuffix = mode === 'live' ? '/live' : ''
+      const resolvedFilter = filter ?? { kind: 'allSessions' as const }
+
+      switch (resolvedFilter.kind) {
+        case 'flagged':
+          return `flagged/session/${sessionId}/artifact/${artifactKind}/${encodedTarget}${modeSuffix}` as const
+        case 'archived':
+          return `archived/session/${sessionId}/artifact/${artifactKind}/${encodedTarget}${modeSuffix}` as const
+        case 'state':
+          return `state/${resolvedFilter.stateId}/session/${sessionId}/artifact/${artifactKind}/${encodedTarget}${modeSuffix}` as const
+        case 'label':
+          return `label/${encodeURIComponent(resolvedFilter.labelId)}/session/${sessionId}/artifact/${artifactKind}/${encodedTarget}${modeSuffix}` as const
+        case 'view':
+          return `view/${encodeURIComponent(resolvedFilter.viewId)}/session/${sessionId}/artifact/${artifactKind}/${encodedTarget}${modeSuffix}` as const
+        case 'allSessions':
+        default:
+          return `allSessions/session/${sessionId}/artifact/${artifactKind}/${encodedTarget}${modeSuffix}` as const
+      }
+    },
+
+    /** Backward-compatible alias for the old session resource route helper. */
     sessionResource: (params: {
       sessionId: string
       resourceKind: 'file' | 'url'
       target: string
       filter?: SessionFilter
-    }) => {
-      const { sessionId, resourceKind, target, filter } = params
-      const encodedTarget = encodeURIComponent(target)
-      const resolvedFilter = filter ?? { kind: 'allSessions' as const }
-
-      switch (resolvedFilter.kind) {
-        case 'flagged':
-          return `flagged/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
-        case 'archived':
-          return `archived/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
-        case 'state':
-          return `state/${resolvedFilter.stateId}/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
-        case 'label':
-          return `label/${encodeURIComponent(resolvedFilter.labelId)}/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
-        case 'view':
-          return `view/${encodeURIComponent(resolvedFilter.viewId)}/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
-        case 'allSessions':
-        default:
-          return `allSessions/session/${sessionId}/resource/${resourceKind}/${encodedTarget}` as const
-      }
-    },
+    }) => routes.view.artifact({
+      sessionId: params.sessionId,
+      artifactKind: params.resourceKind,
+      target: params.target,
+      filter: params.filter,
+    }),
 
     /** Sources view (sources navigator) - supports type filtering */
     sources: (params?: { sourceSlug?: string; type?: 'api' | 'mcp' | 'local' }) => {

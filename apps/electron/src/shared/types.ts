@@ -783,18 +783,42 @@ export type SessionFilter =
 export type { SettingsSubpage } from './settings-registry'
 import { isValidSettingsSubpage, type SettingsSubpage } from './settings-registry'
 
+export interface SessionArtifactTarget {
+  kind: 'file' | 'url'
+  target: string
+}
+
+export type ArtifactViewMode = 'preview' | 'live'
+
 export interface SessionResourceDetails {
   type: 'resource'
   sessionId: string
-  resource: {
-    kind: 'file' | 'url'
-    target: string
-  }
+  resource: SessionArtifactTarget
+}
+
+export interface SessionArtifactDetails {
+  type: 'artifact'
+  sessionId: string
+  artifact: SessionArtifactTarget
+  mode: ArtifactViewMode
 }
 
 export type SessionsNavigationDetails =
   | { type: 'session'; sessionId: string }
+  | SessionArtifactDetails
   | SessionResourceDetails
+
+export function toSessionArtifactDetails(
+  details: SessionArtifactDetails | SessionResourceDetails
+): SessionArtifactDetails {
+  if (details.type === 'artifact') return details
+  return {
+    type: 'artifact',
+    sessionId: details.sessionId,
+    artifact: details.resource,
+    mode: 'preview',
+  }
+}
 
 /**
  * Sessions navigation state
@@ -931,8 +955,10 @@ export const getNavigationStateKey = (state: NavigationState): string => {
   else if (f.kind === 'view') base = `view:${f.viewId}`
   else base = f.kind
   if (state.details) {
-    if (state.details.type === 'resource') {
-      return `${base}/chat/${state.details.sessionId}/resource/${state.details.resource.kind}/${encodeURIComponent(state.details.resource.target)}`
+    if (state.details.type === 'resource' || state.details.type === 'artifact') {
+      const artifact = state.details.type === 'artifact' ? state.details.artifact : state.details.resource
+      const artifactMode = state.details.type === 'artifact' ? state.details.mode : 'preview'
+      return `${base}/chat/${state.details.sessionId}/artifact/${artifact.kind}/${encodeURIComponent(artifact.target)}${artifactMode === 'live' ? '/live' : ''}`
     }
     return `${base}/chat/${state.details.sessionId}`
   }
@@ -983,8 +1009,9 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
   const parseSessionsKey = (
     filterKey: string,
     sessionId?: string,
-    resourceKind?: 'file' | 'url',
-    resourceTarget?: string,
+    artifactKind?: 'file' | 'url',
+    artifactTarget?: string,
+    artifactMode?: ArtifactViewMode,
   ): NavigationState | null => {
     let filter: SessionFilter
     if (filterKey === 'allSessions') filter = { kind: 'allSessions' }
@@ -1009,31 +1036,35 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
       navigator: 'sessions',
       filter,
       details: sessionId
-        ? (resourceKind && resourceTarget !== undefined
+        ? (artifactKind && artifactTarget !== undefined
           ? {
-              type: 'resource',
+              type: 'artifact',
               sessionId,
-              resource: { kind: resourceKind, target: decodeURIComponent(resourceTarget) },
+              artifact: { kind: artifactKind, target: decodeURIComponent(artifactTarget) },
+              mode: artifactMode ?? 'preview',
             }
           : { type: 'session', sessionId })
         : null,
     }
   }
 
-  if (key.includes('/chat/') && key.includes('/resource/')) {
+  if (key.includes('/chat/') && (key.includes('/artifact/') || key.includes('/resource/'))) {
     const segments = key.split('/')
     const filterPart = segments[0]
     const sessionIndex = segments.indexOf('chat')
-    const resourceIndex = segments.indexOf('resource')
+    const artifactIndex = segments.indexOf('artifact') >= 0
+      ? segments.indexOf('artifact')
+      : segments.indexOf('resource')
     const sessionId = sessionIndex >= 0 ? segments[sessionIndex + 1] : undefined
-    const resourceKind = segments[resourceIndex + 1]
-    const resourceTarget = segments[resourceIndex + 2]
+    const artifactKind = segments[artifactIndex + 1]
+    const artifactTarget = segments[artifactIndex + 2]
+    const artifactMode = segments[artifactIndex + 3] === 'live' ? 'live' : 'preview'
     if (
       sessionId &&
-      (resourceKind === 'file' || resourceKind === 'url') &&
-      resourceTarget
+      (artifactKind === 'file' || artifactKind === 'url') &&
+      artifactTarget
     ) {
-      return parseSessionsKey(filterPart, sessionId, resourceKind, resourceTarget)
+      return parseSessionsKey(filterPart, sessionId, artifactKind, artifactTarget, artifactMode)
     }
   }
 

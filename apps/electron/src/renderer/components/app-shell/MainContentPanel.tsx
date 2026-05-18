@@ -36,7 +36,7 @@ import { useSessionSelection, useIsMultiSelectActive, useSelectedIds, useSelecti
 import { sourceSelection, skillSelection, automationSelection } from '@/hooks/useEntitySelection'
 import { extractLabelId } from '@craft-agent/shared/labels'
 import type { SessionStatusId } from '@/config/session-status-config'
-import { SourceInfoPage, ChatPage, SessionResourcePreviewPage } from '@/pages'
+import { SourceInfoPage, ChatPage, ArtifactViewerPage, SessionResourcePreviewPage } from '@/pages'
 import SkillInfoPage from '@/pages/SkillInfoPage'
 import { getSettingsPageComponent } from '@/pages/settings/settings-pages'
 import { AutomationInfoPage } from '../automations/AutomationInfoPage'
@@ -379,7 +379,9 @@ export function MainContentPanel({
     if (navState.details) {
       return wrapWithStoplight(
         <Panel variant="grow" className={className}>
-          {navState.details.type === 'resource' ? (
+          {navState.details.type === 'artifact' ? (
+            <ArtifactViewerPage artifactDetails={navState.details} />
+          ) : navState.details.type === 'resource' ? (
             <SessionResourcePreviewPage resourceDetails={navState.details} />
           ) : (
             <ChatPage sessionId={navState.details.sessionId} />

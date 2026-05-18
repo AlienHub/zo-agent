@@ -52,6 +52,7 @@ export interface ParsedCompoundRoute {
     id: string
     resourceKind?: 'file' | 'url'
     resourceTarget?: string
+    artifactMode?: 'preview' | 'live'
   } | null
 }
 
@@ -70,7 +71,7 @@ const COMPOUND_ROUTE_PREFIXES = [
  * Check if a route is a compound route (new format)
  */
 export function isCompoundRoute(route: string): boolean {
-  const firstSegment = route.split('/')[0]
+  const firstSegment = route.split('?')[0].split('/')[0]
   return COMPOUND_ROUTE_PREFIXES.includes(firstSegment)
 }
 
@@ -80,7 +81,7 @@ export function isCompoundRoute(route: string): boolean {
  * Examples:
  *   'allSessions' -> { navigator: 'sessions', sessionFilter: { kind: 'allSessions' }, details: null }
  *   'allSessions/session/abc123' -> { navigator: 'sessions', sessionFilter: { kind: 'allSessions' }, details: { type: 'session', id: 'abc123' } }
- *   'allSessions/session/abc123/resource/file/%2Ftmp%2Freport.md' -> { navigator: 'sessions', sessionFilter: { kind: 'allSessions' }, details: { type: 'resource', id: 'abc123', resourceKind: 'file', resourceTarget: '/tmp/report.md' } }
+ *   'allSessions/session/abc123/artifact/file/%2Ftmp%2Freport.md' -> { navigator: 'sessions', sessionFilter: { kind: 'allSessions' }, details: { type: 'artifact', id: 'abc123', resourceKind: 'file', resourceTarget: '/tmp/report.md' } }
  *   'flagged/session/abc123' -> { navigator: 'sessions', sessionFilter: { kind: 'flagged' }, details: { type: 'session', id: 'abc123' } }
  *   'sources' -> { navigator: 'sources', details: null }
  *   'sources/api' -> { navigator: 'sources', sourceFilter: { kind: 'type', sourceType: 'api' }, details: null }
@@ -92,7 +93,8 @@ export function isCompoundRoute(route: string): boolean {
  *   'settings/shortcuts' -> { navigator: 'settings', details: { type: 'shortcuts', id: 'shortcuts' } }
  */
 export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
-  const segments = route.split('/').filter(Boolean)
+  const [pathPart] = route.split('?')
+  const segments = pathPart.split('/').filter(Boolean)
   if (segments.length === 0) return null
 
   const first = segments[0]
@@ -246,8 +248,9 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
       const resourceType = segments[detailsStartIndex + 2]
       const resourceKind = segments[detailsStartIndex + 3]
       const resourceTarget = segments[detailsStartIndex + 4]
+      const artifactMode = segments[detailsStartIndex + 5] === 'live' ? 'live' : 'preview'
       if (
-        resourceType === 'resource' &&
+        (resourceType === 'artifact' || resourceType === 'resource') &&
         (resourceKind === 'file' || resourceKind === 'url') &&
         resourceTarget
       ) {
@@ -255,10 +258,11 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
           navigator: 'sessions',
           sessionFilter,
           details: {
-            type: 'resource',
+            type: 'artifact',
             id: detailsId,
             resourceKind,
             resourceTarget: decodeURIComponent(resourceTarget),
+            artifactMode,
           },
         }
       }
@@ -341,12 +345,12 @@ export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
   }
 
   if (!parsed.details) return base
-  if (parsed.details.type === 'resource') {
-    const { id, resourceKind, resourceTarget } = parsed.details
+  if (parsed.details.type === 'artifact' || parsed.details.type === 'resource') {
+    const { id, resourceKind, resourceTarget, artifactMode } = parsed.details
     if (!resourceKind || !resourceTarget) {
       return `${base}/session/${id}`
     }
-    return `${base}/session/${id}/resource/${resourceKind}/${encodeURIComponent(resourceTarget)}`
+    return `${base}/session/${id}/artifact/${resourceKind}/${encodeURIComponent(resourceTarget)}${artifactMode === 'live' ? '/live' : ''}`
   }
   return `${base}/session/${parsed.details.id}`
 }
@@ -446,9 +450,10 @@ function convertCompoundToViewRoute(compound: ParsedCompoundRoute): ParsedRoute 
   if (compound.sessionFilter) {
     const filter = compound.sessionFilter
     if (compound.details) {
-      if (compound.details.type === 'resource') {
+      if (compound.details.type === 'artifact' || compound.details.type === 'resource') {
         const resourceKind = compound.details.resourceKind
         const resourceTarget = compound.details.resourceTarget
+        const artifactMode = compound.details.artifactMode
         if (!resourceKind || !resourceTarget) {
           return {
             type: 'view',
@@ -465,12 +470,13 @@ function convertCompoundToViewRoute(compound: ParsedCompoundRoute): ParsedRoute 
 
         return {
           type: 'view',
-          name: 'session-resource',
+          name: 'artifact',
           id: compound.details.id,
           params: {
             filter: filter.kind,
             resourceKind,
             target: resourceTarget,
+            ...(artifactMode === 'live' ? { mode: 'live' } : {}),
             ...(filter.kind === 'state' ? { stateId: filter.stateId } : {}),
             ...(filter.kind === 'label' ? { labelId: filter.labelId } : {}),
             ...(filter.kind === 'view' ? { viewId: filter.viewId } : {}),
@@ -612,9 +618,10 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
   // Sessions
   const filter = compound.sessionFilter || { kind: 'allSessions' as const }
   if (compound.details) {
-    if (compound.details.type === 'resource') {
+    if (compound.details.type === 'artifact' || compound.details.type === 'resource') {
       const resourceKind = compound.details.resourceKind
       const resourceTarget = compound.details.resourceTarget
+      const artifactMode = compound.details.artifactMode
       if (!resourceKind || !resourceTarget) {
         return {
           navigator: 'sessions',
@@ -627,12 +634,13 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
         navigator: 'sessions',
         filter,
         details: {
-          type: 'resource',
+          type: 'artifact',
           sessionId: compound.details.id,
-          resource: {
+          artifact: {
             kind: resourceKind,
             target: resourceTarget,
           },
+          mode: artifactMode ?? 'preview',
         },
       }
     }
@@ -712,6 +720,7 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
       }
       return { navigator: 'automations', details: null }
     case 'session':
+    case 'artifact':
     case 'session-resource':
       if (parsed.id) {
         // Reconstruct filter from params
@@ -727,7 +736,7 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
           filter = { kind: filterKind as 'allSessions' | 'flagged' | 'archived' }
         }
         if (
-          parsed.name === 'session-resource' &&
+          (parsed.name === 'artifact' || parsed.name === 'session-resource') &&
           (parsed.params.resourceKind === 'file' || parsed.params.resourceKind === 'url') &&
           typeof parsed.params.target === 'string'
         ) {
@@ -735,12 +744,13 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
             navigator: 'sessions',
             filter,
             details: {
-              type: 'resource',
+              type: 'artifact',
               sessionId: parsed.id,
-              resource: {
+              artifact: {
                 kind: parsed.params.resourceKind,
                 target: parsed.params.target,
               },
+              mode: parsed.params.mode === 'live' ? 'live' : 'preview',
             },
           }
         }
@@ -844,12 +854,13 @@ function navigationStateToCompoundRoute(state: NavigationState): ParsedCompoundR
     navigator: 'sessions',
     sessionFilter: state.filter,
     details: state.details
-      ? (state.details.type === 'resource'
+      ? ((state.details.type === 'resource' || state.details.type === 'artifact')
         ? {
-            type: 'resource',
+            type: 'artifact',
             id: state.details.sessionId,
-            resourceKind: state.details.resource.kind,
-            resourceTarget: state.details.resource.target,
+            resourceKind: state.details.type === 'artifact' ? state.details.artifact.kind : state.details.resource.kind,
+            resourceTarget: state.details.type === 'artifact' ? state.details.artifact.target : state.details.resource.target,
+            artifactMode: state.details.type === 'artifact' ? state.details.mode : 'preview',
           }
         : { type: 'session', id: state.details.sessionId })
       : null,

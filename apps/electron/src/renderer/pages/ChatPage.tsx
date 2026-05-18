@@ -361,9 +361,9 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
             const files = matches.filter((m) => m.type === 'file' && m.name === fileName)
             const exact = files.find((m) => m.path === resolved)
             if (exact) {
-              navigate(routes.view.sessionResource({
+              navigate(routes.view.artifact({
                 sessionId,
-                resourceKind: 'file',
+                artifactKind: 'file',
                 target: exact.path,
                 filter: isSessionsNavigation(navigationState) ? navigationState.filter : undefined,
               }), { newPanel: true })
@@ -371,9 +371,9 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
             }
 
             if (files.length === 1) {
-              navigate(routes.view.sessionResource({
+              navigate(routes.view.artifact({
                 sessionId,
-                resourceKind: 'file',
+                artifactKind: 'file',
                 target: files[0].path,
                 filter: isSessionsNavigation(navigationState) ? navigationState.filter : undefined,
               }), { newPanel: true })
@@ -386,9 +386,9 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         }
       }
 
-      navigate(routes.view.sessionResource({
+      navigate(routes.view.artifact({
         sessionId,
-        resourceKind: 'file',
+        artifactKind: 'file',
         target: resolved,
         filter: isSessionsNavigation(navigationState) ? navigationState.filter : undefined,
       }), { newPanel: true })
