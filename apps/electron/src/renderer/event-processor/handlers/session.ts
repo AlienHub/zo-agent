@@ -145,6 +145,7 @@ export function handleError(
         messages: [...messagesWithFailedTools, errorMessage],
         isProcessing: false,
         currentStatus: undefined,  // Clear any lingering status
+        lastMessageRole: 'error',
       },
       streaming: null,
     },
@@ -196,6 +197,7 @@ export function handleTypedError(
         messages: [...messagesWithFailedTools, errorMessage],
         isProcessing: false,
         currentStatus: undefined,  // Clear any lingering status
+        lastMessageRole: 'error',
       },
       streaming: null,
     },
@@ -989,4 +991,3 @@ export function handleUsageUpdate(
     effects: [],
   }
 }
-
