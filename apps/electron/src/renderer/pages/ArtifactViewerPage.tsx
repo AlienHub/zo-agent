@@ -1,5 +1,4 @@
 import * as React from 'react'
-import { useAtomValue } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import {
   CodePreviewOverlay,
@@ -12,6 +11,7 @@ import {
   Spinner,
   htmlRequiresBrowserRuntime,
   injectHtmlPreviewBase,
+  usePlatform,
 } from '@craft-agent/ui'
 import { AlertCircle, ChevronDown, Copy, ExternalLink, FileText, FolderOpen, Globe, Monitor } from 'lucide-react'
 import { useNavigationState, isSessionsNavigation } from '@/contexts/NavigationContext'
@@ -34,15 +34,17 @@ import {
 } from '@/components/ui/styled-dropdown'
 import { toast } from 'sonner'
 import { getFileManagerName } from '@/lib/platform'
-import type { ArtifactViewMode, BrowserInstanceInfo, SessionArtifactDetails } from '../../shared/types'
+import type { ArtifactViewMode, SessionArtifactDetails } from '../../shared/types'
 import { cn } from '@/lib/utils'
 import { stripMarkdown } from '../utils/text'
-import { openInAppBrowser } from '@/lib/browser-pane'
 import { describeArtifact } from '@/lib/artifacts'
-import { browserInstancesAtom } from '@/atoms/browser-pane'
+import { BrowserArtifactRuntime } from '@/components/artifacts/BrowserArtifactRuntime'
+import { useArtifactBrowserRuntime } from '@/hooks/useArtifactBrowserRuntime'
 
 interface ArtifactViewerPageProps {
   artifactDetails: SessionArtifactDetails
+  panelId?: string
+  isFocusedPanel?: boolean
 }
 
 function resolveRelativePath(baseFilePath: string, nextPath: string): string {
@@ -77,12 +79,6 @@ function getUrlDisplay(target: string): string {
   } catch {
     return target
   }
-}
-
-function toBrowserTarget(source: { kind: 'file' | 'url'; target: string }): { filePath?: string; url?: string } {
-  return source.kind === 'url'
-    ? { url: source.target }
-    : { filePath: source.target }
 }
 
 interface CompactResourceMenuProps {
@@ -161,23 +157,25 @@ function CompactResourceMenu({ title, children }: CompactResourceMenuProps) {
 
 export default function ArtifactViewerPage({
   artifactDetails,
+  panelId = 'main',
+  isFocusedPanel = true,
 }: ArtifactViewerPageProps) {
   const { t } = useTranslation()
-  const { rightSidebarButton, leadingAction, onOpenUrl, isCompactMode } = useAppShellContext()
+  const { rightSidebarButton, leadingAction, onOpenFile, onOpenUrl, isCompactMode } = useAppShellContext()
+  const { onOpenFileExternal } = usePlatform()
   const navigationState = useNavigationState()
-  const browserInstances = useAtomValue(browserInstancesAtom)
-  const sessionFilter = isSessionsNavigation(navigationState)
-    ? navigationState.filter
-    : { kind: 'allSessions' as const }
+  const sessionFilter = React.useMemo(
+    () => isSessionsNavigation(navigationState)
+      ? navigationState.filter
+      : { kind: 'allSessions' as const },
+    [navigationState],
+  )
 
   const [textContent, setTextContent] = React.useState<string | null>(null)
   const [jsonData, setJsonData] = React.useState<unknown>(null)
   const [loadError, setLoadError] = React.useState<string | null>(null)
   const [isLoading, setIsLoading] = React.useState(false)
   const [copiedText, setCopiedText] = React.useState(false)
-  const [isEnsuringLiveBrowser, setIsEnsuringLiveBrowser] = React.useState(false)
-  const [liveBrowserError, setLiveBrowserError] = React.useState<string | null>(null)
-  const liveBrowserKeyRef = React.useRef<string | null>(null)
   const descriptor = React.useMemo(() => describeArtifact(artifactDetails.artifact), [artifactDetails.artifact])
   const resource = descriptor.source
   const artifactMode = artifactDetails.mode
@@ -185,17 +183,18 @@ export default function ArtifactViewerPage({
   const classificationType = descriptor.previewType
   const canPreview = descriptor.canPreview
   const supportsLiveBrowser = descriptor.canUseBrowserRuntime
-  const liveBrowserInstance = React.useMemo<BrowserInstanceInfo | null>(() => {
-    const matches = browserInstances.filter((instance) =>
-      instance.boundSessionId === artifactDetails.sessionId || instance.ownerSessionId === artifactDetails.sessionId
-    )
-    return matches.at(-1) ?? null
-  }, [artifactDetails.sessionId, browserInstances])
   const htmlNeedsBrowserRuntime = React.useMemo(
     () => classificationType === 'html' && !!textContent && htmlRequiresBrowserRuntime(textContent),
     [classificationType, textContent]
   )
   const isLiveMode = artifactMode === 'live' && supportsLiveBrowser
+  const browserRuntime = useArtifactBrowserRuntime({
+    active: isLiveMode,
+    focused: isFocusedPanel,
+    panelId,
+    sessionId: artifactDetails.sessionId,
+    artifact: resource,
+  })
 
   const buildArtifactRoute = React.useCallback((mode: ArtifactViewMode) => (
     routes.view.artifact({
@@ -295,49 +294,18 @@ export default function ArtifactViewerPage({
     }
   }, [resource.kind, resource.target, canPreview, classificationType, isLiveMode])
 
-  const ensureLiveBrowser = React.useCallback(async (force = false) => {
-    const liveKey = `${artifactDetails.sessionId}:${resource.kind}:${resource.target}`
-    if (!force && liveBrowserKeyRef.current === liveKey) return
-
-    liveBrowserKeyRef.current = liveKey
-    setIsEnsuringLiveBrowser(true)
-    setLiveBrowserError(null)
-    try {
-      await openInAppBrowser({
-        ...toBrowserTarget(resource),
-        bindToSessionId: artifactDetails.sessionId,
-      })
-    } catch (error) {
-      liveBrowserKeyRef.current = null
-      const message = error instanceof Error ? error.message : 'Failed to create browser window'
-      setLiveBrowserError(message)
-      throw error
-    } finally {
-      setIsEnsuringLiveBrowser(false)
-    }
-  }, [artifactDetails.sessionId, resource])
-
-  React.useEffect(() => {
-    if (!isLiveMode) {
-      liveBrowserKeyRef.current = null
-      setLiveBrowserError(null)
-      setIsEnsuringLiveBrowser(false)
-      return
-    }
-
-    void ensureLiveBrowser().catch((error) => {
-      console.error('[ArtifactViewerPage] Failed to ensure live browser runtime:', error)
-    })
-  }, [ensureLiveBrowser, isLiveMode])
-
   const openExternally = React.useCallback(() => {
     if (resource.kind === 'file') {
-      void window.electronAPI.openFile(resource.target)
+      if (onOpenFileExternal) {
+        onOpenFileExternal(resource.target)
+      } else {
+        onOpenFile(resource.target)
+      }
       return
     }
 
     void window.electronAPI.openUrl(resource.target)
-  }, [resource])
+  }, [onOpenFile, onOpenFileExternal, resource])
 
   const handleOpenInNewWindow = React.useCallback(async () => {
     const route = buildArtifactRoute(artifactMode)
@@ -380,12 +348,26 @@ export default function ArtifactViewerPage({
 
   const handleOpenInAppBrowser = React.useCallback(async () => {
     try {
-      await ensureLiveBrowser(true)
+      await browserRuntime.ensure({ force: true, show: true })
     } catch (error) {
       console.error('[ArtifactViewerPage] openInAppBrowser failed:', error)
       toast.error(t('toast.failedToCreateBrowser'))
     }
-  }, [ensureLiveBrowser, t])
+  }, [browserRuntime, t])
+
+  const handleReloadLiveBrowser = React.useCallback(async () => {
+    try {
+      if (browserRuntime.instance) {
+        await window.electronAPI.browserPane.reload(browserRuntime.instance.id)
+        await browserRuntime.focus()
+        return
+      }
+      await browserRuntime.ensure({ force: true, show: true })
+    } catch (error) {
+      console.error('[ArtifactViewerPage] reload live browser failed:', error)
+      toast.error(t('toast.failedToCreateBrowser'))
+    }
+  }, [browserRuntime, t])
 
   const handleSwitchMode = React.useCallback((nextMode: ArtifactViewMode) => {
     navigate(buildArtifactRoute(nextMode))
@@ -478,61 +460,16 @@ export default function ArtifactViewerPage({
   )
 
   const liveBrowserBody = (
-    <div className="h-full bg-foreground-3 p-4">
-      <div className="mx-auto flex h-full w-full max-w-[1100px] items-center justify-center overflow-hidden rounded-[16px] bg-background shadow-strong">
-        <div className="max-w-[640px] space-y-4 px-8 text-center">
-          <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-muted/30 px-3 py-1 text-xs font-medium text-muted-foreground">
-            <Monitor className="h-3.5 w-3.5" />
-            <span>Live Browser Runtime</span>
-          </div>
-          <div className="space-y-2">
-            <div className="text-xl font-semibold text-foreground">{descriptor.title}</div>
-            <div className="break-all text-sm text-muted-foreground">{resource.target}</div>
-          </div>
-          <div className="rounded-[14px] border border-border/60 bg-muted/20 px-4 py-4 text-left">
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-foreground">
-                  {liveBrowserInstance ? (liveBrowserInstance.title || 'Browser window ready') : 'Preparing browser window'}
-                </div>
-                <div className="mt-1 truncate text-xs text-muted-foreground">
-                  {liveBrowserInstance?.url || resource.target}
-                </div>
-              </div>
-              <div className="shrink-0 text-xs text-muted-foreground">
-                {isEnsuringLiveBrowser ? 'Connecting…' : (liveBrowserInstance?.isLoading ? 'Loading…' : 'Ready')}
-              </div>
-            </div>
-          </div>
-          <div className="text-sm text-muted-foreground">
-            This live artifact uses the existing session browser window runtime. The panel owns the route and controls, while the page itself runs in the dedicated browser surface.
-          </div>
-          {liveBrowserError && (
-            <div className="rounded-[12px] border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-              {liveBrowserError}
-            </div>
-          )}
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={() => { void handleOpenInAppBrowser() }}
-              className="inline-flex items-center gap-2 rounded-[10px] border border-border/70 bg-background px-4 py-2 text-sm font-medium text-foreground shadow-minimal transition-colors hover:bg-muted"
-            >
-              <Monitor className="h-4 w-4" />
-              <span>{liveBrowserInstance ? 'Show Browser Window' : 'Launch Browser Window'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSwitchMode('preview')}
-              className="inline-flex items-center gap-2 rounded-[10px] border border-border/70 bg-background px-4 py-2 text-sm font-medium text-foreground shadow-minimal transition-colors hover:bg-muted"
-            >
-              <FileText className="h-4 w-4" />
-              <span>Back to Preview</span>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <BrowserArtifactRuntime
+      title={descriptor.title}
+      artifact={resource}
+      instance={browserRuntime.instance}
+      isEnsuring={browserRuntime.isEnsuring}
+      error={browserRuntime.error}
+      onShowBrowser={handleOpenInAppBrowser}
+      onReload={handleReloadLiveBrowser}
+      onBackToPreview={() => handleSwitchMode('preview')}
+    />
   )
 
   if (resource.kind === 'url' && !isLiveMode) {

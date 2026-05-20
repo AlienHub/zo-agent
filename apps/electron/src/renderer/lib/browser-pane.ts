@@ -1,6 +1,7 @@
 export interface OpenInAppBrowserTarget {
   url?: string
   filePath?: string
+  id?: string
   bindToSessionId?: string | null
 }
 
@@ -16,6 +17,7 @@ export async function openInAppBrowser(target: OpenInAppBrowserTarget): Promise<
   }
 
   const instanceId = await browserPaneApi.create({
+    ...(target.id ? { id: target.id } : {}),
     show: true,
     ...(target.bindToSessionId ? { bindToSessionId: target.bindToSessionId } : {}),
   })

@@ -32,6 +32,19 @@ export function registerBrowserHandlers(server: RpcServer, deps: HandlerDeps): v
       return browserPaneManager.createInstance(input)
     }
 
+    if (input?.bindToSessionId && input.id) {
+      const id = browserPaneManager.createInstance(input.id, {
+        show: input.show ?? false,
+        ownerType: 'session',
+        ownerSessionId: input.bindToSessionId,
+      })
+      browserPaneManager.bindSession(id, input.bindToSessionId)
+      if (input.show) {
+        browserPaneManager.focus(id)
+      }
+      return id
+    }
+
     if (input?.bindToSessionId) {
       return browserPaneManager.createForSession(input.bindToSessionId, { show: input.show ?? false })
     }

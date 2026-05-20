@@ -100,14 +100,26 @@ export async function validateFilePath(
   const allowedDirs = [
     homedir(),
     tmpdir(),
+    ...(sep === '\\' ? [] : ['/tmp']),
     ...(additionalAllowedDirs ?? []),
   ].filter(Boolean)
+  const allowedRealDirs = new Set<string>()
+  await Promise.all(
+    allowedDirs.map(async (dir) => {
+      const normalizedDir = normalize(dir)
+      allowedRealDirs.add(normalizedDir)
+      try {
+        allowedRealDirs.add(normalize(await realpath(normalizedDir)))
+      } catch {
+        // Keep the normalized path above for non-existent but otherwise allowed roots.
+      }
+    }),
+  )
 
   // Check if the real path is within an allowed directory (cross-platform)
-  const isAllowed = allowedDirs.some(dir => {
-    const normalizedDir = normalize(dir)
-    const normalizedReal = normalize(realFilePath)
-    return normalizedReal.startsWith(normalizedDir + sep) || normalizedReal === normalizedDir
+  const normalizedReal = normalize(realFilePath)
+  const isAllowed = Array.from(allowedRealDirs).some(dir => {
+    return normalizedReal.startsWith(dir + sep) || normalizedReal === dir
   })
 
   if (!isAllowed) {

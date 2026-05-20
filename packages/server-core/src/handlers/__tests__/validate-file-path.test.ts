@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'bun:test'
+import { writeFileSync, rmSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join, sep } from 'path'
 import { validateFilePath } from '../utils'
@@ -17,6 +18,19 @@ describe('validateFilePath', () => {
     const path = join(tmp, 'craft-test.txt')
     const result = await validateFilePath(path)
     expect(result).toContain('craft-test.txt')
+  })
+
+  it('allows paths inside /tmp on Unix', async () => {
+    if (sep === '\\') return
+
+    const path = '/tmp/craft-test-file-path.txt'
+    writeFileSync(path, 'test')
+    try {
+      const result = await validateFilePath(path)
+      expect(result).toContain('craft-test-file-path.txt')
+    } finally {
+      rmSync(path, { force: true })
+    }
   })
 
   it('denies paths outside all allowed directories', async () => {

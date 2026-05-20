@@ -55,12 +55,18 @@ export interface MainContentPanelProps {
    * Used by PanelSlot to render panels in the panel stack.
    */
   navStateOverride?: import('../../../shared/types').NavigationState | null
+  /** Stable ID of the panel rendering this content, used by panel-owned runtimes. */
+  panelId?: string
+  /** Whether this content panel currently has focus in the panel stack. */
+  isFocusedPanel?: boolean
 }
 
 export function MainContentPanel({
   isSidebarAndNavigatorHidden = false,
   className,
   navStateOverride,
+  panelId = 'main',
+  isFocusedPanel = true,
 }: MainContentPanelProps) {
   const { t } = useTranslation()
   const globalNavState = useNavigationState()
@@ -380,9 +386,17 @@ export function MainContentPanel({
       return wrapWithStoplight(
         <Panel variant="grow" className={className}>
           {navState.details.type === 'artifact' ? (
-            <ArtifactViewerPage artifactDetails={navState.details} />
+            <ArtifactViewerPage
+              artifactDetails={navState.details}
+              panelId={panelId}
+              isFocusedPanel={isFocusedPanel}
+            />
           ) : navState.details.type === 'resource' ? (
-            <SessionResourcePreviewPage resourceDetails={navState.details} />
+            <SessionResourcePreviewPage
+              resourceDetails={navState.details}
+              panelId={panelId}
+              isFocusedPanel={isFocusedPanel}
+            />
           ) : (
             <ChatPage sessionId={navState.details.sessionId} />
           )}
