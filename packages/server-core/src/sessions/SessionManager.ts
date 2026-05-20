@@ -5676,6 +5676,7 @@ export class SessionManager implements ISessionManager {
                 errorCanRetry: false,
               }
               managed.messages.push(errorMessage)
+              managed.lastMessageRole = 'error'
               this.sendEvent({
                 type: 'typed_error',
                 sessionId,
@@ -5748,10 +5749,20 @@ export class SessionManager implements ISessionManager {
         sendSpan.mark('chat.error')
         sendSpan.setMetadata('error', error instanceof Error ? error.message : String(error))
         sendSpan.end()
+        const errorText = error instanceof Error ? error.message : 'Unknown error'
+        const errorMessage: Message = {
+          id: generateMessageId(),
+          role: 'error',
+          content: errorText,
+          timestamp: this.monotonic(),
+        }
+        managed.messages.push(errorMessage)
+        managed.lastMessageRole = 'error'
         this.sendEvent({
           type: 'error',
           sessionId,
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: errorText,
+          timestamp: errorMessage.timestamp,
         }, managed.workspace.id)
         // Handle error via centralized handler
         this.onProcessingStopped(sessionId, 'error')
@@ -5926,6 +5937,7 @@ export class SessionManager implements ISessionManager {
           errorCode: failureErrorCode,
         }
         managed.messages.push(failedMessage)
+        managed.lastMessageRole = 'error'
         this.sendEvent({
           type: 'error',
           sessionId,
@@ -6084,6 +6096,18 @@ export class SessionManager implements ISessionManager {
         })
         // Report queued message failures via runtime hooks
         sessionRuntimeHooks.captureException(err, { errorSource: 'chat-queue', sessionId })
+        const errorTimestamp = this.monotonic()
+        managed.messages.push({
+          id: generateMessageId(),
+          role: 'error',
+          content: 'Queued message could not be sent: A message you sent while the agent was running could not be re-sent automatically. Tap retry to send it now.',
+          timestamp: errorTimestamp,
+          errorCode: 'queued_message_replay_failed',
+          errorTitle: 'Queued message could not be sent',
+          errorOriginal: err instanceof Error ? err.message : String(err),
+          errorCanRetry: true,
+        })
+        managed.lastMessageRole = 'error'
         // Surface a typed error so the UI can show a clear, actionable banner
         // instead of a generic "Unknown error" (#616).
         this.sendEvent({
@@ -6097,6 +6121,7 @@ export class SessionManager implements ISessionManager {
             canRetry: true,
             originalError: err instanceof Error ? err.message : String(err),
           },
+          timestamp: errorTimestamp,
         }, managed.workspace.id)
         // Call onProcessingStopped to handle cleanup and check for more queued messages
         this.onProcessingStopped(sessionId, 'error')
@@ -6937,6 +6962,7 @@ export class SessionManager implements ISessionManager {
           timestamp: this.monotonic()
         }
         managed.messages.push(errorMessage)
+        managed.lastMessageRole = 'error'
         this.sendEvent({ type: 'error', sessionId, error: event.message, timestamp: errorMessage.timestamp }, workspaceId)
         break
       }
@@ -6986,6 +7012,7 @@ export class SessionManager implements ISessionManager {
           errorCanRetry: event.error.canRetry,
         }
         managed.messages.push(typedErrorMessage)
+        managed.lastMessageRole = 'error'
         // Send typed_error event with full structure for renderer to handle
         this.sendEvent({
           type: 'typed_error',
