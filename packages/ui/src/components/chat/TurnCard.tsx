@@ -4,6 +4,7 @@ import i18n from 'i18next'
 import { useTranslation } from 'react-i18next'
 import type { ToolDisplayMeta, AnnotationV1 } from '@craft-agent/core'
 import { normalizePath, pathStartsWith, stripPathPrefix } from '@craft-agent/core/utils'
+import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { motion, AnimatePresence } from 'motion/react'
 import {
   ChevronRight,
@@ -80,6 +81,7 @@ import { useAnnotationCancelRestore } from '../annotations/use-annotation-cancel
 import { DocumentFormattedMarkdownOverlay } from '../overlay'
 import { AcceptPlanDropdown } from './AcceptPlanDropdown'
 import { MarkdownActionBar } from './MarkdownActionBar'
+import { CompactAcceptPlanDrawer } from './CompactAcceptPlanDrawer'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -341,7 +343,9 @@ export interface TurnCardProps {
   displayMode?: 'informative' | 'detailed'
   /** Animate response appearance (for playground demos) */
   animateResponse?: boolean
-  /** Hide footers for compact embedding (EditPopover) */
+  /** Compact-footer layout. Used by EditPopover (popover embedding) and ChatPage in
+   *  auto-compact / WebUI mobile. Hides Copy / Markdown / Branch actions; keeps the
+   *  Accept Plan dropdown when a plan is the last response. */
   compactMode?: boolean
   /** Callback to branch the session from a specific message */
   onBranch?: (messageId: string, options?: { newPanel?: boolean }) => void
@@ -720,7 +724,7 @@ function getPreviewText(
   if (isStreaming && hasResponse) return i18n.t('turnCard.responding')
 
   // Find running Task tools and show their description
-  const runningTask = activities.find(a => a.toolName === 'Task' && a.status === 'running')
+  const runningTask = activities.find(a => isParentTaskTool(a.toolName ?? '') && a.status === 'running')
   if (runningTask?.toolInput?.description) {
     return runningTask.toolInput.description as string
   }
@@ -749,7 +753,7 @@ function getPreviewText(
   }
 
   // When complete, show first Task's description if available
-  const firstTask = activities.find(a => a.toolName === 'Task')
+  const firstTask = activities.find(a => isParentTaskTool(a.toolName ?? ''))
   if (firstTask?.toolInput?.description) {
     const errorSuffix = errorCount > 0
       ? i18n.t('turnCard.errorCount', { count: errorCount })
@@ -1404,7 +1408,8 @@ export interface ResponseCardProps {
   isLastResponse?: boolean
   /** Whether to show the Accept Plan button (default: true) */
   showAcceptPlan?: boolean
-  /** Hide footer for compact embedding (EditPopover) */
+  /** Compact-footer layout. Hides Copy / Markdown / Branch in the response footer;
+   *  keeps the Accept Plan dropdown when a plan is the last response. */
   compactMode?: boolean
   /** Callback to branch the session from this response */
   onBranch?: (options?: { newPanel?: boolean }) => void
@@ -2475,7 +2480,8 @@ export function ResponseCard({
             </div>
           </div>
 
-          {/* Footer with actions - hidden in compact mode */}
+          {/* Desktop footer with actions (Copy / Markdown / Accept Plan / Branch).
+              Compact mode falls through to the slim Accept-Plan-only footer below. */}
           {!compactMode && (
             <MarkdownActionBar
               onCopy={handleCopy}
@@ -2509,6 +2515,26 @@ export function ResponseCard({
                 </>
               )}
             />
+          )}
+
+          {/* Compact footer — Accept Plan only (mobile / auto-compact / popover).
+              Uses a bottom-sheet drawer to match the CompactPermissionModeSelector
+              / CompactModelSelector pattern. Guarded by isLastResponse so older
+              plans don't render an empty strip with a hidden-but-focusable button. */}
+          {compactMode && isPlan && showAcceptPlan && isLastResponse && onAccept && onAcceptWithCompact && (
+            <div
+              className={cn(
+                "pl-3 pr-2 py-1.5 border-t border-border/30 flex items-center justify-end bg-muted/20",
+                SIZE_CONFIG.fontSize
+              )}
+            >
+              <CompactAcceptPlanDrawer
+                onAccept={onAccept}
+                onAcceptWithCompact={onAcceptWithCompact}
+                acceptLabel={hasActiveFollowUpAnnotations ? t('plan.acceptAndSendFollowups') : t('plan.acceptPlan')}
+                acceptOptionLabel={hasActiveFollowUpAnnotations ? t('plan.acceptAndSendFollowups') : t('plan.accept')}
+              />
+            </div>
           )}
         </div>
 
@@ -2568,7 +2594,8 @@ export function ResponseCard({
           </div>
         </div>
 
-        {/* Footer - hidden in compact mode */}
+        {/* Desktop streaming footer; compact mode renders nothing here
+            (the Accept-Plan footer only applies to completed plans). */}
         {!compactMode && (
           <div className={cn("px-4 py-2 border-t border-border/30 flex items-center bg-muted/20", SIZE_CONFIG.fontSize)}>
             <div className="flex items-center gap-2 text-muted-foreground">
@@ -2813,7 +2840,7 @@ export const TurnCard = React.memo(function TurnCard({
 
   // Check if we have any Task subagents - if so, use grouped view
   const hasTaskSubagents = useMemo(
-    () => sortedActivities.some(a => a.toolName === 'Task'),
+    () => sortedActivities.some(a => isParentTaskTool(a.toolName ?? '')),
     [sortedActivities]
   )
 
@@ -3168,6 +3195,9 @@ export const TurnCard = React.memo(function TurnCard({
 
   // Re-render if displayMode changed
   if (prev.displayMode !== next.displayMode) return false
+
+  // Re-render if compactMode changed (affects ResponseCard footer rendering)
+  if (prev.compactMode !== next.compactMode) return false
 
   // Re-render if annotation interaction mode changed (interactive vs tooltip-only)
   if (prev.annotationInteractionMode !== next.annotationInteractionMode) return false
