@@ -670,6 +670,8 @@ export default function SessionResourcePreviewPage({
                         onOpenFile={handleNestedFileClick}
                         onOpenUrl={handleNestedUrlClick}
                         islandZIndex={420}
+                        islandUsePortal
+                        hideSentFollowUpAnnotations
                       />
                     </div>
                     <MarkdownActionBar

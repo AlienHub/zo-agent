@@ -17,6 +17,7 @@ import {
 import {
   getAnnotationNoteText,
   formatAnnotationFollowUpTooltipText,
+  isAnnotationFollowUpSent,
 } from '../annotations/follow-up-state'
 import {
   type PointerSnapshot,
@@ -62,6 +63,8 @@ export interface AnnotatableMarkdownDocumentProps {
   onOpenFile?: (path: string) => void
   sendMessageKey?: 'enter' | 'cmd-enter'
   islandZIndex?: React.CSSProperties['zIndex']
+  islandUsePortal?: boolean
+  hideSentFollowUpAnnotations?: boolean
   openAnnotationRequest?: ExternalOpenAnnotationRequest | null
   isStreaming?: boolean
 }
@@ -79,6 +82,8 @@ export function AnnotatableMarkdownDocument({
   onOpenFile,
   sendMessageKey = 'enter',
   islandZIndex = 'var(--z-island, 400)',
+  islandUsePortal = shouldRenderAnnotationIslandInPortal('fullscreen'),
+  hideSentFollowUpAnnotations = false,
   openAnnotationRequest,
   isStreaming = false,
 }: AnnotatableMarkdownDocumentProps) {
@@ -149,8 +154,15 @@ export function AnnotatableMarkdownDocument({
     setSelectionMenuShowNonce((prev) => prev + 1)
   }, [])
 
-  const renderedAnnotations = React.useMemo(() => {
+  const visibleAnnotations = React.useMemo(() => {
     const persisted = annotations ?? []
+    return hideSentFollowUpAnnotations
+      ? persisted.filter(annotation => !isAnnotationFollowUpSent(annotation))
+      : persisted
+  }, [annotations, hideSentFollowUpAnnotations])
+
+  const renderedAnnotations = React.useMemo(() => {
+    const persisted = visibleAnnotations
 
     if (!pendingSelection || selectionMenuView !== 'confirm-follow-up') {
       return persisted
@@ -164,12 +176,12 @@ export function AnnotatableMarkdownDocument({
       ...persisted,
       createSelectionPreviewAnnotation(messageId, pendingSelection, sessionId ?? ''),
     ]
-  }, [annotations, pendingSelection, selectionMenuView, messageId, sessionId])
+  }, [visibleAnnotations, pendingSelection, selectionMenuView, messageId, sessionId])
 
   const activeAnnotation = React.useMemo(() => {
     if (!activeAnnotationDetail) return null
-    return (annotations ?? []).find(annotation => annotation.id === activeAnnotationDetail.annotationId) ?? null
-  }, [annotations, activeAnnotationDetail])
+    return visibleAnnotations.find(annotation => annotation.id === activeAnnotationDetail.annotationId) ?? null
+  }, [visibleAnnotations, activeAnnotationDetail])
 
   React.useEffect(() => {
     const root = contentLayerRef.current
@@ -189,7 +201,7 @@ export function AnnotatableMarkdownDocument({
       const geometry = computeAnnotationOverlayGeometry({
         root,
         renderedAnnotations,
-        persistedAnnotations: annotations,
+        persistedAnnotations: visibleAnnotations,
       })
 
       for (const annotation of renderedAnnotations) {
@@ -205,7 +217,7 @@ export function AnnotatableMarkdownDocument({
     return () => {
       window.removeEventListener('resize', recomputeOverlay)
     }
-  }, [renderedAnnotations, annotations, content])
+  }, [renderedAnnotations, visibleAnnotations, content])
 
   React.useEffect(() => {
     if (!canAnnotate) {
@@ -223,13 +235,19 @@ export function AnnotatableMarkdownDocument({
     requestEdit()
   }, [requestEdit])
 
-  const saveFollowUp = React.useCallback(async (note: string): Promise<{
+  const saveFollowUp = React.useCallback(async (note: string, options?: { markSentAt?: number }): Promise<{
     messageId: string
     annotationId: string
     note: string
     selectedText: string
   } | null> => {
     const normalizedNote = note.trim()
+    const sentMeta = options?.markSentAt != null
+      ? {
+          lastSentAt: options.markSentAt,
+          lastSentText: normalizedNote,
+        }
+      : {}
 
     if (activeAnnotationDetail) {
       if (!onUpdateAnnotation || !activeAnnotation) {
@@ -258,6 +276,7 @@ export function AnnotatableMarkdownDocument({
                 followUp: {
                   text: normalizedNote,
                   updatedAt: Date.now(),
+                  ...sentMeta,
                 },
               }
             : (Object.keys(nextMeta).length > 0 ? nextMeta : undefined),
@@ -287,6 +306,20 @@ export function AnnotatableMarkdownDocument({
     }
 
     const annotation = createTextSelectionAnnotation(messageId, pendingSelection, normalizedNote, sessionId ?? '')
+    if (normalizedNote.length > 0 && Object.keys(sentMeta).length > 0) {
+      const currentMeta = annotation.meta ?? {}
+      const currentFollowUpMeta = currentMeta.followUp && typeof currentMeta.followUp === 'object' && !Array.isArray(currentMeta.followUp)
+        ? currentMeta.followUp as Record<string, unknown>
+        : {}
+      annotation.meta = {
+        ...currentMeta,
+        followUp: {
+          ...currentFollowUpMeta,
+          text: normalizedNote,
+          ...sentMeta,
+        },
+      }
+    }
     try {
       await Promise.resolve(onAddAnnotation(messageId, annotation))
     } catch {
@@ -310,7 +343,7 @@ export function AnnotatableMarkdownDocument({
   }, [saveFollowUp])
 
   const handleSubmitAndSendFollowUp = React.useCallback((note: string) => {
-    void saveFollowUp(note).then((saved) => {
+    void saveFollowUp(note, { markSentAt: Date.now() }).then((saved) => {
       if (!saved) return
       onSaveAndSendFollowUp?.(saved)
     })
@@ -663,7 +696,7 @@ export function AnnotatableMarkdownDocument({
       transitionConfig={selectionMenuTransitionConfig}
       onExitComplete={handleSelectionMenuExitComplete}
       zIndex={islandZIndex}
-      usePortal={shouldRenderAnnotationIslandInPortal('fullscreen')}
+      usePortal={islandUsePortal}
     />
   )
 
