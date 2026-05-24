@@ -614,6 +614,7 @@ async function loadSessionMessages(
               : loadedSession.messages,
           tokenUsage: loadedSession.tokenUsage ?? existingSession.tokenUsage,
           sessionFolderPath: loadedSession.sessionFolderPath ?? existingSession.sessionFolderPath,
+          resourceAnnotations: loadedSession.resourceAnnotations ?? existingSession.resourceAnnotations,
         }
       : loadedSession
     set(sessionAtomFamily(sessionId), mergedSession)

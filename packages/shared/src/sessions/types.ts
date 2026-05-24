@@ -11,7 +11,7 @@
 
 import type { PermissionMode } from '../agent/mode-manager.ts';
 import type { ThinkingLevel } from '../agent/thinking-levels.ts';
-import type { StoredAttachment, MessageRole, ToolStatus, AuthRequestType, AuthStatus, CredentialInputMode, StoredMessage } from '@craft-agent/core/types';
+import type { StoredAttachment, MessageRole, ToolStatus, AuthRequestType, AuthStatus, CredentialInputMode, StoredMessage, AnnotationV1 } from '@craft-agent/core/types';
 
 /**
  * Session fields that persist to disk.
@@ -205,6 +205,16 @@ export interface SessionConfig {
 export interface StoredSession extends SessionConfig {
   messages: StoredMessage[];
   tokenUsage: SessionTokenUsage;
+}
+
+export interface SessionResourceRef {
+  kind: 'file' | 'url';
+  target: string;
+}
+
+export interface SessionResourceAnnotations {
+  resource: SessionResourceRef;
+  annotations: AnnotationV1[];
 }
 
 /**

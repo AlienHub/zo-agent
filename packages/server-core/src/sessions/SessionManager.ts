@@ -53,6 +53,8 @@ import {
   getPendingPlanExecution as getStoredPendingPlanExecution,
   getSessionAttachmentsPath,
   getSessionPath as getSessionStoragePath,
+  loadSessionResourceAnnotations,
+  saveSessionResourceAnnotations,
   ensureSessionDir,
   getSessionFilePath,
   generateSessionId,
@@ -68,6 +70,7 @@ import {
   type SessionMetadata,
   type SessionStatus,
   type SessionHeader,
+  type SessionResourceAnnotations,
   pickSessionFields,
 } from '@craft-agent/shared/sessions'
 import { loadWorkspaceSources, loadAllSources, getSourcesBySlugs, isSourceUsable, type LoadedSource, type McpServerConfig, getSourcesNeedingAuth, getSourceCredentialManager, getSourceServerBuilder, type SourceWithCredential, isApiOAuthProvider, hasRenewEndpoint, SERVER_BUILD_ERRORS, TokenRefreshManager, createTokenGetter } from '@craft-agent/shared/sources'
@@ -79,7 +82,7 @@ import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { CraftMcpClient, McpClientPool, McpPoolServer } from '@craft-agent/shared/mcp'
-import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
+import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type SessionResourceRef, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta } from '@craft-agent/core/types'
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
 import { loadAllSkills, loadSkillBySlug, invalidateSkillsCache, type LoadedSkill } from '@craft-agent/shared/skills'
@@ -793,6 +796,8 @@ interface ManagedSession {
   isAsyncOperationOngoing?: boolean
   // Preview of first user message (for sidebar display fallback)
   preview?: string
+  // Session-owned annotations anchored to file/url resources opened from this session.
+  resourceAnnotations?: SessionResourceAnnotations[]
   // When the session was first created (ms timestamp from JSONL header)
   createdAt?: number
   // Total message count (pre-computed in JSONL header for fast list loading)
@@ -971,11 +976,20 @@ function managedToSession(m: ManagedSession, overrides?: Partial<Session>): Sess
     workspaceId: m.workspace.id,
     workspaceName: m.workspace.name,
     messages: [],
+    resourceAnnotations: m.resourceAnnotations ?? [],
     isProcessing: m.isProcessing,
     sessionFolderPath: getSessionStoragePath(m.workspace.rootPath, m.id),
     supportsBranching: resolveSupportsBranching(m),
     ...overrides,
   } as Session
+}
+
+function getResourceAnnotationMessageId(resource: SessionResourceRef): string {
+  return `resource:${resource.kind}:${resource.target}`
+}
+
+function isSameResource(a: SessionResourceRef, b: SessionResourceRef): boolean {
+  return a.kind === b.kind && a.target === b.target
 }
 
 // Performance: Batch IPC delta events to reduce renderer load
@@ -1772,6 +1786,7 @@ export class SessionManager implements ISessionManager {
     if (stored) {
       managed.messages = (stored.messages || []).map(storedToMessage)
       managed.tokenUsage = stored.tokenUsage
+      managed.resourceAnnotations = loadSessionResourceAnnotations(managed.workspace.rootPath, managed.id)
       // Deferred-load fields (intentionally undefined after startup, see
       // loadSessionsFromDisk). Populate from disk only if not already set in
       // memory — a caller may have mutated them via setSessionSources etc.
@@ -2244,6 +2259,7 @@ export class SessionManager implements ISessionManager {
     if (storedSession) {
       managed.messages = (storedSession.messages || []).map(storedToMessage)
       managed.tokenUsage = storedSession.tokenUsage
+      managed.resourceAnnotations = loadSessionResourceAnnotations(managed.workspace.rootPath, managed.id)
       managed.lastReadMessageId = storedSession.lastReadMessageId
       managed.hasUnread = storedSession.hasUnread  // Explicit unread flag for NEW badge state machine
       managed.enabledSourceSlugs = storedSession.enabledSourceSlugs
@@ -5092,6 +5108,172 @@ export class SessionManager implements ISessionManager {
     message.annotations = existing.filter(a => a.id !== annotationId)
     this.persistSession(managed)
     this.sendEvent({ type: 'message_annotations_updated', sessionId, messageId, annotations: message.annotations }, managed.workspace.id)
+  }
+
+  /**
+   * Add an annotation anchored to a file/url resource owned by the session.
+   */
+  addResourceAnnotation(sessionId: string, resource: SessionResourceRef, annotation: NonNullable<Message['annotations']>[number]): void {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) {
+      sessionLog.warn(`Cannot add resource annotation: session ${sessionId} not found`)
+      return
+    }
+
+    if (!resource?.kind || typeof resource.target !== 'string' || resource.target.length === 0) {
+      sessionLog.warn(`Cannot add resource annotation: invalid resource for session ${sessionId}`)
+      return
+    }
+
+    if (!annotation?.id || !annotation?.target?.selectors?.length) {
+      sessionLog.warn(`Cannot add resource annotation: invalid annotation payload for session ${sessionId}`)
+      return
+    }
+
+    const messageId = getResourceAnnotationMessageId(resource)
+    const safeAnnotation: NonNullable<Message['annotations']>[number] = {
+      ...annotation,
+      schemaVersion: 1,
+      target: {
+        ...annotation.target,
+        source: {
+          ...annotation.target.source,
+          sessionId,
+          messageId,
+        },
+      },
+    }
+
+    const annotationBytes = Buffer.byteLength(JSON.stringify(safeAnnotation), 'utf8')
+    if (annotationBytes > MAX_ANNOTATION_JSON_BYTES) {
+      sessionLog.warn(`Cannot add resource annotation: payload too large (${annotationBytes} bytes > ${MAX_ANNOTATION_JSON_BYTES}) for ${resource.target}`)
+      return
+    }
+
+    const groups = managed.resourceAnnotations ?? []
+    const existingGroup = groups.find(group => isSameResource(group.resource, resource))
+    const existing = existingGroup?.annotations ?? []
+
+    if (existing.some(a => a.id === safeAnnotation.id)) {
+      sessionLog.warn(`Cannot add resource annotation: duplicate annotation id ${safeAnnotation.id} for ${resource.target}`)
+      return
+    }
+
+    if (existing.length >= MAX_ANNOTATIONS_PER_MESSAGE) {
+      sessionLog.warn(`Cannot add resource annotation: per-resource limit reached (${MAX_ANNOTATIONS_PER_MESSAGE}) for ${resource.target}`)
+      return
+    }
+
+    const nextGroup: SessionResourceAnnotations = {
+      resource,
+      annotations: [...existing, safeAnnotation],
+    }
+    managed.resourceAnnotations = existingGroup
+      ? groups.map(group => isSameResource(group.resource, resource) ? nextGroup : group)
+      : [...groups, nextGroup]
+
+    saveSessionResourceAnnotations(managed.workspace.rootPath, sessionId, managed.resourceAnnotations)
+    this.sendEvent({ type: 'resource_annotations_updated', sessionId, resource, annotations: nextGroup.annotations }, managed.workspace.id)
+  }
+
+  /**
+   * Patch an existing session-owned resource annotation.
+   */
+  updateResourceAnnotation(
+    sessionId: string,
+    resource: SessionResourceRef,
+    annotationId: string,
+    patch: Partial<NonNullable<Message['annotations']>[number]>
+  ): void {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) {
+      sessionLog.warn(`Cannot update resource annotation: session ${sessionId} not found`)
+      return
+    }
+
+    const groups = managed.resourceAnnotations ?? []
+    const group = groups.find(item => isSameResource(item.resource, resource))
+    const existing = group?.annotations ?? []
+    const idx = existing.findIndex(a => a.id === annotationId)
+    if (!group || idx === -1) {
+      sessionLog.warn(`Cannot update resource annotation: annotation ${annotationId} not found for ${resource.target}`)
+      return
+    }
+
+    if (patch.target?.selectors && patch.target.selectors.length === 0) {
+      sessionLog.warn(`Cannot update resource annotation: empty selectors patch for annotation ${annotationId}`)
+      return
+    }
+
+    const messageId = getResourceAnnotationMessageId(resource)
+    const current = existing[idx]!
+    const updated = {
+      ...current,
+      ...patch,
+      id: current.id,
+      schemaVersion: current.schemaVersion,
+      target: patch.target
+        ? {
+            ...current.target,
+            ...patch.target,
+            source: {
+              ...current.target.source,
+              ...(patch.target.source ?? {}),
+              sessionId,
+              messageId,
+            },
+          }
+        : {
+            ...current.target,
+            source: {
+              ...current.target.source,
+              sessionId,
+              messageId,
+            },
+          },
+      updatedAt: Date.now(),
+    }
+
+    const updatedBytes = Buffer.byteLength(JSON.stringify(updated), 'utf8')
+    if (updatedBytes > MAX_ANNOTATION_JSON_BYTES) {
+      sessionLog.warn(`Cannot update resource annotation: payload too large (${updatedBytes} bytes > ${MAX_ANNOTATION_JSON_BYTES}) for annotation ${annotationId}`)
+      return
+    }
+
+    const nextAnnotations = [...existing]
+    nextAnnotations[idx] = updated
+    const nextGroup: SessionResourceAnnotations = { resource, annotations: nextAnnotations }
+    managed.resourceAnnotations = groups.map(item => isSameResource(item.resource, resource) ? nextGroup : item)
+
+    saveSessionResourceAnnotations(managed.workspace.rootPath, sessionId, managed.resourceAnnotations)
+    this.sendEvent({ type: 'resource_annotations_updated', sessionId, resource, annotations: nextAnnotations }, managed.workspace.id)
+  }
+
+  /**
+   * Remove an annotation from a session-owned resource.
+   */
+  removeResourceAnnotation(sessionId: string, resource: SessionResourceRef, annotationId: string): void {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) {
+      sessionLog.warn(`Cannot remove resource annotation: session ${sessionId} not found`)
+      return
+    }
+
+    const groups = managed.resourceAnnotations ?? []
+    const group = groups.find(item => isSameResource(item.resource, resource))
+    const existing = group?.annotations ?? []
+    if (!group || !existing.some(a => a.id === annotationId)) {
+      sessionLog.warn(`Cannot remove resource annotation: annotation ${annotationId} not found for ${resource.target}`)
+      return
+    }
+
+    const nextAnnotations = existing.filter(a => a.id !== annotationId)
+    managed.resourceAnnotations = nextAnnotations.length > 0
+      ? groups.map(item => isSameResource(item.resource, resource) ? { resource, annotations: nextAnnotations } : item)
+      : groups.filter(item => !isSameResource(item.resource, resource))
+
+    saveSessionResourceAnnotations(managed.workspace.rootPath, sessionId, managed.resourceAnnotations)
+    this.sendEvent({ type: 'resource_annotations_updated', sessionId, resource, annotations: nextAnnotations }, managed.workspace.id)
   }
 
   async deleteSession(sessionId: string): Promise<void> {

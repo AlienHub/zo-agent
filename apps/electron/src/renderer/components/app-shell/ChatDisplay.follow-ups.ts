@@ -19,6 +19,7 @@
 import { normalizeFollowUpText } from '@craft-agent/ui/annotations/follow-up-state'
 
 export type PendingFollowUpAnnotation = {
+  kind?: 'message' | 'resource'
   messageId: string
   annotationId: string
   note: string
@@ -26,6 +27,11 @@ export type PendingFollowUpAnnotation = {
   createdAt: number
   color?: string
   meta?: Record<string, unknown>
+  sourceLabel?: string
+  resource?: {
+    kind: 'file' | 'url'
+    target: string
+  }
 }
 
 /**
@@ -55,8 +61,14 @@ export function formatFollowUpSection(
 
   const items = followUps.map((followUp, idx) => {
     const quoteText = normalizeFollowUpText(followUp.selectedText)
+    const quoteLines = followUp.sourceLabel
+      ? [
+          `> [#${idx + 1}] Source: \`${followUp.sourceLabel}\``,
+          `> ${quoteText}`,
+        ]
+      : [`> [#${idx + 1}] ${quoteText}`]
     return [
-      `> [#${idx + 1}] ${quoteText}`,
+      ...quoteLines,
       `→ ${followUp.note}`,
     ].join('\n')
   })

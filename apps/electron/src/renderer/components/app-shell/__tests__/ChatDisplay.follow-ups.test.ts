@@ -40,6 +40,19 @@ describe('formatFollowUpSection — the OSS #580 regression', () => {
     expect(output).toContain('**Follow-ups**')
   })
 
+  test('includes source labels for resource follow-ups', () => {
+    const output = formatFollowUpSection([
+      followUp({
+        selectedText: 'const answer = 42',
+        note: 'why here?',
+        sourceLabel: '/repo/src/file.ts',
+      }),
+    ])
+    expect(output).toContain('> [#1] Source: `/repo/src/file.ts`')
+    expect(output).toContain('> const answer = 42')
+    expect(output).toContain('→ why here?')
+  })
+
   test('numbers multiple follow-ups sequentially', () => {
     const output = formatFollowUpSection([
       followUp({ annotationId: 'a', selectedText: 'one', note: 'n1' }),

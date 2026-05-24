@@ -1047,11 +1047,13 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   const lastMessageRole = lastMessage?.role
 
   const pendingFollowUpAnnotations = useMemo<PendingFollowUpAnnotation[]>(() => {
-    if (!session?.messages?.length) return []
+    const messages = session?.messages ?? []
+    const resourceAnnotationGroups = session?.resourceAnnotations ?? []
+    if (messages.length === 0 && resourceAnnotationGroups.length === 0) return []
 
     const pending: PendingFollowUpAnnotation[] = []
 
-    for (const message of session.messages) {
+    for (const message of messages) {
       if (message.role !== 'assistant' && message.role !== 'plan') continue
       if (!message.annotations?.length) continue
 
@@ -1061,6 +1063,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
         if (isAnnotationFollowUpSent(annotation)) continue
 
         pending.push({
+          kind: 'message',
           messageId: message.id,
           annotationId: annotation.id,
           note,
@@ -1072,8 +1075,29 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
       }
     }
 
+    for (const group of resourceAnnotationGroups) {
+      for (const annotation of group.annotations) {
+        const note = getAnnotationNoteText(annotation)
+        if (!note) continue
+        if (isAnnotationFollowUpSent(annotation)) continue
+
+        pending.push({
+          kind: 'resource',
+          messageId: annotation.target.source.messageId,
+          annotationId: annotation.id,
+          note,
+          selectedText: extractAnnotationSelectedText(annotation, ''),
+          createdAt: annotation.updatedAt ?? annotation.createdAt,
+          color: annotation.style?.color,
+          meta: asRecord(annotation.meta) ?? undefined,
+          resource: group.resource,
+          sourceLabel: group.resource.target,
+        })
+      }
+    }
+
     return pending.sort((a, b) => a.createdAt - b.createdAt)
-  }, [session?.messages])
+  }, [session?.messages, session?.resourceAnnotations])
 
   const followUpInputItems = useMemo(() => {
     return pendingFollowUpAnnotations.map((followUp, idx) => ({
@@ -1237,22 +1261,32 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
       void Promise.all(pendingFollowUpAnnotations.map((followUp) => {
         const currentMeta = followUp.meta ?? {}
         const currentFollowUpMeta = asRecord(currentMeta.followUp) ?? {}
+        const patch = {
+          meta: {
+            ...currentMeta,
+            followUp: {
+              ...currentFollowUpMeta,
+              text: followUp.note,
+              lastSentAt: sentAt,
+              lastSentText: followUp.note,
+            },
+          },
+        }
+
+        if (followUp.kind === 'resource' && followUp.resource) {
+          return window.electronAPI.sessionCommand(session.id, {
+            type: 'updateResourceAnnotation',
+            resource: followUp.resource,
+            annotationId: followUp.annotationId,
+            patch,
+          })
+        }
 
         return window.electronAPI.sessionCommand(session.id, {
           type: 'updateAnnotation',
           messageId: followUp.messageId,
           annotationId: followUp.annotationId,
-          patch: {
-            meta: {
-              ...currentMeta,
-              followUp: {
-                ...currentFollowUpMeta,
-                text: followUp.note,
-                lastSentAt: sentAt,
-                lastSentText: followUp.note,
-              },
-            },
-          },
+          patch,
         })
       })).catch((error) => {
         console.error('[ChatDisplay] Failed to mark follow-up annotations as sent:', error)

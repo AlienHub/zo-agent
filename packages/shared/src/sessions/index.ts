@@ -18,6 +18,8 @@ export type {
   SessionMetadata,
   SessionHeader,
   SessionPersistentField,
+  SessionResourceRef,
+  SessionResourceAnnotations,
 } from './types.ts';
 
 // Field constants
@@ -33,6 +35,8 @@ export {
   getSessionAttachmentsPath,
   getSessionPlansPath,
   ensureAttachmentsDir,
+  loadSessionResourceAnnotations,
+  saveSessionResourceAnnotations,
   // ID generation
   generateSessionId,
   // Session CRUD
@@ -123,5 +127,4 @@ export {
   validateBundle,
   MAX_BUNDLE_SIZE_BYTES,
 } from './bundle.ts';
-
 

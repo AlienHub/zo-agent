@@ -375,6 +375,12 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
         return sessionManager.removeMessageAnnotation(sessionId, command.messageId, command.annotationId)
       case 'updateAnnotation':
         return sessionManager.updateMessageAnnotation(sessionId, command.messageId, command.annotationId, command.patch)
+      case 'addResourceAnnotation':
+        return sessionManager.addResourceAnnotation(sessionId, command.resource, command.annotation)
+      case 'removeResourceAnnotation':
+        return sessionManager.removeResourceAnnotation(sessionId, command.resource, command.annotationId)
+      case 'updateResourceAnnotation':
+        return sessionManager.updateResourceAnnotation(sessionId, command.resource, command.annotationId, command.patch)
       default: {
         const _exhaustive: never = command
         throw new Error(`Unknown session command: ${JSON.stringify(command)}`)

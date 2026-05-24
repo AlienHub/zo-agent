@@ -21,6 +21,7 @@ import {
   rmSync,
   statSync,
   unlinkSync,
+  renameSync,
 } from 'fs';
 import { join, basename } from 'path';
 import { getWorkspaceSessionsPath } from '../workspaces/storage.ts';
@@ -35,12 +36,14 @@ import type {
   SessionTokenUsage,
   SessionHeader,
   SessionStatus,
+  SessionResourceAnnotations,
+  SessionResourceRef,
 } from './types.ts';
 import type { Plan } from '../agent/plan-types.ts';
 import { validateSessionStatus } from '../statuses/validation.ts';
 import { debug } from '../utils/debug.ts';
 import { getStatusCategory } from '../statuses/storage.ts';
-import { readSessionHeader, readSessionJsonl } from './jsonl.ts';
+import { expandSessionPath, makeSessionPathPortable, readSessionHeader, readSessionJsonl } from './jsonl.ts';
 import { sessionPersistenceQueue } from './persistence-queue.ts';
 
 // Re-export types for convenience
@@ -126,6 +129,76 @@ export function getSessionAttachmentsPath(workspaceRootPath: string, sessionId: 
  */
 export function getSessionPlansPath(workspaceRootPath: string, sessionId: string): string {
   return join(getSessionPath(workspaceRootPath, sessionId), 'plans');
+}
+
+const RESOURCE_ANNOTATIONS_FILE = 'resource-annotations.json';
+
+function getSessionResourceAnnotationsPath(workspaceRootPath: string, sessionId: string): string {
+  return join(getSessionPath(workspaceRootPath, sessionId), RESOURCE_ANNOTATIONS_FILE);
+}
+
+function isSessionResourceRef(value: unknown): value is SessionResourceRef {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return (record.kind === 'file' || record.kind === 'url') && typeof record.target === 'string';
+}
+
+function normalizeResourceAnnotations(value: unknown): SessionResourceAnnotations[] {
+  if (!Array.isArray(value)) return [];
+
+  const result: SessionResourceAnnotations[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    if (!isSessionResourceRef(record.resource)) continue;
+    if (!Array.isArray(record.annotations)) continue;
+
+    result.push({
+      resource: record.resource,
+      annotations: record.annotations.filter((annotation): annotation is SessionResourceAnnotations['annotations'][number] => {
+        return Boolean(
+          annotation
+          && typeof annotation === 'object'
+          && typeof (annotation as { id?: unknown }).id === 'string'
+          && Array.isArray((annotation as { target?: { selectors?: unknown } }).target?.selectors)
+        );
+      }),
+    });
+  }
+
+  return result.filter(group => group.annotations.length > 0);
+}
+
+export function loadSessionResourceAnnotations(
+  workspaceRootPath: string,
+  sessionId: string,
+): SessionResourceAnnotations[] {
+  const filePath = getSessionResourceAnnotationsPath(workspaceRootPath, sessionId);
+  if (!existsSync(filePath)) return [];
+
+  try {
+    const sessionDir = getSessionPath(workspaceRootPath, sessionId);
+    const content = expandSessionPath(readFileSync(filePath, 'utf-8'), sessionDir);
+    return normalizeResourceAnnotations(JSON.parse(content));
+  } catch (error) {
+    debug('[sessions] Failed to read resource annotations:', filePath, error);
+    return [];
+  }
+}
+
+export function saveSessionResourceAnnotations(
+  workspaceRootPath: string,
+  sessionId: string,
+  annotations: SessionResourceAnnotations[],
+): void {
+  const sessionDir = ensureSessionDir(workspaceRootPath, sessionId);
+  const filePath = getSessionResourceAnnotationsPath(workspaceRootPath, sessionId);
+  const tmpFile = `${filePath}.tmp`;
+  const normalized = normalizeResourceAnnotations(annotations);
+  const content = JSON.stringify(normalized, null, 2);
+  writeFileSync(tmpFile, makeSessionPathPortable(content, sessionDir));
+  try { unlinkSync(filePath); } catch { /* ignore if doesn't exist */ }
+  renameSync(tmpFile, filePath);
 }
 
 /**

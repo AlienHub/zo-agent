@@ -34,6 +34,7 @@ import type {
   LLMConnectionChangedEvent,
   UserMessageEvent,
   MessageAnnotationsUpdatedEvent,
+  ResourceAnnotationsUpdatedEvent,
   SessionSharedEvent,
   SessionUnsharedEvent,
   AuthRequestEvent,
@@ -608,6 +609,36 @@ export function handleMessageAnnotationsUpdated(
             ? { ...m, annotations: event.annotations }
             : m
         ),
+      },
+      streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
+ * Handle resource_annotations_updated - update annotations for a session-owned file/url resource.
+ */
+export function handleResourceAnnotationsUpdated(
+  state: SessionState,
+  event: ResourceAnnotationsUpdatedEvent
+): ProcessResult {
+  const { session, streaming } = state
+  const existing = session.resourceAnnotations ?? []
+  const isTarget = (group: NonNullable<SessionState['session']['resourceAnnotations']>[number]) =>
+    group.resource.kind === event.resource.kind && group.resource.target === event.resource.target
+
+  const resourceAnnotations = event.annotations.length > 0
+    ? existing.some(isTarget)
+      ? existing.map(group => isTarget(group) ? { resource: event.resource, annotations: event.annotations } : group)
+      : [...existing, { resource: event.resource, annotations: event.annotations }]
+    : existing.filter(group => !isTarget(group))
+
+  return {
+    state: {
+      session: {
+        ...session,
+        resourceAnnotations,
       },
       streaming,
     },

@@ -49,9 +49,15 @@ export interface AnnotatableMarkdownDocumentProps {
   messageId: string
   sessionId?: string
   annotations?: AnnotationV1[]
-  onAddAnnotation?: (messageId: string, annotation: AnnotationV1) => void
-  onRemoveAnnotation?: (messageId: string, annotationId: string) => void
-  onUpdateAnnotation?: (messageId: string, annotationId: string, patch: Partial<AnnotationV1>) => void
+  onAddAnnotation?: (messageId: string, annotation: AnnotationV1) => void | Promise<void>
+  onRemoveAnnotation?: (messageId: string, annotationId: string) => void | Promise<void>
+  onUpdateAnnotation?: (messageId: string, annotationId: string, patch: Partial<AnnotationV1>) => void | Promise<void>
+  onSaveAndSendFollowUp?: (target: {
+    messageId: string
+    annotationId: string
+    note: string
+    selectedText: string
+  }) => void
   onOpenUrl?: (url: string) => void
   onOpenFile?: (path: string) => void
   sendMessageKey?: 'enter' | 'cmd-enter'
@@ -68,6 +74,7 @@ export function AnnotatableMarkdownDocument({
   onAddAnnotation,
   onRemoveAnnotation,
   onUpdateAnnotation,
+  onSaveAndSendFollowUp,
   onOpenUrl,
   onOpenFile,
   sendMessageKey = 'enter',
@@ -216,13 +223,18 @@ export function AnnotatableMarkdownDocument({
     requestEdit()
   }, [requestEdit])
 
-  const handleSubmitFollowUp = React.useCallback((note: string) => {
+  const saveFollowUp = React.useCallback(async (note: string): Promise<{
+    messageId: string
+    annotationId: string
+    note: string
+    selectedText: string
+  } | null> => {
     const normalizedNote = note.trim()
 
     if (activeAnnotationDetail) {
       if (!onUpdateAnnotation || !activeAnnotation) {
         closeSelectionMenu()
-        return
+        return null
       }
 
       const existingOtherBodies = activeAnnotation.body.filter(body => body.type !== 'highlight' && body.type !== 'note')
@@ -235,35 +247,74 @@ export function AnnotatableMarkdownDocument({
       const nextMeta = { ...(activeAnnotation.meta ?? {}) }
       delete nextMeta.followUp
 
-      onUpdateAnnotation(messageId, activeAnnotationDetail.annotationId, {
-        body: nextBody,
-        intent: normalizedNote.length > 0 ? 'comment' : 'highlight',
-        updatedAt: Date.now(),
-        meta: normalizedNote.length > 0
-          ? {
-              ...nextMeta,
-              followUp: {
-                text: normalizedNote,
-                updatedAt: Date.now(),
-              },
-            }
-          : (Object.keys(nextMeta).length > 0 ? nextMeta : undefined),
-      })
+      try {
+        await Promise.resolve(onUpdateAnnotation(messageId, activeAnnotationDetail.annotationId, {
+          body: nextBody,
+          intent: normalizedNote.length > 0 ? 'comment' : 'highlight',
+          updatedAt: Date.now(),
+          meta: normalizedNote.length > 0
+            ? {
+                ...nextMeta,
+                followUp: {
+                  text: normalizedNote,
+                  updatedAt: Date.now(),
+                },
+              }
+            : (Object.keys(nextMeta).length > 0 ? nextMeta : undefined),
+        }))
+      } catch {
+        return null
+      }
 
       markSubmitSuccess()
-      return
+      if (normalizedNote.length === 0) return null
+
+      const quoteSelector = activeAnnotation.target.selectors.find(
+        (selector): selector is Extract<AnnotationV1['target']['selectors'][number], { type: 'text-quote' }> => selector.type === 'text-quote'
+      )
+
+      return {
+        messageId,
+        annotationId: activeAnnotationDetail.annotationId,
+        note: normalizedNote,
+        selectedText: quoteSelector?.exact?.trim() || 'Selected text',
+      }
     }
 
     if (!pendingSelection || !canAnnotate || !onAddAnnotation) {
       closeSelectionMenu()
-      return
+      return null
     }
 
     const annotation = createTextSelectionAnnotation(messageId, pendingSelection, normalizedNote, sessionId ?? '')
-    onAddAnnotation(messageId, annotation)
+    try {
+      await Promise.resolve(onAddAnnotation(messageId, annotation))
+    } catch {
+      return null
+    }
     markSubmitSuccess()
     clearDomSelection()
+
+    if (normalizedNote.length === 0) return null
+
+    return {
+      messageId,
+      annotationId: annotation.id,
+      note: normalizedNote,
+      selectedText: pendingSelection.selectedText,
+    }
   }, [activeAnnotationDetail, onUpdateAnnotation, activeAnnotation, closeSelectionMenu, pendingSelection, canAnnotate, onAddAnnotation, messageId, sessionId, markSubmitSuccess])
+
+  const handleSubmitFollowUp = React.useCallback((note: string) => {
+    void saveFollowUp(note)
+  }, [saveFollowUp])
+
+  const handleSubmitAndSendFollowUp = React.useCallback((note: string) => {
+    void saveFollowUp(note).then((saved) => {
+      if (!saved) return
+      onSaveAndSendFollowUp?.(saved)
+    })
+  }, [saveFollowUp, onSaveAndSendFollowUp])
 
   const handleCancelFollowUp = useAnnotationCancelRestore({
     contentRootRef: contentLayerRef,
@@ -606,6 +657,7 @@ export function AnnotatableMarkdownDocument({
       onRequestBack={handleSelectionMenuRequestBack}
       onRequestEdit={handleRequestFollowUpEdit}
       onSubmit={handleSubmitFollowUp}
+      onSubmitAndSend={handleSubmitAndSendFollowUp}
       onDelete={activeAnnotationDetail ? handleDeleteActiveAnnotation : undefined}
       sendMessageKey={sendMessageKey}
       transitionConfig={selectionMenuTransitionConfig}

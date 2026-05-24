@@ -22,6 +22,7 @@ import type {
   PermissionModeState,
   UnreadSummary,
   ShareResult,
+  SessionResourceRef,
 } from '@craft-agent/shared/protocol'
 import type { SessionBundle, DispatchMode } from '@craft-agent/shared/sessions'
 import type { EventSink } from '../transport'
@@ -96,6 +97,14 @@ export interface ISessionManager {
   updateMessageAnnotation(
     sessionId: string,
     messageId: string,
+    annotationId: string,
+    patch: Partial<AnnotationV1>,
+  ): void
+  addResourceAnnotation(sessionId: string, resource: SessionResourceRef, annotation: AnnotationV1): void
+  removeResourceAnnotation(sessionId: string, resource: SessionResourceRef, annotationId: string): void
+  updateResourceAnnotation(
+    sessionId: string,
+    resource: SessionResourceRef,
     annotationId: string,
     patch: Partial<AnnotationV1>,
   ): void

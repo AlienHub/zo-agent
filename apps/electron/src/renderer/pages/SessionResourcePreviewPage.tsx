@@ -1,16 +1,14 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  CodePreviewOverlay,
-  GenericOverlay,
   ImagePreviewOverlay,
   MarkdownActionBar,
-  JSONPreviewOverlay,
-  Markdown,
   PDFPreviewOverlay,
   Spinner,
+  AnnotatableMarkdownDocument,
   classifyFile,
 } from '@craft-agent/ui'
+import { useSetAtom } from 'jotai'
 import { AlertCircle, ChevronDown, Copy, ExternalLink, FileText, FolderOpen, Globe, Monitor } from 'lucide-react'
 import { useNavigationState, isSessionsNavigation } from '@/contexts/NavigationContext'
 import { routes } from '@/lib/navigate'
@@ -25,7 +23,7 @@ import {
   DrawerTitle,
   DrawerTrigger,
 } from '@/components/ui/drawer'
-import { useAppShellContext } from '@/context/AppShellContext'
+import { useAppShellContext, useSession as useSessionData } from '@/context/AppShellContext'
 import { normalizeLocalFileTarget } from '@/lib/file-link-target'
 import {
   StyledDropdownMenuItem,
@@ -33,10 +31,11 @@ import {
 } from '@/components/ui/styled-dropdown'
 import { toast } from 'sonner'
 import { getFileManagerName } from '@/lib/platform'
-import type { SessionResourceDetails } from '../../shared/types'
+import type { AnnotationV1, SessionResourceDetails, SessionResourceRef } from '../../shared/types'
 import { cn } from '@/lib/utils'
 import { stripMarkdown } from '../utils/text'
 import { openInAppBrowser } from '@/lib/browser-pane'
+import { ensureSessionMessagesLoadedAtom } from '@/atoms/sessions'
 
 interface SessionResourcePreviewPageProps {
   resourceDetails: SessionResourceDetails
@@ -81,6 +80,47 @@ function getUrlDisplay(target: string): string {
   } catch {
     return target
   }
+}
+
+function getResourceAnnotationMessageId(resource: SessionResourceRef): string {
+  return `resource:${resource.kind}:${resource.target}`
+}
+
+function getResourceSourceLabel(resource: SessionResourceRef): string {
+  return resource.kind === 'file' ? resource.target : getUrlDisplay(resource.target)
+}
+
+function escapeMarkdownFence(content: string): string {
+  return content.replace(/```/g, '``\\`')
+}
+
+function getExtension(path: string): string {
+  const basename = path.split('/').pop() ?? path
+  const dotIndex = basename.lastIndexOf('.')
+  if (dotIndex === -1 || dotIndex === 0) return ''
+  return basename.slice(dotIndex + 1).toLowerCase()
+}
+
+function formatTextFileForAnnotation(content: string, target: string, type: string | null): string {
+  if (type === 'markdown') return content
+  const language = type === 'json' ? 'json' : type === 'code' ? getExtension(target) : ''
+  const fenceInfo = language ? language.replace(/[^a-z0-9_-]/gi, '') : ''
+  return ['```' + fenceInfo, escapeMarkdownFence(content), '```'].join('\n')
+}
+
+function formatResourceFollowUpMessage(params: {
+  resource: SessionResourceRef
+  note: string
+  selectedText: string
+}): string {
+  const quoteText = params.selectedText.replace(/\s+/g, ' ').trim()
+  return [
+    '**Follow-ups**',
+    '',
+    `> [#1] Source: \`${getResourceSourceLabel(params.resource)}\``,
+    `> ${quoteText}`,
+    `→ ${params.note}`,
+  ].join('\n')
 }
 
 function injectHtmlPreviewBase(html: string, sourcePath: string): string {
@@ -204,11 +244,15 @@ export default function SessionResourcePreviewPage({
   resourceDetails,
 }: SessionResourcePreviewPageProps) {
   const { t } = useTranslation()
-  const { rightSidebarButton, leadingAction, onOpenUrl, isCompactMode } = useAppShellContext()
+  const { rightSidebarButton, leadingAction, onOpenUrl, onSendMessage, isCompactMode } = useAppShellContext()
+  const ensureSessionMessagesLoaded = useSetAtom(ensureSessionMessagesLoadedAtom)
+  const session = useSessionData(resourceDetails.sessionId)
   const navigationState = useNavigationState()
-  const sessionFilter = isSessionsNavigation(navigationState)
-    ? navigationState.filter
-    : { kind: 'allSessions' as const }
+  const sessionFilter = React.useMemo(() => (
+    isSessionsNavigation(navigationState)
+      ? navigationState.filter
+      : { kind: 'allSessions' as const }
+  ), [navigationState])
 
   const [textContent, setTextContent] = React.useState<string | null>(null)
   const [jsonData, setJsonData] = React.useState<unknown>(null)
@@ -233,6 +277,23 @@ export default function SessionResourcePreviewPage({
   const classificationType = classification?.type ?? null
   const canPreview = classification?.canPreview ?? false
   const supportsLiveBrowser = resource.kind === 'url' || classificationType === 'html'
+  const resourceRef = React.useMemo<SessionResourceRef>(() => ({
+    kind: resource.kind,
+    target: resource.target,
+  }), [resource.kind, resource.target])
+  const resourceAnnotationMessageId = React.useMemo(
+    () => getResourceAnnotationMessageId(resourceRef),
+    [resourceRef]
+  )
+  const resourceAnnotations = React.useMemo(() => {
+    return session?.resourceAnnotations?.find(group =>
+      group.resource.kind === resourceRef.kind && group.resource.target === resourceRef.target
+    )?.annotations ?? []
+  }, [resourceRef, session?.resourceAnnotations])
+
+  React.useEffect(() => {
+    void ensureSessionMessagesLoaded(resourceDetails.sessionId)
+  }, [ensureSessionMessagesLoaded, resourceDetails.sessionId])
 
   const openResourcePanel = React.useCallback((kind: 'file' | 'url', target: string) => {
     navigate(routes.view.sessionResource({
@@ -317,6 +378,7 @@ export default function SessionResourcePreviewPage({
 
   const openExternally = React.useCallback(() => {
     if (resource.kind === 'file') {
+      // eslint-disable-next-line craft-links/no-direct-file-open -- explicit "Open" action should bypass in-panel preview.
       void window.electronAPI.openFile(resource.target)
       return
     }
@@ -379,6 +441,70 @@ export default function SessionResourcePreviewPage({
       toast.error(t('toast.failedToCreateBrowser'))
     }
   }, [resource, resourceDetails.sessionId, t])
+
+  const handleAddResourceAnnotation = React.useCallback(async (_messageId: string, annotation: AnnotationV1) => {
+    await window.electronAPI.sessionCommand(resourceDetails.sessionId, {
+      type: 'addResourceAnnotation',
+      resource: resourceRef,
+      annotation,
+    })
+  }, [resourceDetails.sessionId, resourceRef])
+
+  const handleRemoveResourceAnnotation = React.useCallback(async (_messageId: string, annotationId: string) => {
+    await window.electronAPI.sessionCommand(resourceDetails.sessionId, {
+      type: 'removeResourceAnnotation',
+      resource: resourceRef,
+      annotationId,
+    })
+  }, [resourceDetails.sessionId, resourceRef])
+
+  const handleUpdateResourceAnnotation = React.useCallback(async (_messageId: string, annotationId: string, patch: Partial<AnnotationV1>) => {
+    await window.electronAPI.sessionCommand(resourceDetails.sessionId, {
+      type: 'updateResourceAnnotation',
+      resource: resourceRef,
+      annotationId,
+      patch,
+    })
+  }, [resourceDetails.sessionId, resourceRef])
+
+  const handleSaveAndSendResourceFollowUp = React.useCallback((followUp: {
+    annotationId: string
+    note: string
+    selectedText: string
+  }) => {
+    const message = formatResourceFollowUpMessage({
+      resource: resourceRef,
+      note: followUp.note,
+      selectedText: followUp.selectedText,
+    })
+    onSendMessage(resourceDetails.sessionId, message)
+
+    const sentAt = Date.now()
+    const currentAnnotation = resourceAnnotations.find(annotation => annotation.id === followUp.annotationId)
+    const currentMeta = currentAnnotation?.meta ?? {}
+    const currentFollowUpMeta = currentMeta.followUp && typeof currentMeta.followUp === 'object' && !Array.isArray(currentMeta.followUp)
+      ? currentMeta.followUp as Record<string, unknown>
+      : {}
+
+    void window.electronAPI.sessionCommand(resourceDetails.sessionId, {
+      type: 'updateResourceAnnotation',
+      resource: resourceRef,
+      annotationId: followUp.annotationId,
+      patch: {
+        meta: {
+          ...currentMeta,
+          followUp: {
+            ...currentFollowUpMeta,
+            text: followUp.note,
+            lastSentAt: sentAt,
+            lastSentText: followUp.note,
+          },
+        },
+      },
+    }).catch((error) => {
+      console.error('[SessionResourcePreviewPage] Failed to mark resource follow-up as sent:', error)
+    })
+  }, [onSendMessage, resourceAnnotations, resourceDetails.sessionId, resourceRef])
 
   const headerActions = (
     <>
@@ -512,6 +638,59 @@ export default function SessionResourcePreviewPage({
     )
   }
 
+  const renderAnnotatableTextDocument = (content: string, type: string | null, error?: string) => {
+    return (
+      <div className="h-full min-h-0 bg-foreground-3">
+        <div
+          className="h-full"
+          style={{
+            maskImage: 'linear-gradient(to bottom, transparent 0%, black 32px, black calc(100% - 32px), transparent 100%)',
+            WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 32px, black calc(100% - 32px), transparent 100%)',
+          }}
+        >
+          <ScrollArea className="h-full min-w-0">
+            <div className="mx-auto min-h-full w-full max-w-[1080px] px-6 py-4">
+              <div className="mx-auto w-full max-w-[960px]">
+                {error ? (
+                  <div className="rounded-[16px] bg-background px-10 py-8 text-sm text-destructive shadow-strong">
+                    {error}
+                  </div>
+                ) : (
+                  <div className="overflow-hidden rounded-[16px] bg-background shadow-strong">
+                    <div className="px-10 py-8">
+                      <AnnotatableMarkdownDocument
+                        content={formatTextFileForAnnotation(content, resource.target, type)}
+                        sessionId={resourceDetails.sessionId}
+                        messageId={resourceAnnotationMessageId}
+                        annotations={resourceAnnotations}
+                        onAddAnnotation={handleAddResourceAnnotation}
+                        onRemoveAnnotation={handleRemoveResourceAnnotation}
+                        onUpdateAnnotation={handleUpdateResourceAnnotation}
+                        onSaveAndSendFollowUp={handleSaveAndSendResourceFollowUp}
+                        onOpenFile={handleNestedFileClick}
+                        onOpenUrl={handleNestedUrlClick}
+                        islandZIndex={420}
+                      />
+                    </div>
+                    <MarkdownActionBar
+                      onCopy={() => { void handleCopyPlainText() }}
+                      copied={copiedText}
+                      secondaryAction={type === 'markdown' ? {
+                        icon: <FileText className="h-4 w-4" />,
+                        label: <span>{t('common.copy')} Markdown</span>,
+                        onClick: () => { void handleCopyMarkdown() },
+                      } : undefined}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </ScrollArea>
+        </div>
+      </div>
+    )
+  }
+
   const body = (() => {
     if (classification.type === 'image') {
       return (
@@ -548,17 +727,7 @@ export default function SessionResourcePreviewPage({
     }
 
     if (classification.type === 'code') {
-      return (
-        <CodePreviewOverlay
-          isOpen={true}
-          onClose={() => {}}
-          content={textContent ?? ''}
-          filePath={resource.target}
-          error={loadError ?? undefined}
-          embedded
-          hideHeader
-        />
-      )
+      return renderAnnotatableTextDocument(textContent ?? '', 'code', loadError ?? undefined)
     }
 
     if (classification.type === 'html') {
@@ -585,79 +754,14 @@ export default function SessionResourcePreviewPage({
     }
 
     if (classification.type === 'json') {
-      return (
-        <JSONPreviewOverlay
-          isOpen={true}
-          onClose={() => {}}
-          data={jsonData ?? {}}
-          filePath={resource.target}
-          error={loadError ?? undefined}
-          embedded
-          hideHeader
-        />
-      )
+      return renderAnnotatableTextDocument(textContent ?? JSON.stringify(jsonData ?? {}, null, 2), 'json', loadError ?? undefined)
     }
 
     if (classification.type === 'text') {
-      return (
-        <GenericOverlay
-          isOpen={true}
-          onClose={() => {}}
-          content={textContent ?? ''}
-          title={resource.target}
-          language="text"
-          error={loadError ?? undefined}
-          embedded
-          hideHeader
-        />
-      )
+      return renderAnnotatableTextDocument(textContent ?? '', 'text', loadError ?? undefined)
     }
 
-    return (
-      <div className="h-full min-h-0 bg-foreground-3">
-        <div
-          className="h-full"
-          style={{
-            maskImage: 'linear-gradient(to bottom, transparent 0%, black 32px, black calc(100% - 32px), transparent 100%)',
-            WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 32px, black calc(100% - 32px), transparent 100%)',
-          }}
-        >
-          <ScrollArea className="h-full min-w-0">
-            <div className="mx-auto min-h-full w-full max-w-[1080px] px-6 py-4">
-              <div className="mx-auto w-full max-w-[960px]">
-                {loadError ? (
-                  <div className="rounded-[16px] bg-background px-10 py-8 text-sm text-destructive shadow-strong">
-                    {loadError}
-                  </div>
-                ) : (
-                  <div className="overflow-hidden rounded-[16px] bg-background shadow-strong">
-                    <div className="px-10 py-8">
-                      <Markdown
-                        mode="minimal"
-                        onFileClick={handleNestedFileClick}
-                        onUrlClick={handleNestedUrlClick}
-                        hideFirstMermaidExpand={false}
-                      >
-                        {textContent ?? ''}
-                      </Markdown>
-                    </div>
-                    <MarkdownActionBar
-                      onCopy={() => { void handleCopyPlainText() }}
-                      copied={copiedText}
-                      secondaryAction={{
-                        icon: <FileText className="h-4 w-4" />,
-                        label: <span>{t('common.copy')} Markdown</span>,
-                        onClick: () => { void handleCopyMarkdown() },
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-          </ScrollArea>
-        </div>
-      </div>
-    )
+    return renderAnnotatableTextDocument(textContent ?? '', 'markdown', loadError ?? undefined)
   })()
 
   return (

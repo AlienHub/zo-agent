@@ -39,6 +39,16 @@ export type SessionStatus = string
 
 export type BuiltInStatusId = 'todo' | 'in-progress' | 'needs-review' | 'done' | 'cancelled'
 
+export interface SessionResourceRef {
+  kind: 'file' | 'url'
+  target: string
+}
+
+export interface SessionResourceAnnotations {
+  resource: SessionResourceRef
+  annotations: AnnotationV1[]
+}
+
 /**
  * Electron-specific Session type (includes runtime state).
  * Extends core Session with messages array and processing state.
@@ -52,6 +62,8 @@ export interface Session {
   preview?: string
   lastMessageAt: number
   messages: Message[]
+  /** Session-owned annotations anchored to resources opened from this session. */
+  resourceAnnotations?: SessionResourceAnnotations[]
   isProcessing: boolean
   isFlagged?: boolean
   /** Permission mode for this session ('safe', 'ask', 'allow-all') */
@@ -210,6 +222,7 @@ export type SessionEvent =
   | { type: 'source_activated'; sessionId: string; sourceSlug: string; originalMessage: string }
   | { type: 'usage_update'; sessionId: string; tokenUsage: { inputTokens: number; contextWindow?: number } }
   | { type: 'message_annotations_updated'; sessionId: string; messageId: string; annotations: AnnotationV1[] }
+  | { type: 'resource_annotations_updated'; sessionId: string; resource: SessionResourceRef; annotations: AnnotationV1[] }
   | { type: 'working_directory_error'; sessionId: string; error: string }
 
 export interface SendMessageOptions {
@@ -252,6 +265,9 @@ export type SessionCommand =
   | { type: 'addAnnotation'; messageId: string; annotation: AnnotationV1 }
   | { type: 'removeAnnotation'; messageId: string; annotationId: string }
   | { type: 'updateAnnotation'; messageId: string; annotationId: string; patch: Partial<AnnotationV1> }
+  | { type: 'addResourceAnnotation'; resource: SessionResourceRef; annotation: AnnotationV1 }
+  | { type: 'removeResourceAnnotation'; resource: SessionResourceRef; annotationId: string }
+  | { type: 'updateResourceAnnotation'; resource: SessionResourceRef; annotationId: string; patch: Partial<AnnotationV1> }
 
 export interface NewChatActionParams {
   input?: string

@@ -5,7 +5,7 @@
  * All agent events flow through a single pure function for consistent state transitions.
  */
 
-import type { Session, Message, PermissionRequest, CredentialRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta } from '../../shared/types'
+import type { Session, Message, PermissionRequest, CredentialRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta, SessionResourceRef } from '../../shared/types'
 
 /**
  * Streaming state for a session - replaces streamingTextRef
@@ -404,6 +404,13 @@ export interface MessageAnnotationsUpdatedEvent {
   annotations: NonNullable<Message['annotations']>
 }
 
+export interface ResourceAnnotationsUpdatedEvent {
+  type: 'resource_annotations_updated'
+  sessionId: string
+  resource: SessionResourceRef
+  annotations: NonNullable<Message['annotations']>
+}
+
 /**
  * Session shared event - session was shared to viewer
  */
@@ -522,6 +529,7 @@ export type AgentEvent =
   | TaskCompletedEvent
   | UserMessageEvent
   | MessageAnnotationsUpdatedEvent
+  | ResourceAnnotationsUpdatedEvent
   | SessionSharedEvent
   | SessionUnsharedEvent
   | AuthRequestEvent
