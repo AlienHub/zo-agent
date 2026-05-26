@@ -1,5 +1,5 @@
 import * as React from 'react'
-import ReactMarkdown, { type Components } from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
 import rehypeRaw from 'rehype-raw'
 import remarkGfm from 'remark-gfm'
@@ -16,6 +16,7 @@ import { MarkdownHtmlBlock } from './MarkdownHtmlBlock'
 import { MarkdownImageBlock } from './MarkdownImageBlock'
 import { MarkdownLatexBlock } from './MarkdownLatexBlock'
 import { MarkdownPdfBlock } from './MarkdownPdfBlock'
+import { MarkdownDocBlock } from './MarkdownDocBlock'
 import { preprocessLinks } from './linkify'
 import { resolveMarkdownLinkTarget } from './link-target'
 import remarkCollapsibleSections from './remarkCollapsibleSections'
@@ -23,7 +24,19 @@ import { CollapsibleSection } from './CollapsibleSection'
 import { useCollapsibleMarkdown } from './CollapsibleMarkdownContext'
 import { wrapWithSafeProxy } from './safe-components'
 import { MARKDOWN_MATH_OPTIONS } from './math-options'
-import { preserveFileUrlTransform } from './url-transform'
+import { markdownUrlTransform } from './url-transform'
+
+/**
+ * Names of preview-block code-fence types that recursive `Markdown` callers
+ * may want to suppress. Used by `MarkdownDocBlock` to prevent
+ * `markdown-preview` self-recursion while leaving other preview blocks
+ * (mermaid, datatable, …) intact.
+ */
+export type DisablablePreviewBlock =
+  | 'markdown-preview'
+  | 'html-preview'
+  | 'pdf-preview'
+  | 'image-preview'
 
 /**
  * Render modes for markdown content:
@@ -72,6 +85,17 @@ export interface MarkdownProps {
    * @default true
    */
   hideFirstMermaidExpand?: boolean
+  /**
+   * Disable specific preview-block handlers for nested rendering.
+   *
+   * When a preview-block component renders user-supplied markdown through
+   * `Markdown` again (e.g. `MarkdownDocBlock`), it can pass the names of the
+   * preview-block types it wants to suppress to prevent infinite recursion.
+   * Suppressed blocks fall through to the default `CodeBlock` renderer.
+   *
+   * Default behavior (prop omitted): all preview blocks are registered.
+   */
+  disablePreviewBlocks?: ReadonlySet<DisablablePreviewBlock>
 }
 
 /** Context for collapsible sections */
@@ -107,8 +131,10 @@ function createComponents(
   onFileClick?: (path: string) => void,
   collapsibleContext?: CollapsibleContext | null,
   firstMermaidCodeRef?: React.RefObject<string | null>,
-  hideFirstMermaidExpand: boolean = true
+  hideFirstMermaidExpand: boolean = true,
+  disablePreviewBlocks?: ReadonlySet<DisablablePreviewBlock>,
 ): Partial<Components> {
+  const isPreviewEnabled = (name: DisablablePreviewBlock) => !disablePreviewBlocks?.has(name)
   let blockIndex = 0
   const wrapBlock = (
     blockType: string,
@@ -158,8 +184,25 @@ function createComponents(
       // Regular div
       return <div {...props}>{children}</div>
     },
-    // Links: Make clickable with callbacks
+    // Links: Make clickable with callbacks.
+    //
+    // We sanitize the DOM `href` separately from the click-dispatch target:
+    // - `safeHref` is what React puts on the `<a>` element. We pass `href`
+    //   through `defaultUrlTransform`; any dangerous scheme
+    //   (javascript:/data:/vbscript:/file:) is stripped to empty, in which case
+    //   we omit the attribute entirely. That blocks middle-click and
+    //   cmd-click escape routes (Electron's `setWindowOpenHandler` /
+    //   `will-navigate` would otherwise bypass our React `onClick` and call
+    //   `shell.openExternal` directly).
+    // - The click handler still receives the ORIGINAL `href` and routes it
+    //   through `resolveMarkdownLinkTarget` so file URLs land in `onFileClick`
+    //   and blocked URLs surface a meaningful error via `onUrlClick` →
+    //   `classifyExternalUrl`.
     a: ({ href, children }) => {
+      const trimmedHref = href?.trim() ?? ''
+      const sanitized = trimmedHref ? defaultUrlTransform(trimmedHref) : ''
+      const safeHref = sanitized ? sanitized : undefined
+
       const handleClick = (e: React.MouseEvent) => {
         e.preventDefault()
         e.stopPropagation()
@@ -171,7 +214,7 @@ function createComponents(
           .join('')
           .trim()
 
-        const target = (href?.trim() || fallbackText)
+        const target = trimmedHref || fallbackText
         if (!target) return
 
         const resolvedTarget = resolveMarkdownLinkTarget(target)
@@ -184,7 +227,7 @@ function createComponents(
 
       return (
         <a
-          href={href}
+          href={safeHref}
           onClick={handleClick}
           onMouseDown={(e) => e.stopPropagation()}
           onMouseUp={(e) => e.stopPropagation()}
@@ -251,16 +294,25 @@ function createComponents(
             return wrapBlock('spreadsheet', code, <MarkdownSpreadsheetBlock code={code} className="my-2" />, props.node?.position)
           }
           // HTML preview blocks → sandboxed iframe
-          if (match?.[1] === 'html-preview') {
+          if (match?.[1] === 'html-preview' && isPreviewEnabled('html-preview')) {
             return wrapBlock('html-preview', code, <MarkdownHtmlBlock code={code} className="my-2" />, props.node?.position)
           }
           // PDF preview blocks → inline first page with expand to full viewer
-          if (match?.[1] === 'pdf-preview') {
+          if (match?.[1] === 'pdf-preview' && isPreviewEnabled('pdf-preview')) {
             return wrapBlock('pdf-preview', code, <MarkdownPdfBlock code={code} className="my-2" />, props.node?.position)
           }
           // Image preview blocks → inline image with expand to full viewer
-          if (match?.[1] === 'image-preview') {
+          if (match?.[1] === 'image-preview' && isPreviewEnabled('image-preview')) {
             return wrapBlock('image-preview', code, <MarkdownImageBlock code={code} className="my-2" />, props.node?.position)
+          }
+          // Markdown preview blocks → inline rendered .md file
+          if (match?.[1] === 'markdown-preview' && isPreviewEnabled('markdown-preview')) {
+            return wrapBlock(
+              'markdown-preview',
+              code,
+              <MarkdownDocBlock code={code} className="my-2" onUrlClick={onUrlClick} onFileClick={onFileClick} />,
+              props.node?.position,
+            )
           }
           // LaTeX/math code blocks → KaTeX rendered display math
           if (match?.[1] === 'latex' || match?.[1] === 'math') {
@@ -380,16 +432,25 @@ function createComponents(
           return wrapBlock('spreadsheet', code, <MarkdownSpreadsheetBlock code={code} className="my-2" />, props.node?.position)
         }
         // HTML preview blocks → sandboxed iframe
-        if (match?.[1] === 'html-preview') {
+        if (match?.[1] === 'html-preview' && isPreviewEnabled('html-preview')) {
           return wrapBlock('html-preview', code, <MarkdownHtmlBlock code={code} className="my-2" />, props.node?.position)
         }
         // PDF preview blocks → inline first page with expand to full viewer
-        if (match?.[1] === 'pdf-preview') {
+        if (match?.[1] === 'pdf-preview' && isPreviewEnabled('pdf-preview')) {
           return wrapBlock('pdf-preview', code, <MarkdownPdfBlock code={code} className="my-2" />, props.node?.position)
         }
         // Image preview blocks → inline image with expand to full viewer
-        if (match?.[1] === 'image-preview') {
+        if (match?.[1] === 'image-preview' && isPreviewEnabled('image-preview')) {
           return wrapBlock('image-preview', code, <MarkdownImageBlock code={code} className="my-2" />, props.node?.position)
+        }
+        // Markdown preview blocks → inline rendered .md file
+        if (match?.[1] === 'markdown-preview' && isPreviewEnabled('markdown-preview')) {
+          return wrapBlock(
+            'markdown-preview',
+            code,
+            <MarkdownDocBlock code={code} className="my-2" onUrlClick={onUrlClick} onFileClick={onFileClick} />,
+            props.node?.position,
+          )
         }
         // LaTeX/math code blocks → KaTeX rendered display math
         if (match?.[1] === 'latex' || match?.[1] === 'math') {
@@ -514,6 +575,7 @@ export function Markdown({
   onFileClick,
   collapsible = false,
   hideFirstMermaidExpand = true,
+  disablePreviewBlocks,
 }: MarkdownProps) {
   // Get collapsible context if enabled
   const collapsibleContext = useCollapsibleMarkdown()
@@ -532,8 +594,8 @@ export function Markdown({
   }
 
   const components = React.useMemo(
-    () => wrapWithSafeProxy(createComponents(mode, onUrlClick, onFileClick, collapsible ? collapsibleContext : null, firstMermaidCodeRef, hideFirstMermaidExpand)),
-    [mode, onUrlClick, onFileClick, collapsible, collapsibleContext, hideFirstMermaidExpand]
+    () => wrapWithSafeProxy(createComponents(mode, onUrlClick, onFileClick, collapsible ? collapsibleContext : null, firstMermaidCodeRef, hideFirstMermaidExpand, disablePreviewBlocks)),
+    [mode, onUrlClick, onFileClick, collapsible, collapsibleContext, hideFirstMermaidExpand, disablePreviewBlocks]
   )
 
   // Preprocess to convert raw URLs and file paths to markdown links
@@ -564,7 +626,7 @@ export function Markdown({
         remarkPlugins={remarkPlugins}
         rehypePlugins={[rehypeKatex, rehypeRaw]}
         components={components}
-        urlTransform={preserveFileUrlTransform}
+        urlTransform={markdownUrlTransform}
       >
         {processedContent}
       </ReactMarkdown>
@@ -586,13 +648,15 @@ export const MemoizedMarkdown = React.memo(
       return (
         prevProps.id === nextProps.id &&
         prevProps.children === nextProps.children &&
-        prevProps.mode === nextProps.mode
+        prevProps.mode === nextProps.mode &&
+        prevProps.disablePreviewBlocks === nextProps.disablePreviewBlocks
       )
     }
     // Otherwise compare content and mode
     return (
       prevProps.children === nextProps.children &&
-      prevProps.mode === nextProps.mode
+      prevProps.mode === nextProps.mode &&
+      prevProps.disablePreviewBlocks === nextProps.disablePreviewBlocks
     )
   }
 )
