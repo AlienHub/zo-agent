@@ -649,15 +649,15 @@ export default function SessionResourcePreviewPage({
           }}
         >
           <ScrollArea className="h-full min-w-0">
-            <div className="mx-auto min-h-full w-full max-w-[1080px] px-6 py-4">
+            <div className="mx-auto min-h-full w-full max-w-[1080px] px-4 py-3">
               <div className="mx-auto w-full max-w-[960px]">
                 {error ? (
-                  <div className="rounded-[16px] bg-background px-10 py-8 text-sm text-destructive shadow-strong">
+                  <div className="rounded-[16px] bg-background px-7 py-6 text-sm text-destructive shadow-strong">
                     {error}
                   </div>
                 ) : (
                   <div className="overflow-hidden rounded-[16px] bg-background shadow-strong">
-                    <div className="px-10 py-8">
+                    <div className="px-7 py-6">
                       <AnnotatableMarkdownDocument
                         content={formatTextFileForAnnotation(content, resource.target, type)}
                         sessionId={resourceDetails.sessionId}
