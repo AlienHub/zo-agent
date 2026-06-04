@@ -108,6 +108,10 @@ function formatTextFileForAnnotation(content: string, target: string, type: stri
   return ['```' + fenceInfo, escapeMarkdownFence(content), '```'].join('\n')
 }
 
+function isTextPreviewType(type: string | null): type is 'html' | 'code' | 'markdown' | 'json' | 'text' {
+  return type === 'html' || type === 'code' || type === 'markdown' || type === 'json' || type === 'text'
+}
+
 function formatResourceFollowUpMessage(params: {
   resource: SessionResourceRef
   note: string
@@ -259,6 +263,7 @@ export default function SessionResourcePreviewPage({
   const [loadError, setLoadError] = React.useState<string | null>(null)
   const [isLoading, setIsLoading] = React.useState(false)
   const [copiedText, setCopiedText] = React.useState(false)
+  const lastTextContentRef = React.useRef<string | null>(null)
   const resourceKind = resourceDetails.resource.kind
   const resourceTarget = resourceDetails.resource.target
 
@@ -316,23 +321,9 @@ export default function SessionResourcePreviewPage({
   }, [onOpenUrl])
 
   React.useEffect(() => {
-    if (resource.kind !== 'file') {
-      setTextContent(null)
-      setJsonData(null)
-      setLoadError(null)
-      setIsLoading(false)
-      return
-    }
+    lastTextContentRef.current = null
 
-    if (!canPreview || !classificationType) {
-      setTextContent(null)
-      setJsonData(null)
-      setLoadError(null)
-      setIsLoading(false)
-      return
-    }
-
-    if (!['html', 'code', 'markdown', 'json', 'text'].includes(classificationType)) {
+    if (resource.kind !== 'file' || !canPreview || !isTextPreviewType(classificationType)) {
       setTextContent(null)
       setJsonData(null)
       setLoadError(null)
@@ -341,38 +332,75 @@ export default function SessionResourcePreviewPage({
     }
 
     let cancelled = false
-    setIsLoading(true)
-    setLoadError(null)
 
-    window.electronAPI.readFile(resource.target)
-      .then((content) => {
-        if (cancelled) return
+    const applyContent = (content: string) => {
+      if (cancelled) return
+
+      const isUnchanged = content === lastTextContentRef.current
+
+      if (!isUnchanged) {
+        lastTextContentRef.current = content
         setTextContent(content)
+      }
+
+      if (!isUnchanged && classificationType !== 'json') {
+        setJsonData(null)
+      }
+
+      if (!isUnchanged || classificationType === 'json') {
         if (classificationType === 'json') {
           try {
-            setJsonData(JSON.parse(content))
+            const parsed = JSON.parse(content)
+            if (!isUnchanged) {
+              setJsonData(parsed)
+            }
+            setLoadError(null)
           } catch (error) {
-            setJsonData(null)
+            if (!isUnchanged) {
+              setJsonData(null)
+            }
             setLoadError(error instanceof Error ? error.message : 'Failed to parse JSON')
+            return
           }
-        } else {
+        }
+      }
+
+      setLoadError(null)
+    }
+
+    const loadFile = async (initial: boolean) => {
+      if (initial) {
+        setIsLoading(true)
+        setLoadError(null)
+      }
+
+      try {
+        const content = await window.electronAPI.readFile(resource.target)
+        if (cancelled) return
+        applyContent(content)
+      } catch (error) {
+        if (cancelled) return
+        if (initial) {
+          lastTextContentRef.current = null
+          setTextContent(null)
           setJsonData(null)
         }
-      })
-      .catch((error) => {
-        if (cancelled) return
-        setTextContent(null)
-        setJsonData(null)
         setLoadError(error instanceof Error ? error.message : 'Failed to read file')
-      })
-      .finally(() => {
-        if (!cancelled) {
+      } finally {
+        if (initial && !cancelled) {
           setIsLoading(false)
         }
-      })
+      }
+    }
+
+    void loadFile(true)
+    const intervalId = window.setInterval(() => {
+      void loadFile(false)
+    }, 1500)
 
     return () => {
       cancelled = true
+      window.clearInterval(intervalId)
     }
   }, [resource.kind, resource.target, canPreview, classificationType])
 
