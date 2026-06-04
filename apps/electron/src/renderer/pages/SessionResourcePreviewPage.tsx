@@ -594,7 +594,7 @@ export default function SessionResourcePreviewPage({
 
   if (resource.kind === 'url') {
     return (
-      <div className="h-full flex flex-col min-h-0">
+      <div className="h-full flex flex-col min-h-0 bg-background">
         <PanelHeader
           title={getUrlTitle(resource.target)}
           titleMenu={!isCompactMode ? desktopTitleMenu : undefined}
@@ -620,7 +620,7 @@ export default function SessionResourcePreviewPage({
 
   if (!classification?.canPreview || !classification.type) {
     return (
-      <div className="h-full flex flex-col min-h-0">
+      <div className="h-full flex flex-col min-h-0 bg-background">
         <PanelHeader
           title={fileTitle}
           titleMenu={!isCompactMode ? desktopTitleMenu : undefined}
@@ -767,7 +767,7 @@ export default function SessionResourcePreviewPage({
   })()
 
   return (
-    <div className="group h-full flex flex-col min-h-0">
+    <div className="group h-full flex flex-col min-h-0 bg-background">
       <PanelHeader
         title={fileTitle}
         titleMenu={!isCompactMode ? desktopTitleMenu : undefined}
