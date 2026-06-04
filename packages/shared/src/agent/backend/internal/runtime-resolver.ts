@@ -62,11 +62,16 @@ function resolveUpwards(base: string, relativePath: string, maxLevels = 4): stri
 
 function resolveBundledRuntimePath(hostRuntime: BackendHostRuntimeContext): string | undefined {
   const bunBinary = process.platform === 'win32' ? 'bun.exe' : 'bun';
-  const bunBasePath = process.platform === 'win32'
-    ? (hostRuntime.resourcesPath || hostRuntime.appRootPath)
-    : hostRuntime.appRootPath;
-  const bunPath = join(bunBasePath, 'vendor', 'bun', bunBinary);
-  if (existsSync(bunPath)) return bunPath;
+  const candidates = [
+    join(hostRuntime.appRootPath, 'vendor', 'bun', bunBinary),
+  ];
+  if (process.platform === 'win32' && hostRuntime.resourcesPath) {
+    // Older Windows packages placed Bun as an extraResource under Resources/.
+    // New packages keep it inside Resources/app/ so CRAFT_BUN and resolver agree.
+    candidates.push(join(hostRuntime.resourcesPath, 'vendor', 'bun', bunBinary));
+  }
+  const bunPath = firstExistingPath(candidates);
+  if (bunPath) return bunPath;
 
   // Non-packaged (headless server, dev mode): fall back to system bun via PATH.
   // Packaged apps must ship their own bundled bun — never resolve from PATH

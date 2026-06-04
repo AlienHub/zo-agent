@@ -20,7 +20,11 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const https = require('https');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
+
+const BUN_VERSION = 'bun-v1.3.9';
 
 function copyDir(source, destination) {
   fs.rmSync(destination, { recursive: true, force: true });
@@ -43,6 +47,62 @@ function sdkBinaryPackage(platform, arch) {
 
 function nativeBinaryName(platform) {
   return platform === 'win32' ? 'claude.exe' : 'claude';
+}
+
+function bunBinaryName(platform) {
+  return platform === 'win32' ? 'bun.exe' : 'bun';
+}
+
+function bunDownloadName(platform, arch) {
+  if (platform === 'darwin') return `bun-darwin-${arch === 'arm64' ? 'aarch64' : 'x64'}`;
+  if (platform === 'win32') return 'bun-windows-x64-baseline';
+  if (platform === 'linux') return `bun-linux-${arch === 'arm64' ? 'aarch64' : 'x64-baseline'}`;
+  throw new Error(`Unsupported Electron platform for Bun: ${platform}`);
+}
+
+function downloadFile(url, destination) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, (response) => {
+      if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) {
+        response.resume();
+        downloadFile(response.headers.location, destination).then(resolve, reject);
+        return;
+      }
+
+      if (response.statusCode !== 200) {
+        response.resume();
+        reject(new Error(`Download failed (${response.statusCode}) for ${url}`));
+        return;
+      }
+
+      const file = fs.createWriteStream(destination);
+      response.pipe(file);
+      file.on('finish', () => file.close(resolve));
+      file.on('error', reject);
+    });
+
+    request.on('error', reject);
+  });
+}
+
+function sha256(filePath) {
+  const hash = crypto.createHash('sha256');
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('hex');
+}
+
+function extractZip(zipPath, destination, platform) {
+  fs.mkdirSync(destination, { recursive: true });
+  if (platform === 'win32') {
+    execFileSync('powershell', [
+      '-NoProfile',
+      '-Command',
+      `Expand-Archive -LiteralPath '${zipPath.replace(/'/g, "''")}' -DestinationPath '${destination.replace(/'/g, "''")}' -Force`,
+    ], { stdio: 'inherit' });
+    return;
+  }
+
+  execFileSync('unzip', ['-o', zipPath, '-d', destination], { stdio: 'inherit' });
 }
 
 function ensureSdkBinaryPackage(rootDir, packageName) {
@@ -81,6 +141,147 @@ function getResourcesDir(context) {
   }
 
   return path.join(context.appOutDir, 'resources');
+}
+
+async function downloadBunRuntime(platform, arch) {
+  const bunDownload = bunDownloadName(platform, arch);
+  const binaryName = bunBinaryName(platform);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'craft-bun-'));
+  const zipPath = path.join(tempDir, `${bunDownload}.zip`);
+  const shasumsPath = path.join(tempDir, 'SHASUMS256.txt');
+
+  try {
+    const zipUrl = `https://github.com/oven-sh/bun/releases/download/${BUN_VERSION}/${bunDownload}.zip`;
+    const shasumsUrl = `https://github.com/oven-sh/bun/releases/download/${BUN_VERSION}/SHASUMS256.txt`;
+
+    console.log(`afterPack: downloading Bun ${BUN_VERSION} (${bunDownload})`);
+    await downloadFile(zipUrl, zipPath);
+    await downloadFile(shasumsUrl, shasumsPath);
+
+    const expected = fs.readFileSync(shasumsPath, 'utf8')
+      .split(/\r?\n/)
+      .find((line) => line.includes(`${bunDownload}.zip`))
+      ?.trim()
+      .split(/\s+/)[0];
+    if (!expected) {
+      throw new Error(`Bun checksum not found for ${bunDownload}.zip`);
+    }
+
+    const actual = sha256(zipPath);
+    if (actual.toLowerCase() !== expected.toLowerCase()) {
+      throw new Error(`Bun checksum mismatch for ${bunDownload}.zip`);
+    }
+
+    extractZip(zipPath, tempDir, platform);
+
+    const binaryPath = path.join(tempDir, bunDownload, binaryName);
+    if (!fs.existsSync(binaryPath)) {
+      throw new Error(`Bun binary missing after extraction: ${binaryPath}`);
+    }
+    if (platform !== 'win32') {
+      fs.chmodSync(binaryPath, 0o755);
+    }
+
+    return { binaryPath, tempDir };
+  } catch (error) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function koffiPlatformDir(platform, arch) {
+  return `${platform}_${arch}`;
+}
+
+function copyKoffiForTarget(rootDir, destDir, platform, arch) {
+  const source = path.join(rootDir, 'node_modules', 'koffi');
+  if (!fs.existsSync(source)) {
+    throw new Error(`koffi package not found at ${source}. Run bun install first.`);
+  }
+
+  const dest = path.join(destDir, 'node_modules', 'koffi');
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(dest, { recursive: true });
+
+  for (const entry of ['package.json', 'index.js', 'indirect.js', 'index.d.ts', 'lib']) {
+    const src = path.join(source, entry);
+    if (fs.existsSync(src)) {
+      fs.cpSync(src, path.join(dest, entry), { recursive: true, dereference: true });
+    }
+  }
+
+  const targetDir = koffiPlatformDir(platform, arch);
+  const nativeSrc = path.join(source, 'build', 'koffi', targetDir);
+  const nativeDest = path.join(dest, 'build', 'koffi', targetDir);
+  if (!fs.existsSync(nativeSrc)) {
+    throw new Error(`koffi native binary not found for ${targetDir} at ${nativeSrc}`);
+  }
+
+  fs.mkdirSync(nativeDest, { recursive: true });
+  fs.cpSync(nativeSrc, nativeDest, { recursive: true, dereference: true });
+  console.log(`afterPack: koffi native module bundled (${targetDir})`);
+}
+
+function bundleHelperServers(context) {
+  const platform = context.electronPlatformName;
+  const arch = normalizeArch(context.arch);
+  const electronDir = context.packager.projectDir;
+  const rootDir = path.resolve(electronDir, '..', '..');
+  const appDir = path.join(getResourcesDir(context), 'app');
+
+  const sessionSource = path.join(rootDir, 'packages', 'session-mcp-server', 'dist', 'index.js');
+  const sessionDest = path.join(appDir, 'resources', 'session-mcp-server', 'index.js');
+  if (!fs.existsSync(sessionSource)) {
+    throw new Error(`Session MCP server build output missing: ${sessionSource}`);
+  }
+  fs.mkdirSync(path.dirname(sessionDest), { recursive: true });
+  fs.copyFileSync(sessionSource, sessionDest);
+  console.log('afterPack: session MCP server bundled');
+
+  const piSource = path.join(rootDir, 'packages', 'pi-agent-server', 'dist', 'index.js');
+  const piDestDir = path.join(appDir, 'resources', 'pi-agent-server');
+  const piDest = path.join(piDestDir, 'index.js');
+  if (!fs.existsSync(piSource)) {
+    throw new Error(`Pi agent server build output missing: ${piSource}`);
+  }
+  fs.rmSync(piDestDir, { recursive: true, force: true });
+  fs.mkdirSync(piDestDir, { recursive: true });
+  fs.copyFileSync(piSource, piDest);
+  copyKoffiForTarget(rootDir, piDestDir, platform, arch);
+  console.log('afterPack: Pi agent server bundled');
+}
+
+async function bundleBunRuntime(context) {
+  const platform = context.electronPlatformName;
+  const arch = normalizeArch(context.arch);
+  const electronDir = context.packager.projectDir;
+  const appDir = path.join(getResourcesDir(context), 'app');
+  const binaryName = bunBinaryName(platform);
+  const existing = path.join(electronDir, 'vendor', 'bun', binaryName);
+  const canUseExisting = fs.existsSync(existing) && process.platform === platform && process.arch === arch;
+  const downloaded = canUseExisting
+    ? undefined
+    : await downloadBunRuntime(platform, arch);
+  const source = canUseExisting ? existing : downloaded.binaryPath;
+  const dest = path.join(appDir, 'vendor', 'bun', binaryName);
+
+  try {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(source, dest);
+    if (platform !== 'win32') {
+      fs.chmodSync(dest, 0o755);
+    }
+  } finally {
+    if (downloaded) {
+      fs.rmSync(downloaded.tempDir, { recursive: true, force: true });
+    }
+  }
+
+  const size = fs.statSync(dest).size;
+  if (size < 10_000_000) {
+    throw new Error(`Bundled Bun binary is unexpectedly small (${size} bytes): ${dest}`);
+  }
+  console.log(`afterPack: Bun runtime bundled (${(size / 1024 / 1024).toFixed(1)} MB)`);
 }
 
 function bundleRuntimeDependencies(context) {
@@ -132,6 +333,8 @@ function bundleRuntimeDependencies(context) {
 
 module.exports = async function afterPack(context) {
   bundleRuntimeDependencies(context);
+  bundleHelperServers(context);
+  await bundleBunRuntime(context);
 
   // Only process macOS builds
   if (context.electronPlatformName !== 'darwin') {

@@ -59,6 +59,34 @@ describe('resolveServerPath fallback', () => {
   });
 });
 
+describe('resolveBundledRuntimePath', () => {
+  const tmpBase = join(tmpdir(), `bun-resolver-test-${Date.now()}`);
+
+  afterEach(() => {
+    try { rmSync(tmpBase, { recursive: true, force: true }); } catch {}
+  });
+
+  it('finds bundled Bun inside the packaged app root', () => {
+    const appRoot = join(tmpBase, 'app');
+    const binaryName = process.platform === 'win32' ? 'bun.exe' : 'bun';
+    const bunDir = join(appRoot, 'vendor', 'bun');
+    mkdirSync(bunDir, { recursive: true });
+    const bunPath = join(bunDir, binaryName);
+    writeFileSync(bunPath, '#!/bin/sh\n');
+    chmodSync(bunPath, 0o755);
+
+    const hostRuntime: BackendHostRuntimeContext = {
+      appRootPath: appRoot,
+      resourcesPath: join(tmpBase, 'Resources'),
+      isPackaged: true,
+    };
+
+    const paths = resolveBackendRuntimePaths(hostRuntime);
+    expect(paths.bundledRuntimePath).toBe(bunPath);
+    expect(paths.nodeRuntimePath).toBe(bunPath);
+  });
+});
+
 describe('resolveRipgrepPath', () => {
   const tmpBase = join(tmpdir(), `rg-resolver-test-${Date.now()}`);
 

@@ -54,7 +54,7 @@ files:
   - resources/bin/linux-x64/**/*
   # Include bundled Bun runtime (platform-specific, set by build script)
   - vendor/bun/**/*
-  # Exclude everything from node_modules (will use extraResources for SDK)
+  # Exclude everything from node_modules; afterPack copies required runtime deps.
   - "!node_modules/**/*"
 
 # Since SDK 0.2.113 the SDK ships a thin core (`@anthropic-ai/claude-agent-sdk`)
@@ -147,17 +147,16 @@ win:
     # Exclude binaries for other platforms
     - "!**/resources/bin/darwin-*/**"
     - "!**/resources/bin/linux-*/**"
-    # WORKAROUND: Exclude bun and uv from regular files on Windows.
+    # WORKAROUND: Exclude uv from regular files on Windows.
     # electron-builder's npm node module collector causes EBUSY errors when copying
     # .exe files because it scans/locks files while simultaneously trying to copy them.
-    # Moving them to extraResources avoids this by copying before the collector runs.
+    # Moving uv to extraResources avoids this by copying before the collector runs.
+    # Bun is copied by afterPack directly into the final app runtime.
     # See: https://github.com/electron-userland/electron-builder/issues/8250
     - "!vendor/bun/**/*"
     - "!**/resources/bin/win32-x64/**"
   # Copy executables as extraResources to avoid EBUSY file locking (see comment above)
   extraResources:
-    - from: vendor/bun/bun.exe
-      to: vendor/bun/bun.exe
     - from: resources/bin/win32-x64
       to: app/resources/bin/win32-x64
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).
