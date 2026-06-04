@@ -1,4 +1,4 @@
-# Craft Agents OSS Windows Installer
+# Zo Windows Installer
 # Download from https://github.com/AlienHub/craft-agents-oss/releases/latest
 
 & {
@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 
 $VERSIONS_URL = "https://github.com/AlienHub/craft-agents-oss/releases/latest/download"
 $DOWNLOAD_DIR = "$env:TEMP\craft-agent-install"
-$APP_NAME = "Craft Agents OSS"
+$APP_NAME = "Zo"
 
 # Colors for output
 function Write-Info { Write-Host "> $args" -ForegroundColor Blue }
@@ -58,7 +58,7 @@ Write-Info "Latest version: $version"
 # Parse YAML to extract sha512, url (filename), and size for our architecture
 # YAML format:
 #   files:
-#     - url: Craft-Agents-x64.exe
+#     - url: Zo-x64.exe
 #       sha512: <base64>
 #       size: 123456789
 #       arch: x64
@@ -108,7 +108,7 @@ if (-not $checksum -or $checksum.Length -lt 80) {
 
 # Use default filename if not found
 if (-not $filename) {
-    $filename = "Craft-Agents-OSS-$version-$arch.exe"
+    $filename = "Zo-$version-$arch.exe"
 }
 
 $installerUrl = "$VERSIONS_URL/$filename"
@@ -192,9 +192,9 @@ if ($actualHash -ne $checksum) {
 Write-Success "Checksum verified!"
 
 # Close the app if it's running
-$process = Get-Process -Name "Craft Agents OSS" -ErrorAction SilentlyContinue
+$process = Get-Process -Name "Zo" -ErrorAction SilentlyContinue
 if ($process) {
-    Write-Info "Closing Craft Agents OSS..."
+    Write-Info "Closing Zo..."
     $process | Stop-Process -Force
     Start-Sleep -Seconds 2
 }
@@ -229,9 +229,9 @@ Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
 # Add command line shortcut
 Write-Info "Adding 'craft-agents' command to PATH..."
 
-$binDir = "$env:LOCALAPPDATA\Craft Agents OSS\bin"
+$binDir = "$env:LOCALAPPDATA\Zo\bin"
 $cmdFile = "$binDir\craft-agents.cmd"
-$exePath = "$env:LOCALAPPDATA\Programs\Craft Agents OSS\Craft Agents OSS.exe"
+$exePath = "$env:LOCALAPPDATA\Programs\Zo\Zo.exe"
 
 # Create bin directory
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
@@ -255,7 +255,7 @@ Write-Host "--------------------------------------------------------------------
 Write-Host ""
 Write-Success "Installation complete!"
 Write-Host ""
-Write-Host "  Craft Agents OSS has been installed."
+Write-Host "  Zo has been installed."
 Write-Host ""
 Write-Host "  Launch from:"
 Write-Host "    - Start Menu or desktop shortcut"

@@ -80,7 +80,7 @@ done
 # Configuration
 BUN_VERSION="bun-v1.3.9"  # Pinned version for reproducible builds
 
-echo "=== Building Craft Agents DMG (${ARCH}) using electron-builder ==="
+echo "=== Building Zo DMG (${ARCH}) using electron-builder ==="
 if [ "$UPLOAD" = true ]; then
     echo "Will upload to S3 after build"
 fi
@@ -262,8 +262,9 @@ fi
 npx electron-builder $BUILDER_ARGS
 
 # 9. Verify the DMG was built
-# electron-builder.yml uses artifactName to output: Craft-Agents-${arch}.dmg
-DMG_NAME="Craft-Agents-${ARCH}.dmg"
+# electron-builder.yml uses artifactName to output: Zo-${version}-${arch}.dmg
+ELECTRON_VERSION=$(cat "$ELECTRON_DIR/package.json" | grep '"version"' | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+DMG_NAME="Zo-${ELECTRON_VERSION}-${ARCH}.dmg"
 DMG_PATH="$ELECTRON_DIR/release/$DMG_NAME"
 
 if [ ! -f "$DMG_PATH" ]; then
@@ -279,8 +280,6 @@ echo "DMG: $ELECTRON_DIR/release/${DMG_NAME}"
 echo "Size: $(du -h "$ELECTRON_DIR/release/${DMG_NAME}" | cut -f1)"
 
 # 9. Create manifest.json for upload script
-# Read version from package.json
-ELECTRON_VERSION=$(cat "$ELECTRON_DIR/package.json" | grep '"version"' | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 echo "Creating manifest.json (version: $ELECTRON_VERSION)..."
 mkdir -p "$ROOT_DIR/.build/upload"
 echo "{\"version\": \"$ELECTRON_VERSION\"}" > "$ROOT_DIR/.build/upload/manifest.json"

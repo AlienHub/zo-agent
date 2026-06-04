@@ -35,6 +35,8 @@ export function verifyPackagedSDK(unpackedPath: string, _arch: Arch): void {
  */
 export async function packageLinux(config: BuildConfig): Promise<string> {
   const { arch, electronDir } = config;
+  const packageJson = await Bun.file(join(electronDir, 'package.json')).json();
+  const version = packageJson.version;
 
   console.log('Packaging app with electron-builder...');
 
@@ -52,7 +54,7 @@ export async function packageLinux(config: BuildConfig): Promise<string> {
 
   // electron-builder uses different arch names: x86_64 for x64, aarch64 for arm64
   const linuxArch = arch === 'x64' ? 'x86_64' : 'aarch64';
-  const builtName = `Craft-Agents-${linuxArch}.AppImage`;
+  const builtName = `Zo-${version}-${linuxArch}.AppImage`;
   const builtPath = join(electronDir, 'release', builtName);
 
   if (!existsSync(builtPath)) {
@@ -62,7 +64,7 @@ export async function packageLinux(config: BuildConfig): Promise<string> {
   }
 
   // Rename to our standard naming convention
-  const finalName = `Craft-Agents-${arch}.AppImage`;
+  const finalName = `Zo-${version}-${arch}.AppImage`;
   const finalPath = join(electronDir, 'release', finalName);
 
   if (builtPath !== finalPath) {
