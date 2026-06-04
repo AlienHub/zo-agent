@@ -1,12 +1,12 @@
-# Craft Agents Windows Installer
-# Usage: irm https://agents.craft.do/install-app.ps1 | iex
+# Craft Agents OSS Windows Installer
+# Download from https://github.com/AlienHub/craft-agents-oss/releases/latest
 
 & {
 $ErrorActionPreference = "Stop"
 
-$VERSIONS_URL = "https://agents.craft.do/electron"
+$VERSIONS_URL = "https://github.com/AlienHub/craft-agents-oss/releases/latest/download"
 $DOWNLOAD_DIR = "$env:TEMP\craft-agent-install"
-$APP_NAME = "Craft Agents"
+$APP_NAME = "Craft Agents OSS"
 
 # Colors for output
 function Write-Info { Write-Host "> $args" -ForegroundColor Blue }
@@ -29,11 +29,11 @@ Write-Info "Detected platform: $platform (arch: $arch)"
 # Create download directory
 New-Item -ItemType Directory -Force -Path $DOWNLOAD_DIR | Out-Null
 
-# Fetch YAML manifest directly from /electron/latest/ (no version endpoint needed)
+# Fetch YAML manifest directly from the latest GitHub Release.
 Write-Info "Fetching release info..."
 $yamlPath = Join-Path $DOWNLOAD_DIR "latest.yml"
 try {
-    Invoke-WebRequest -Uri "$VERSIONS_URL/latest/latest.yml" -OutFile $yamlPath -UseBasicParsing
+    Invoke-WebRequest -Uri "$VERSIONS_URL/latest.yml" -OutFile $yamlPath -UseBasicParsing
 } catch {
     Write-Err "Failed to fetch release info: $_"
 }
@@ -108,10 +108,10 @@ if (-not $checksum -or $checksum.Length -lt 80) {
 
 # Use default filename if not found
 if (-not $filename) {
-    $filename = "Craft-Agents-$arch.exe"
+    $filename = "Craft-Agents-OSS-$version-$arch.exe"
 }
 
-$installerUrl = "$VERSIONS_URL/latest/$filename"
+$installerUrl = "$VERSIONS_URL/$filename"
 
 Write-Info "Expected sha512: $($checksum.Substring(0, 20))..."
 
@@ -192,9 +192,9 @@ if ($actualHash -ne $checksum) {
 Write-Success "Checksum verified!"
 
 # Close the app if it's running
-$process = Get-Process -Name "Craft Agents" -ErrorAction SilentlyContinue
+$process = Get-Process -Name "Craft Agents OSS" -ErrorAction SilentlyContinue
 if ($process) {
-    Write-Info "Closing Craft Agents..."
+    Write-Info "Closing Craft Agents OSS..."
     $process | Stop-Process -Force
     Start-Sleep -Seconds 2
 }
@@ -229,9 +229,9 @@ Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
 # Add command line shortcut
 Write-Info "Adding 'craft-agents' command to PATH..."
 
-$binDir = "$env:LOCALAPPDATA\Craft Agents\bin"
+$binDir = "$env:LOCALAPPDATA\Craft Agents OSS\bin"
 $cmdFile = "$binDir\craft-agents.cmd"
-$exePath = "$env:LOCALAPPDATA\Programs\Craft Agents\Craft Agents.exe"
+$exePath = "$env:LOCALAPPDATA\Programs\Craft Agents OSS\Craft Agents OSS.exe"
 
 # Create bin directory
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
@@ -255,7 +255,7 @@ Write-Host "--------------------------------------------------------------------
 Write-Host ""
 Write-Success "Installation complete!"
 Write-Host ""
-Write-Host "  Craft Agents has been installed."
+Write-Host "  Craft Agents OSS has been installed."
 Write-Host ""
 Write-Host "  Launch from:"
 Write-Host "    - Start Menu or desktop shortcut"

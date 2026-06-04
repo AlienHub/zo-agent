@@ -1,6 +1,6 @@
 {
   "name": "craft-agent",
-  "version": "0.10.101",
+  "version": "0.1.0",
   "license": "Apache-2.0",
   "description": "Claude Code-like agent for Craft documents",
   "type": "module",
@@ -76,6 +76,9 @@
     "electron:dist:mac": "bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --mac",
     "electron:dist:win": "bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --win",
     "electron:dist:linux": "bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --linux",
+    "electron:publish:mac": "bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --mac --publish always",
+    "electron:publish:win": "bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --win --publish always",
+    "electron:publish:linux": "bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --linux --publish always",
     "electron:dist:dev:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false CRAFT_DEV_RUNTIME=1 bun run electron:build && cd apps/electron && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.yml --mac",
     "electron:dist:dev:win": "CRAFT_DEV_RUNTIME=1 bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --win",
     "electron:dist:dev:linux": "CRAFT_DEV_RUNTIME=1 bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --linux",
@@ -93,8 +96,8 @@
     "server:dev:webui": "bun run server:build:subprocess && bun run webui:build && CRAFT_WEBUI_DIR=apps/webui/dist CRAFT_WEBUI_PORT=3100 bun run server:dev",
     "docs:dev": "cd apps/online-docs && npm install && npx mintlify dev",
     "build": "bun run scripts/build.ts",
-    "release": "bun run scripts/release.ts",
-    "check-version": "bun run scripts/check-version.ts",
+    "release": "bun run check-version",
+    "check-version": "bun run scripts/verify-release-version.ts",
     "oss:sync": "bun run scripts/oss-sync.ts",
     "prepare": "husky"
   },

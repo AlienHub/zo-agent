@@ -1,0 +1,11 @@
+{
+  "upstream": {
+    "repository": "lukilabs/craft-agents-oss",
+    "version": "0.10.101",
+    "commit": "26948f8b754885d79de7c8e6acbe59bbe172d213"
+  },
+  "fork": {
+    "repository": "AlienHub/craft-agents-oss",
+    "initialVersion": "0.1.0"
+  }
+}
