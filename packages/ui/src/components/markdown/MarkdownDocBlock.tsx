@@ -28,7 +28,7 @@
  */
 
 import * as React from 'react'
-import { FileText, Maximize2 } from 'lucide-react'
+import { ExternalLink, FileText, Maximize2 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { CodeBlock } from './CodeBlock'
 import { ItemNavigator } from '../overlay/ItemNavigator'
@@ -124,6 +124,7 @@ export function MarkdownDocBlock({ code, className, onUrlClick, onFileClick }: M
 
   const hasMultiple = items.length > 1
   const headerTitle = spec.title || t('preview.markdownPreview')
+  const canOpenActiveItem = Boolean(activeItem?.src && onFileClick)
 
   return (
     <MarkdownDocBlockErrorBoundary fallback={fallback}>
@@ -133,6 +134,23 @@ export function MarkdownDocBlock({ code, className, onUrlClick, onFileClick }: M
           <span className="text-[12px] text-muted-foreground font-medium flex-1">{headerTitle}</span>
           <div className="flex items-center gap-1">
             <ItemNavigator items={items} activeIndex={activeIndex} onSelect={setActiveIndex} />
+            {canOpenActiveItem && (
+              <button
+                onClick={() => {
+                  if (activeItem?.src) onFileClick?.(activeItem.src)
+                }}
+                className={cn(
+                  "p-1 rounded-[6px] transition-all select-none",
+                  "bg-background shadow-minimal",
+                  "text-muted-foreground/50 hover:text-foreground",
+                  "focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                )}
+                title={t('sessionMenu.openInNewPanel')}
+                aria-label={t('sessionMenu.openInNewPanel')}
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </button>
+            )}
             <button
               onClick={() => setIsFullscreen((v) => !v)}
               className={cn(
