@@ -20,4 +20,4 @@ This fork uses its own app version for packaged desktop releases. Upstream Craft
    git push origin v0.1.0
    ```
 
-The `Release Electron` workflow builds macOS, Windows, and Linux packages, then publishes them to the GitHub Release for the tag.
+The `Release Electron` workflow builds macOS, Windows, and Linux packages, then publishes them to the GitHub Release for the tag. The Electron builder config uses `releaseType: release` so published assets are available to auto-update and `releases/latest/download`.

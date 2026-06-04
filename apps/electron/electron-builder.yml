@@ -78,6 +78,7 @@ publish:
   provider: github
   owner: AlienHub
   repo: craft-agents-oss
+  releaseType: release
 
 # Disable ASAR to avoid decompression overhead and click delays
 asar: false
