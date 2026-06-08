@@ -97,6 +97,10 @@ import {
 } from './model-picker-helpers'
 import { useModelVisionToggle } from './useModelVisionToggle'
 
+function getWorkspaceDataPath(rootPath: string): string {
+  return `${rootPath.replace(/\/$/, '')}/.zo`
+}
+
 function formatFollowUpChipText(text: string, fallback: string, maxLength = 50): string {
   const normalized = text.replace(/\s+/g, ' ').trim()
   if (!normalized) return fallback
@@ -430,6 +434,9 @@ export function FreeFormInput({
     if (!appShellCtx || !workspaceId) return null
     return appShellCtx.workspaces.find(w => w.id === workspaceId)?.rootPath ?? null
   }, [appShellCtx, workspaceId])
+  const workspaceDataPath = React.useMemo(() => {
+    return workspaceRootPath ? getWorkspaceDataPath(workspaceRootPath) : null
+  }, [workspaceRootPath])
 
   // Workspace slug for SDK skill qualification (server-computed)
   // SDK expects "workspaceSlug:skillSlug" format, NOT UUID
@@ -1033,9 +1040,9 @@ export function FreeFormInput({
 
   // Memoize the add-label config so the EditPopover doesn't recreate on every render
   const addLabelEditConfig = React.useMemo(() => {
-    if (!workspaceRootPath) return null
-    return getEditConfig('add-label', workspaceRootPath)
-  }, [workspaceRootPath])
+    if (!workspaceDataPath) return null
+    return getEditConfig('add-label', workspaceDataPath)
+  }, [workspaceDataPath])
 
   // Report height changes to parent (for external animation sync)
   React.useLayoutEffect(() => {
@@ -1619,9 +1626,9 @@ export function FreeFormInput({
             onOpenChange={setAddLabelPopoverOpen}
             {...addLabelEditConfig}
             defaultValue={addLabelPrefill}
-            secondaryAction={workspaceRootPath ? {
+            secondaryAction={workspaceDataPath ? {
               label: 'Edit File',
-              filePath: `${workspaceRootPath}/labels/config.json`,
+              filePath: `${workspaceDataPath}/labels/config.json`,
             } : undefined}
             side="top"
             align="start"

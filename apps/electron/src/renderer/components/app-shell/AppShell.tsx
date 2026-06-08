@@ -142,6 +142,10 @@ import { hasOpenOverlay } from "@/lib/overlay-detection"
 import { clearSourceIconCaches } from "@/lib/icon-cache"
 import { dispatchFocusInputEvent } from "./input/focus-input-events"
 
+function getWorkspaceDataPath(rootPath: string): string {
+  return `${rootPath.replace(/\/$/, '')}/.zo`
+}
+
 /**
  * AppShellProps - Minimal props interface for AppShell component
  *
@@ -844,6 +848,7 @@ function AppShellContent({
   }, [skills, setSkillsAtom])
   // Automations — state, handlers, loading, subscriptions
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId)
+  const activeWorkspaceDataPath = activeWorkspace ? getWorkspaceDataPath(activeWorkspace.rootPath) : null
 
   // Send to Workspace dialog state (driven by sendToWorkspaceAtom set from SessionMenu/BatchSessionMenu)
   const sendToWorkspaceIds = useAtomValue(sendToWorkspaceAtom)
@@ -3414,9 +3419,9 @@ function AppShellContent({
             align="start"
             secondaryAction={{
               label: 'Edit File',
-              filePath: `${activeWorkspace.rootPath}/statuses/config.json`,
+              filePath: `${activeWorkspaceDataPath}/statuses/config.json`,
             }}
-            {...getEditConfig('edit-statuses', activeWorkspace.rootPath)}
+            {...getEditConfig('edit-statuses', activeWorkspaceDataPath ?? activeWorkspace.rootPath)}
           />
           {/* Configure Labels EditPopover - anchored near sidebar */}
           <EditPopover
@@ -3434,11 +3439,11 @@ function AppShellContent({
             align="start"
             secondaryAction={{
               label: 'Edit File',
-              filePath: `${activeWorkspace.rootPath}/labels/config.json`,
+              filePath: `${activeWorkspaceDataPath}/labels/config.json`,
             }}
             {...(() => {
               // Spread base config, override context to include which label was right-clicked
-              const config = getEditConfig('edit-labels', activeWorkspace.rootPath)
+              const config = getEditConfig('edit-labels', activeWorkspaceDataPath ?? activeWorkspace.rootPath)
               const targetLabel = editLabelTargetId.current
                 ? findLabelById(labelConfigs, editLabelTargetId.current)
                 : undefined
@@ -3543,11 +3548,11 @@ function AppShellContent({
             align="start"
             secondaryAction={{
               label: 'Edit File',
-              filePath: `${activeWorkspace.rootPath}/labels/config.json`,
+              filePath: `${activeWorkspaceDataPath}/labels/config.json`,
             }}
             {...(() => {
               // Spread base config, override context to include which label was right-clicked
-              const config = getEditConfig('add-label', activeWorkspace.rootPath)
+              const config = getEditConfig('add-label', activeWorkspaceDataPath ?? activeWorkspace.rootPath)
               const targetLabel = editLabelTargetId.current
                 ? findLabelById(labelConfigs, editLabelTargetId.current)
                 : undefined

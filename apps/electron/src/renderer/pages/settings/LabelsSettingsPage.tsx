@@ -37,6 +37,10 @@ export const meta: DetailsPageMeta = {
   slug: 'labels',
 }
 
+function getWorkspaceDataPath(rootPath: string): string {
+  return `${rootPath.replace(/\/$/, '')}/.zo`
+}
+
 export default function LabelsSettingsPage() {
   const { t } = useTranslation()
   const { activeWorkspaceId } = useAppShellContext()
@@ -45,13 +49,14 @@ export default function LabelsSettingsPage() {
 
   // Resolve edit configs using the workspace root path
   const rootPath = activeWorkspace?.rootPath || ''
-  const labelsEditConfig = getEditConfig('edit-labels', rootPath)
-  const autoRulesEditConfig = getEditConfig('edit-auto-rules', rootPath)
+  const workspaceDataPath = rootPath ? getWorkspaceDataPath(rootPath) : ''
+  const labelsEditConfig = getEditConfig('edit-labels', workspaceDataPath)
+  const autoRulesEditConfig = getEditConfig('edit-auto-rules', workspaceDataPath)
 
   // Secondary action: open the labels config file directly in system editor
   const editFileAction = rootPath ? {
     label: t("common.editFile"),
-    filePath: `${rootPath}/labels/config.json`,
+    filePath: `${workspaceDataPath}/labels/config.json`,
   } : undefined
 
   return (

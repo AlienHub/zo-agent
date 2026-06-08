@@ -41,7 +41,13 @@ import {
   downloadSourceIcon,
 } from '../sources/storage.ts';
 import { permissionsConfigCache, getAppPermissionsDir } from '../agent/permissions-config.ts';
-import { getWorkspacePath, getWorkspaceSourcesPath, getWorkspaceSkillsPath } from '../workspaces/storage.ts';
+import {
+  getWorkspacePath,
+  getWorkspaceSessionsPath,
+  getWorkspaceSourcesPath,
+  getWorkspaceSkillsPath,
+} from '../workspaces/storage.ts';
+import { WORKSPACE_DATA_DIR } from '../workspaces/layout.ts';
 import type { LoadedSkill } from '../skills/types.ts';
 import { loadSkill, loadAllSkills, invalidateSkillsCache, skillNeedsIconDownload, downloadSkillIcon } from '../skills/storage.ts';
 import {
@@ -414,17 +420,18 @@ export class ConfigWatcher {
    * Handle a file change within the workspace directory
    */
   private handleWorkspaceFileChange(relativePath: string, eventType: string): void {
-    const parts = relativePath.split('/');
+    const normalizedRelativePath = this.normalizeWorkspaceEventPath(relativePath);
+    const parts = normalizedRelativePath.split('/');
 
     // Workspace-level permissions.json
-    if (relativePath === 'permissions.json') {
+    if (normalizedRelativePath === 'permissions.json') {
       this.debounce('workspace-permissions', () => this.handleWorkspacePermissionsChange());
       return;
     }
 
     // Workspace-level automations config file
-    if (relativePath === AUTOMATIONS_CONFIG_FILE) {
-      debug('[ConfigWatcher] automations config change detected:', relativePath);
+    if (normalizedRelativePath === AUTOMATIONS_CONFIG_FILE) {
+      debug('[ConfigWatcher] automations config change detected:', normalizedRelativePath);
       this.debounce('automations-config', () => this.handleAutomationsConfigChange());
       return;
     }
@@ -519,6 +526,18 @@ export class ConfigWatcher {
       }
 
     }
+  }
+
+  /**
+   * fs.watch reports paths relative to the watched workspace root. New
+   * workspaces store app-owned files under .zo/, while legacy workspaces keep
+   * them at the root. Normalize both layouts to the legacy-relative shape so
+   * the rest of the watcher can stay layout-agnostic.
+   */
+  private normalizeWorkspaceEventPath(relativePath: string): string {
+    const normalized = relativePath.replace(/\\/g, '/');
+    const prefix = `${WORKSPACE_DATA_DIR}/`;
+    return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
   }
 
   /**
@@ -956,7 +975,7 @@ export class ConfigWatcher {
    * made by other instances, scripts, or manual edits.
    */
   private handleSessionMetadataChange(sessionId: string): void {
-    const sessionFile = join(this.workspaceDir, 'sessions', sessionId, 'session.jsonl');
+    const sessionFile = join(getWorkspaceSessionsPath(this.workspaceDir), sessionId, 'session.jsonl');
 
     if (!existsSync(sessionFile)) {
       return;
