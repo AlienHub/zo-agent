@@ -1909,7 +1909,7 @@ export class SessionManager implements ISessionManager {
         const sessionMetadata = listStoredSessions(workspaceRootPath)
         // Load workspace config once per workspace for default working directory
         const wsConfig = loadWorkspaceConfig(workspaceRootPath)
-        const wsDefaultWorkingDir = wsConfig?.defaults?.workingDirectory
+        const wsDefaultWorkingDir = wsConfig?.defaults?.workingDirectory || workspace.rootPath
 
         for (const meta of sessionMetadata) {
           // Create managed session from metadata only (messages lazy-loaded on demand)
@@ -2543,7 +2543,7 @@ export class SessionManager implements ISessionManager {
       ?? wsConfig?.defaults?.permissionMode
       ?? globalDefaults.workspaceDefaults.permissionMode
 
-    const userDefaultWorkingDir = wsConfig?.defaults?.workingDirectory || undefined
+    const userDefaultWorkingDir = wsConfig?.defaults?.workingDirectory || workspaceRootPath
     // Resolve thinking level with caller-first precedence, matching permissionMode above:
     //   caller override → workspace default → global default.
     // normalizeThinkingLevel() tolerates undefined/unknown inputs.

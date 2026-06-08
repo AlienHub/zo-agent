@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadWorkspaceConfig } from '../storage.ts';
+import { createWorkspaceAtPath, loadWorkspaceConfig } from '../storage.ts';
 
 const tempDirs: string[] = [];
 
@@ -17,6 +17,17 @@ afterEach(() => {
 });
 
 describe('workspace storage: config normalization', () => {
+  it('sets the workspace folder as the default working directory for new workspaces', () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'ws-default-workdir-'));
+    tempDirs.push(workspaceRoot);
+
+    const config = createWorkspaceAtPath(workspaceRoot, 'Default Workdir');
+
+    expect(config.defaults?.workingDirectory).toBe(workspaceRoot);
+    const loaded = loadWorkspaceConfig(workspaceRoot);
+    expect(loaded?.defaults?.workingDirectory).toBe(workspaceRoot);
+  });
+
   it('maps canonical defaults.permissionMode and cyclablePermissionModes on read', () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), 'ws-mode-map-'));
     tempDirs.push(workspaceRoot);

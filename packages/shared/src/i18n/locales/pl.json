@@ -1048,7 +1048,7 @@
   "settings.workspace.defaultSources": "Domyślne źródła",
   "settings.workspace.defaultSourcesDesc": "Źródła automatycznie włączane dla nowych sesji",
   "settings.workspace.defaultWorkingDir": "Domyślny katalog roboczy",
-  "settings.workspace.defaultWorkingDirDesc": "Nie ustawiono (używa folderu sesji)",
+  "settings.workspace.defaultWorkingDirDesc": "Domyślnie używa folderu Workspace",
   "settings.workspace.description": "Nazwa, ikona, katalog roboczy",
   "settings.workspace.enterWorkspaceName": "Wprowadź nazwę Workspace...",
   "settings.workspace.failedToSave": "Nie udało się zapisać {{setting}}",

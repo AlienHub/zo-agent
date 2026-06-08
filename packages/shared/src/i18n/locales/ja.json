@@ -1048,7 +1048,7 @@
   "settings.workspace.defaultSources": "デフォルトソース",
   "settings.workspace.defaultSourcesDesc": "新規セッションで自動的に有効になるソース",
   "settings.workspace.defaultWorkingDir": "デフォルト作業ディレクトリ",
-  "settings.workspace.defaultWorkingDirDesc": "未設定（セッションフォルダーを使用）",
+  "settings.workspace.defaultWorkingDirDesc": "デフォルトでワークスペースフォルダーを使用",
   "settings.workspace.description": "名前、アイコン、作業ディレクトリ",
   "settings.workspace.enterWorkspaceName": "Workspace名を入力...",
   "settings.workspace.failedToSave": "{{setting}}の保存に失敗しました",

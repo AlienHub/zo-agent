@@ -1048,7 +1048,7 @@
   "settings.workspace.defaultSources": "Alapértelmezett források",
   "settings.workspace.defaultSourcesDesc": "Új munkamenetekhez automatikusan engedélyezett források",
   "settings.workspace.defaultWorkingDir": "Alapértelmezett munkamappa",
-  "settings.workspace.defaultWorkingDirDesc": "Nincs beállítva (a munkamenet mappáját használja)",
+  "settings.workspace.defaultWorkingDirDesc": "Alapértelmezés szerint a munkaterület mappája",
   "settings.workspace.description": "Név, ikon, munkamappa",
   "settings.workspace.enterWorkspaceName": "Add meg a munkaterület nevét...",
   "settings.workspace.failedToSave": "{{setting}} mentése sikertelen",

@@ -1048,7 +1048,7 @@
   "settings.workspace.defaultSources": "Fuentes predeterminadas",
   "settings.workspace.defaultSourcesDesc": "Fuentes activadas automáticamente en las nuevas sesiones",
   "settings.workspace.defaultWorkingDir": "Directorio de trabajo predeterminado",
-  "settings.workspace.defaultWorkingDirDesc": "No definido (usa la carpeta de sesión)",
+  "settings.workspace.defaultWorkingDirDesc": "Usa la carpeta del Workspace de forma predeterminada",
   "settings.workspace.description": "Nombre, ícono, directorio de trabajo",
   "settings.workspace.enterWorkspaceName": "Introduce el nombre del Workspace...",
   "settings.workspace.failedToSave": "No se pudo guardar {{setting}}",

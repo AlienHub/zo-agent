@@ -110,7 +110,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       permissionMode: config?.defaults?.permissionMode,
       cyclablePermissionModes: config?.defaults?.cyclablePermissionModes,
       thinkingLevel: normalizeThinkingLevel(config?.defaults?.thinkingLevel),
-      workingDirectory: config?.defaults?.workingDirectory,
+      workingDirectory: config?.defaults?.workingDirectory || workspace.rootPath,
       localMcpEnabled: config?.localMcpServers?.enabled ?? true,
       defaultLlmConnection: config?.defaults?.defaultLlmConnection,
       enabledSourceSlugs: config?.defaults?.enabledSourceSlugs ?? [],
@@ -120,8 +120,8 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   // Update a workspace setting
   server.handle(RPC_CHANNELS.workspace.SETTINGS_UPDATE, async (_ctx, workspaceId: string, key: string, value: unknown) => {
     const workspace = getWorkspaceOrThrow(workspaceId)
-    const normalizedValue = key === 'workingDirectory' && typeof value === 'string'
-      ? value.trim()
+    const normalizedValue = key === 'workingDirectory'
+      ? (typeof value === 'string' && value.trim() ? value.trim() : workspace.rootPath)
       : value
 
     // Validate key is a known workspace setting

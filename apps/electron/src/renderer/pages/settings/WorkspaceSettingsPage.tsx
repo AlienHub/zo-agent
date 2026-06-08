@@ -55,6 +55,7 @@ export default function WorkspaceSettingsPage() {
   const appShellContext = useAppShellContext()
   const activeWorkspaceId = appShellContext.activeWorkspaceId
   const onRefreshWorkspaces = appShellContext.onRefreshWorkspaces
+  const activeWorkspace = appShellContext.workspaces.find(w => w.id === activeWorkspaceId)
 
   // Workspace settings state
   const [wsName, setWsName] = useState('')
@@ -265,14 +266,16 @@ export default function WorkspaceSettingsPage() {
     confirmServerBrowser: confirmWdBrowser,
   } = useDirectoryPicker(handleWorkingDirectorySelected)
 
-  const handleClearWorkingDirectory = useCallback(async () => {
-    if (!window.electronAPI) return
+  const handleResetWorkingDirectory = useCallback(async () => {
+    if (!activeWorkspace?.rootPath) return
 
-    const saved = await updateWorkspaceSetting('workingDirectory', undefined)
+    const saved = await updateWorkspaceSetting('workingDirectory', activeWorkspace.rootPath)
     if (saved) {
-      setWorkingDirectory('')
+      setWorkingDirectory(activeWorkspace.rootPath)
     }
-  }, [updateWorkspaceSetting])
+  }, [activeWorkspace?.rootPath, updateWorkspaceSetting])
+
+  const isCustomWorkingDirectory = !!activeWorkspace?.rootPath && workingDirectory !== activeWorkspace.rootPath
 
   const handleLocalMcpEnabledChange = useCallback(
     async (enabled: boolean) => {
@@ -517,16 +520,16 @@ export default function WorkspaceSettingsPage() {
               <SettingsCard>
                 <SettingsRow
                   label={t("settings.workspace.defaultWorkingDir")}
-                  description={workingDirectory || t("settings.workspace.defaultWorkingDirDesc")}
+                  description={workingDirectory || activeWorkspace?.rootPath || t("settings.workspace.defaultWorkingDirDesc")}
                   action={
                     <div className="flex items-center gap-2">
-                      {workingDirectory && (
+                      {isCustomWorkingDirectory && (
                         <button
                           type="button"
-                          onClick={handleClearWorkingDirectory}
+                          onClick={handleResetWorkingDirectory}
                           className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors text-foreground/60 hover:text-foreground"
                         >
-                          {t("common.clear")}
+                          {t("common.reset")}
                         </button>
                       )}
                       <button
@@ -557,7 +560,7 @@ export default function WorkspaceSettingsPage() {
         mode={wdBrowserMode}
         onSelect={confirmWdBrowser}
         onCancel={cancelWdBrowser}
-        initialPath={workingDirectory || undefined}
+        initialPath={workingDirectory || activeWorkspace?.rootPath || undefined}
       />
     </div>
   )

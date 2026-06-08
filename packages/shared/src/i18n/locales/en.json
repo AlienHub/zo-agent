@@ -1048,7 +1048,7 @@
   "settings.workspace.defaultSources": "Default Sources",
   "settings.workspace.defaultSourcesDesc": "Sources auto-enabled for new sessions",
   "settings.workspace.defaultWorkingDir": "Default Working Directory",
-  "settings.workspace.defaultWorkingDirDesc": "Not set (uses session folder)",
+  "settings.workspace.defaultWorkingDirDesc": "Defaults to the workspace folder",
   "settings.workspace.description": "Name, icon, working directory",
   "settings.workspace.enterWorkspaceName": "Enter workspace name...",
   "settings.workspace.failedToSave": "Failed to save {{setting}}",

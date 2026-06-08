@@ -310,7 +310,7 @@ export function createWorkspaceAtPath(
     permissionMode: globalDefaults.workspaceDefaults.permissionMode,
     cyclablePermissionModes: globalDefaults.workspaceDefaults.cyclablePermissionModes,
     enabledSourceSlugs: [],
-    workingDirectory: undefined,
+    workingDirectory: rootPath,
     ...defaults, // User-provided defaults override global defaults
   };
 

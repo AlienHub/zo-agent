@@ -1048,7 +1048,7 @@
   "settings.workspace.defaultSources": "默认数据源",
   "settings.workspace.defaultSourcesDesc": "新会话自动启用的数据源",
   "settings.workspace.defaultWorkingDir": "默认工作目录",
-  "settings.workspace.defaultWorkingDirDesc": "未设置 (使用会话文件夹)",
+  "settings.workspace.defaultWorkingDirDesc": "默认使用 Workspace 文件夹",
   "settings.workspace.description": "名称、图标、工作目录",
   "settings.workspace.enterWorkspaceName": "输入 Workspace 名称...",
   "settings.workspace.failedToSave": "无法保存 {{setting}}",

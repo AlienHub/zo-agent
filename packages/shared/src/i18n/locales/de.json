@@ -1048,7 +1048,7 @@
   "settings.workspace.defaultSources": "Standardquellen",
   "settings.workspace.defaultSourcesDesc": "Quellen, die für neue Sitzungen automatisch aktiviert werden",
   "settings.workspace.defaultWorkingDir": "Standardarbeitsverzeichnis",
-  "settings.workspace.defaultWorkingDirDesc": "Nicht festgelegt (verwendet Sitzungsordner)",
+  "settings.workspace.defaultWorkingDirDesc": "Standardmäßig der Workspace-Ordner",
   "settings.workspace.description": "Name, Symbol, Arbeitsverzeichnis",
   "settings.workspace.enterWorkspaceName": "Workspace-Namen eingeben...",
   "settings.workspace.failedToSave": "{{setting}} konnte nicht gespeichert werden",
