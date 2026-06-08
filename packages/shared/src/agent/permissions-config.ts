@@ -21,6 +21,7 @@ import { getBundledAssetsDir } from '../utils/paths.ts';
 import { getSourcePath } from '../sources/storage.ts';
 import { isValidPermissionsFile } from '../config/validators.ts';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
+import { getWorkspaceDataPath } from '../workspaces/layout.ts';
 import {
   SAFE_MODE_CONFIG,
   PermissionsConfigSchema,
@@ -435,7 +436,7 @@ export function validatePermissionsConfig(config: PermissionsConfigFile): string
  * Get path to workspace permissions.json
  */
 export function getWorkspacePermissionsPath(workspaceRootPath: string): string {
-  return join(workspaceRootPath, 'permissions.json');
+  return join(getWorkspaceDataPath(workspaceRootPath), 'permissions.json');
 }
 
 /**

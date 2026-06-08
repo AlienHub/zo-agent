@@ -12,7 +12,7 @@ import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { saveSourceConfig, loadSourceConfig } from '../storage.ts';
+import { getSourcePath, saveSourceConfig, loadSourceConfig } from '../storage.ts';
 import { SourceCredentialManager } from '../credential-manager.ts';
 import type { FolderSourceConfig, LoadedSource } from '../types.ts';
 
@@ -67,7 +67,7 @@ function loadedApiSource(config: FolderSourceConfig): LoadedSource {
   return {
     config,
     guide: null,
-    folderPath: join(workspaceRoot, 'sources', config.slug),
+    folderPath: getSourcePath(workspaceRoot, config.slug),
     workspaceRootPath: workspaceRoot,
     workspaceId: basename(workspaceRoot),
   };
@@ -136,6 +136,6 @@ describe('saveSourceConfig orphan credential cleanup', () => {
 
     const loaded = loadSourceConfig(workspaceRoot, 'picnic');
     expect(loaded?.api?.authType).toBe('none');
-    expect(existsSync(join(workspaceRoot, 'sources', 'picnic', 'config.json'))).toBe(true);
+    expect(existsSync(join(getSourcePath(workspaceRoot, 'picnic'), 'config.json'))).toBe(true);
   });
 });

@@ -18,6 +18,7 @@ import {
   mergeResults,
 } from '../validation.ts';
 import { getSourceConfigPath } from '../source-helpers.ts';
+import { getWorkspaceDataPath, getWorkspaceSourcesPath } from '../workspace-layout.ts';
 
 export interface ConfigValidateArgs {
   target: 'config' | 'sources' | 'statuses' | 'preferences' | 'permissions' | 'automations' | 'tool-icons' | 'all';
@@ -98,7 +99,7 @@ export async function handleConfigValidate(
         return successResponse(formatValidationResult(result));
       } else {
         // Validate all sources
-        const sourcesDir = join(ctx.workspacePath, 'sources');
+        const sourcesDir = getWorkspaceSourcesPath(ctx.workspacePath);
         if (!ctx.fs.exists(sourcesDir)) {
           return successResponse('✓ No sources directory (no sources to validate)');
         }
@@ -130,7 +131,7 @@ export async function handleConfigValidate(
 
     case 'statuses': {
       const result = validateJsonFileHasFields(
-        join(ctx.workspacePath, 'statuses', 'config.json'),
+        join(getWorkspaceDataPath(ctx.workspacePath), 'statuses', 'config.json'),
         ['statuses']
       );
       return successResponse(formatValidationResult(result));
@@ -146,7 +147,7 @@ export async function handleConfigValidate(
 
     case 'permissions': {
       // Check workspace-level permissions.json
-      const workspacePermsPath = join(ctx.workspacePath, 'permissions.json');
+      const workspacePermsPath = join(getWorkspaceDataPath(ctx.workspacePath), 'permissions.json');
       if (!ctx.fs.exists(workspacePermsPath)) {
         return successResponse('✓ No workspace permissions.json (using defaults)');
       }
@@ -155,7 +156,7 @@ export async function handleConfigValidate(
     }
 
     case 'automations': {
-      const automationsPath = join(ctx.workspacePath, AUTOMATIONS_CONFIG_FILE);
+      const automationsPath = join(getWorkspaceDataPath(ctx.workspacePath), AUTOMATIONS_CONFIG_FILE);
       if (ctx.fs.exists(automationsPath)) {
         const result = validateJsonFileHasFields(automationsPath, []);
         return successResponse(formatValidationResult(result));

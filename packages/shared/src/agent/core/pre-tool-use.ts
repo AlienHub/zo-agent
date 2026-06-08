@@ -21,6 +21,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { expandPath } from '../../utils/paths.ts';
+import { getWorkspaceSkillsPath } from '../../workspaces/storage.ts';
 import {
   detectConfigFileType,
   detectAppConfigFileType,
@@ -269,7 +270,7 @@ function resolveSkillPlugin(
   }
 
   // 2. Workspace: {workspaceRoot}/skills/{slug}/SKILL.md
-  if (existsSync(join(workspaceRootPath, 'skills', bareSlug, 'SKILL.md'))) {
+  if (existsSync(join(getWorkspaceSkillsPath(workspaceRootPath), bareSlug, 'SKILL.md'))) {
     return `${workspaceSlug}:${bareSlug}`;
   }
 

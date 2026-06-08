@@ -14,19 +14,19 @@ const POLICIES: Record<CliDomainNamespace, CliDomainPolicy> = {
   label: {
     namespace: 'label',
     helpCommand: 'craft-agent label --help',
-    workspacePathScopes: ['labels/**'],
+    workspacePathScopes: ['.zo/labels/**', 'labels/**'],
     readActions: ['list', 'get', 'auto-rule-list', 'auto-rule-validate'],
     quickExamples: [
       'craft-agent label list',
       'craft-agent label create --name "Bug" --color "accent"',
       'craft-agent label update bug --json \'{"name":"Bug Report"}\'',
     ],
-    bashGuardPaths: ['labels/**'],
+    bashGuardPaths: ['.zo/labels/**', 'labels/**'],
   },
   source: {
     namespace: 'source',
     helpCommand: 'craft-agent source --help',
-    workspacePathScopes: ['sources/**'],
+    workspacePathScopes: ['.zo/sources/**', 'sources/**'],
     readActions: ['list', 'get', 'validate', 'test', 'auth-help'],
     quickExamples: [
       'craft-agent source list',
@@ -38,7 +38,7 @@ const POLICIES: Record<CliDomainNamespace, CliDomainPolicy> = {
   skill: {
     namespace: 'skill',
     helpCommand: 'craft-agent skill --help',
-    workspacePathScopes: ['skills/**'],
+    workspacePathScopes: ['.zo/skills/**', 'skills/**'],
     readActions: ['list', 'get', 'validate', 'where'],
     quickExamples: [
       'craft-agent skill list',
@@ -50,7 +50,7 @@ const POLICIES: Record<CliDomainNamespace, CliDomainPolicy> = {
   automation: {
     namespace: 'automation',
     helpCommand: 'craft-agent automation --help',
-    workspacePathScopes: ['automations.json', 'automations-history.jsonl'],
+    workspacePathScopes: ['.zo/automations.json', '.zo/automations-history.jsonl', 'automations.json', 'automations-history.jsonl'],
     readActions: ['list', 'get', 'validate', 'history', 'last-executed', 'test', 'lint'],
     quickExamples: [
       'craft-agent automation list',
@@ -59,12 +59,12 @@ const POLICIES: Record<CliDomainNamespace, CliDomainPolicy> = {
       'craft-agent automation history <id> --limit 20',
       'craft-agent automation validate',
     ],
-    bashGuardPaths: ['automations.json', 'automations-history.jsonl'],
+    bashGuardPaths: ['.zo/automations.json', '.zo/automations-history.jsonl', 'automations.json', 'automations-history.jsonl'],
   },
   permission: {
     namespace: 'permission',
     helpCommand: 'craft-agent permission --help',
-    workspacePathScopes: ['permissions.json', 'sources/*/permissions.json'],
+    workspacePathScopes: ['.zo/permissions.json', '.zo/sources/*/permissions.json', 'permissions.json', 'sources/*/permissions.json'],
     readActions: ['list', 'get', 'validate'],
     quickExamples: [
       'craft-agent permission list',
@@ -72,12 +72,12 @@ const POLICIES: Record<CliDomainNamespace, CliDomainPolicy> = {
       'craft-agent permission add-mcp-pattern "list" --comment "All list ops" --source linear',
       'craft-agent permission validate',
     ],
-    bashGuardPaths: ['permissions.json', 'sources/*/permissions.json'],
+    bashGuardPaths: ['.zo/permissions.json', '.zo/sources/*/permissions.json', 'permissions.json', 'sources/*/permissions.json'],
   },
   theme: {
     namespace: 'theme',
     helpCommand: 'craft-agent theme --help',
-    workspacePathScopes: ['config.json', 'theme.json', 'themes/*.json'],
+    workspacePathScopes: ['.zo/config.json', '.zo/theme.json', '.zo/themes/*.json', 'config.json', 'theme.json', 'themes/*.json'],
     readActions: ['get', 'validate', 'list-presets', 'get-preset'],
     quickExamples: [
       'craft-agent theme get',
@@ -86,7 +86,7 @@ const POLICIES: Record<CliDomainNamespace, CliDomainPolicy> = {
       'craft-agent theme set-workspace-color-theme default',
       'craft-agent theme set-override --json "{\"accent\":\"#3b82f6\"}"',
     ],
-    bashGuardPaths: ['config.json', 'theme.json', 'themes/*.json'],
+    bashGuardPaths: ['.zo/config.json', '.zo/theme.json', '.zo/themes/*.json', 'config.json', 'theme.json', 'themes/*.json'],
   },
 }
 

@@ -9,6 +9,11 @@
 import { existsSync, readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SourceConfig } from './types.ts';
+import {
+  getWorkspaceSessionsPath,
+  getWorkspaceSkillsPath,
+  getWorkspaceSourcesPath,
+} from './workspace-layout.ts';
 
 /** Strip UTF-8 BOM that breaks JSON.parse */
 function stripBom(text: string): string {
@@ -19,7 +24,7 @@ function stripBom(text: string): string {
  * Get the path to a source's directory
  */
 export function getSourcePath(workspaceRootPath: string, sourceSlug: string): string {
-  return join(workspaceRootPath, 'sources', sourceSlug);
+  return join(getWorkspaceSourcesPath(workspaceRootPath), sourceSlug);
 }
 
 /**
@@ -77,7 +82,7 @@ export function loadSourceConfig(
  * List all source slugs in a workspace
  */
 export function listSourceSlugs(workspaceRootPath: string): string[] {
-  const sourcesDir = join(workspaceRootPath, 'sources');
+  const sourcesDir = getWorkspaceSourcesPath(workspaceRootPath);
 
   if (!existsSync(sourcesDir)) {
     return [];
@@ -98,7 +103,7 @@ export function listSourceSlugs(workspaceRootPath: string): string[] {
  * Get the path to a skill's directory
  */
 export function getSkillPath(workspaceRootPath: string, skillSlug: string): string {
-  return join(workspaceRootPath, 'skills', skillSlug);
+  return join(getWorkspaceSkillsPath(workspaceRootPath), skillSlug);
 }
 
 /**
@@ -126,7 +131,7 @@ export function skillMdExists(workspaceRootPath: string, skillSlug: string): boo
  * List all skill slugs in a workspace
  */
 export function listSkillSlugs(workspaceRootPath: string): string[] {
-  const skillsDir = join(workspaceRootPath, 'skills');
+  const skillsDir = getWorkspaceSkillsPath(workspaceRootPath);
 
   if (!existsSync(skillsDir)) {
     return [];
@@ -157,7 +162,7 @@ export function resolveSessionWorkingDirectory(
   sessionId: string
 ): string | undefined {
   try {
-    const sessionFile = join(workspacePath, 'sessions', sessionId, 'session.jsonl');
+    const sessionFile = join(getWorkspaceSessionsPath(workspacePath), sessionId, 'session.jsonl');
     if (!existsSync(sessionFile)) return undefined;
     // Read first line only (header) — 8KB buffer is plenty
     const fd = openSync(sessionFile, 'r');

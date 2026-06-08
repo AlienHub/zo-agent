@@ -8,6 +8,7 @@ import { PERMISSION_MODE_CONFIG } from '../agent/mode-types.ts';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
 import { APP_VERSION } from '../version/index.ts';
 import { readPluginName } from '../utils/workspace.ts';
+import { getWorkspaceDataPath } from '../workspaces/layout.ts';
 import { globSync } from 'glob';
 import os from 'os';
 
@@ -307,8 +308,9 @@ export type SystemPromptPreset = 'default' | 'mini';
  * @param workspaceRootPath - Root path of the workspace for config file locations
  */
 export function getMiniAgentSystemPrompt(workspaceRootPath?: string): string {
+  const workspaceDataPath = workspaceRootPath ? getWorkspaceDataPath(workspaceRootPath) : undefined;
   const workspaceContext = workspaceRootPath
-    ? `\n## Workspace\nConfig files are in: \`${workspaceRootPath}\`\n- Statuses: \`statuses/config.json\`\n- Labels: \`labels/config.json\`\n- Permissions: \`permissions.json\`\n`
+    ? `\n## Workspace\nWorkspace root: \`${workspaceRootPath}\`\nZo config files are in: \`${workspaceDataPath}\`\n- Statuses: \`statuses/config.json\`\n- Labels: \`labels/config.json\`\n- Permissions: \`permissions.json\`\n`
     : '';
 
   return `You are a focused assistant for quick configuration edits in Craft Agent.
@@ -453,6 +455,7 @@ function getCraftAgentEnvironmentMarker(): string {
 function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string = 'Claude Code', includeCoAuthoredBy: boolean = true): string {
   // Default to ${APP_ROOT}/workspaces/{id} if no path provided
   const workspacePath = workspaceRootPath || `${APP_ROOT}/workspaces/{id}`;
+  const workspaceDataPath = workspaceRootPath ? getWorkspaceDataPath(workspaceRootPath) : `${workspacePath}/.zo`;
 
   // Read the SDK plugin name from .claude-plugin/plugin.json — this is what the SDK
   // uses to resolve skills. Falls back to basename for backwards compatibility.
@@ -533,7 +536,7 @@ Sources are external data connections. Each source has:
 - \`guide.md\` - Usage guidelines (read before first use!)
 
 **Using an existing source** (it already appears in \`<sources>\` above):
-1. Read its \`config.json\` and \`guide.md\` at \`${workspacePath}/sources/{slug}/\`
+1. Read its \`config.json\` and \`guide.md\` at \`${workspaceDataPath}/sources/{slug}/\`
 2. If it needs auth, trigger the appropriate auth tool
 3. Call its tools directly — do not search the workspace for how to use it
 
@@ -543,9 +546,11 @@ Sources are external data connections. Each source has:
 3. Before full setup, confirm whether in-app browser is a better fit for one-off or UI-only tasks
 
 **Workspace structure:**
-- Sources: \`${workspacePath}/sources/{slug}/\`
-- Skills: \`${workspacePath}/skills/{slug}/\`
-- Theme: \`${workspacePath}/theme.json\`
+- Workspace root: \`${workspacePath}\`
+- Zo data: \`${workspaceDataPath}/\`
+- Sources: \`${workspaceDataPath}/sources/{slug}/\`
+- Skills: \`${workspaceDataPath}/skills/{slug}/\`
+- Theme: \`${workspaceDataPath}/theme.json\`
 
 ## Skills
 
@@ -558,7 +563,7 @@ Skills are reusable instruction sets that teach you specialized behaviors. Each 
 
 Skills are stored at three levels (checked in order):
 - Global: \`~/.agents/skills/{slug}/SKILL.md\`
-- Workspace: \`${workspacePath}/skills/{slug}/SKILL.md\`
+- Workspace: \`${workspaceDataPath}/skills/{slug}/SKILL.md\`
 - Project: \`{projectRoot}/.agents/skills/{slug}/SKILL.md\`
 
 ## Project Context
@@ -704,9 +709,9 @@ The \`session\` MCP server provides tools for managing external sources:
 **Source creation workflow:**
 1. Read \`${DOC_REFS.sources}\` for the full setup guide
 2. Search \`craft-agents-docs\` for service-specific guides
-3. Create \`config.json\` in \`sources/{slug}/\`
-4. Create \`permissions.json\` for Explore mode
-5. Write \`guide.md\` with usage instructions
+3. Create \`config.json\` in \`${workspaceDataPath}/sources/{slug}/\`
+4. Create \`permissions.json\` for Explore mode in the same source directory
+5. Write \`guide.md\` with usage instructions in the same source directory
 6. Run \`source_test\` to validate — **once only, before auth**
 7. Trigger the appropriate auth tool
 

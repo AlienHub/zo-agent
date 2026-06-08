@@ -371,6 +371,7 @@ export function validateAll(workspaceId?: string, workspaceRoot?: string): Valid
 // ============================================================
 
 import { getWorkspaceSourcesPath } from '../workspaces/storage.ts';
+import { getWorkspaceDataPath } from '../workspaces/layout.ts';
 
 // --- sources/{slug}/config.json ---
 
@@ -947,7 +948,7 @@ const WorkspaceStatusConfigSchema = z.object({
  * @param workspaceRoot - Absolute path to workspace root folder
  */
 export function validateStatuses(workspaceRoot: string): ValidationResult {
-  const configPath = join(workspaceRoot, STATUS_CONFIG_FILE);
+  const configPath = join(getWorkspaceDataPath(workspaceRoot), STATUS_CONFIG_FILE);
   const file = STATUS_CONFIG_FILE;
 
   // Check if config file exists (optional - defaults are used if missing)
@@ -1176,7 +1177,7 @@ const WorkspaceLabelConfigSchema = z.object({
  * @param workspaceRoot - Absolute path to workspace root folder
  */
 export function validateLabels(workspaceRoot: string): ValidationResult {
-  const configPath = join(workspaceRoot, LABEL_CONFIG_FILE);
+  const configPath = join(getWorkspaceDataPath(workspaceRoot), LABEL_CONFIG_FILE);
   const file = LABEL_CONFIG_FILE;
 
   // Labels config is optional — no config means no labels (valid state)
@@ -1493,7 +1494,7 @@ export function validateAllPermissions(workspaceRoot: string): ValidationResult 
   warnings.push(...wsResult.warnings);
 
   // Validate all source-level permissions
-  const sourcesDir = join(workspaceRoot, 'sources');
+  const sourcesDir = getWorkspaceSourcesPath(workspaceRoot);
   if (existsSync(sourcesDir)) {
     const entries = readdirSync(sourcesDir);
     for (const entry of entries) {
@@ -1991,8 +1992,14 @@ export function detectConfigFileType(filePath: string, workspaceRootPath: string
     return null;
   }
 
-  // Get the relative path from workspace root (no leading slash since root ends with /)
-  const relativePath = normalizedPath.slice(normalizedRoot.length);
+  // Get the relative path from workspace root (no leading slash since root ends with /).
+  // New workspaces keep Zo-owned files under .zo/, while legacy workspaces used
+  // the root directly. Normalize both layouts to the legacy relative shape for
+  // detection and display.
+  const rawRelativePath = normalizedPath.slice(normalizedRoot.length);
+  const relativePath = rawRelativePath.startsWith('.zo/')
+    ? rawRelativePath.slice('.zo/'.length)
+    : rawRelativePath;
 
   // Match: sources/{slug}/config.json
   const sourceMatch = relativePath.match(/^sources\/([^/]+)\/config\.json$/);

@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createWorkspaceAtPath, loadWorkspaceConfig } from '../storage.ts';
+import {
+  createWorkspaceAtPath,
+  getWorkspaceSessionsPath,
+  getWorkspaceSkillsPath,
+  getWorkspaceSourcesPath,
+  isValidWorkspace,
+  loadWorkspaceConfig,
+} from '../storage.ts';
+import { getWorkspaceConfigPath, getWorkspaceDataPath } from '../layout.ts';
 
 const tempDirs: string[] = [];
 
@@ -26,6 +34,36 @@ describe('workspace storage: config normalization', () => {
     expect(config.defaults?.workingDirectory).toBe(workspaceRoot);
     const loaded = loadWorkspaceConfig(workspaceRoot);
     expect(loaded?.defaults?.workingDirectory).toBe(workspaceRoot);
+  });
+
+  it('stores new workspace-owned files under .zo instead of the workspace root', () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'ws-dot-zo-'));
+    tempDirs.push(workspaceRoot);
+
+    createWorkspaceAtPath(workspaceRoot, 'Dot Zo');
+
+    const rootEntries = readdirSync(workspaceRoot).sort();
+    expect(rootEntries).toEqual(['.zo']);
+    expect(getWorkspaceDataPath(workspaceRoot)).toBe(join(workspaceRoot, '.zo'));
+    expect(getWorkspaceConfigPath(workspaceRoot)).toBe(join(workspaceRoot, '.zo', 'config.json'));
+    expect(existsSync(join(workspaceRoot, 'config.json'))).toBe(false);
+    expect(existsSync(join(workspaceRoot, '.zo', 'config.json'))).toBe(true);
+    expect(getWorkspaceSourcesPath(workspaceRoot)).toBe(join(workspaceRoot, '.zo', 'sources'));
+    expect(getWorkspaceSessionsPath(workspaceRoot)).toBe(join(workspaceRoot, '.zo', 'sessions'));
+    expect(getWorkspaceSkillsPath(workspaceRoot)).toBe(join(workspaceRoot, '.zo', 'skills'));
+    expect(existsSync(join(workspaceRoot, '.zo', 'statuses', 'config.json'))).toBe(true);
+    expect(existsSync(join(workspaceRoot, '.zo', 'labels', 'config.json'))).toBe(true);
+    expect(existsSync(join(workspaceRoot, '.zo', '.claude-plugin', 'plugin.json'))).toBe(true);
+  });
+
+  it('does not treat arbitrary root config.json files as valid workspaces', () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'ws-arbitrary-config-'));
+    tempDirs.push(workspaceRoot);
+
+    writeFileSync(join(workspaceRoot, 'config.json'), JSON.stringify({ scripts: {} }, null, 2), 'utf-8');
+
+    expect(loadWorkspaceConfig(workspaceRoot)).toBeNull();
+    expect(isValidWorkspace(workspaceRoot)).toBe(false);
   });
 
   it('maps canonical defaults.permissionMode and cyclablePermissionModes on read', () => {

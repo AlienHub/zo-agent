@@ -6,9 +6,10 @@
  *
  * Directory structure:
  * ~/.craft-agent/workspaces/{slug}/
- *   ├── config.json      - Workspace settings
- *   ├── sources/         - Data sources (MCP, API, local)
- *   └── sessions/        - Conversation sessions
+ *   └── .zo/
+ *       ├── config.json      - Workspace settings
+ *       ├── sources/         - Data sources (MCP, API, local)
+ *       └── sessions/        - Conversation sessions
  */
 
 import type { PermissionMode } from '../agent/mode-manager.ts';

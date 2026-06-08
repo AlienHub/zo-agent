@@ -31,6 +31,11 @@ import type {
   LoadedWorkspace,
   WorkspaceSummary,
 } from './types.ts';
+import {
+  getPreferredWorkspaceDataPath,
+  getWorkspaceConfigPath,
+  getWorkspaceDataPath,
+} from './layout.ts';
 
 const CONFIG_DIR = join(homedir(), '.craft-agent');
 const DEFAULT_WORKSPACES_DIR = join(CONFIG_DIR, 'workspaces');
@@ -69,7 +74,7 @@ export function getWorkspacePath(workspaceId: string): string {
  * @param rootPath - Absolute path to workspace root folder
  */
 export function getWorkspaceSourcesPath(rootPath: string): string {
-  return join(rootPath, 'sources');
+  return join(getWorkspaceDataPath(rootPath), 'sources');
 }
 
 /**
@@ -77,7 +82,7 @@ export function getWorkspaceSourcesPath(rootPath: string): string {
  * @param rootPath - Absolute path to workspace root folder
  */
 export function getWorkspaceSessionsPath(rootPath: string): string {
-  return join(rootPath, 'sessions');
+  return join(getWorkspaceDataPath(rootPath), 'sessions');
 }
 
 /**
@@ -85,7 +90,7 @@ export function getWorkspaceSessionsPath(rootPath: string): string {
  * @param rootPath - Absolute path to workspace root folder
  */
 export function getWorkspaceSkillsPath(rootPath: string): string {
-  return join(rootPath, 'skills');
+  return join(getWorkspaceDataPath(rootPath), 'skills');
 }
 
 // ============================================================
@@ -97,11 +102,12 @@ export function getWorkspaceSkillsPath(rootPath: string): string {
  * @param rootPath - Absolute path to workspace root folder
  */
 export function loadWorkspaceConfig(rootPath: string): WorkspaceConfig | null {
-  const configPath = join(rootPath, 'config.json');
+  const configPath = getWorkspaceConfigPath(rootPath);
   if (!existsSync(configPath)) return null;
 
   try {
     const config = readJsonFileSync<WorkspaceConfig>(configPath);
+    if (!isWorkspaceConfigShape(config)) return null;
 
     // Expand path variables in defaults for portability
     if (config.defaults?.workingDirectory) {
@@ -142,8 +148,9 @@ export function loadWorkspaceConfig(rootPath: string): WorkspaceConfig | null {
  * @param rootPath - Absolute path to workspace root folder
  */
 export function saveWorkspaceConfig(rootPath: string, config: WorkspaceConfig): void {
-  if (!existsSync(rootPath)) {
-    mkdirSync(rootPath, { recursive: true });
+  const dataPath = getWorkspaceDataPath(rootPath);
+  if (!existsSync(dataPath)) {
+    mkdirSync(dataPath, { recursive: true });
   }
 
   // Convert paths to portable form for cross-machine compatibility
@@ -160,7 +167,15 @@ export function saveWorkspaceConfig(rootPath: string, config: WorkspaceConfig): 
   }
 
   // Use atomic write to prevent corruption on crash/interrupt
-  atomicWriteFileSync(join(rootPath, 'config.json'), JSON.stringify(storageConfig, null, 2));
+  atomicWriteFileSync(join(dataPath, 'config.json'), JSON.stringify(storageConfig, null, 2));
+}
+
+function isWorkspaceConfigShape(value: unknown): value is WorkspaceConfig {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<WorkspaceConfig>;
+  return typeof candidate.id === 'string'
+    && typeof candidate.name === 'string'
+    && typeof candidate.slug === 'string';
 }
 
 // ============================================================
@@ -324,8 +339,11 @@ export function createWorkspaceAtPath(
     updatedAt: now,
   };
 
-  // Create workspace directory structure
+  // Create workspace directory structure. Workspace-owned state lives under
+  // .zo/ so selecting an existing project folder does not pollute its root.
+  const dataPath = getPreferredWorkspaceDataPath(rootPath);
   mkdirSync(rootPath, { recursive: true });
+  mkdirSync(dataPath, { recursive: true });
   mkdirSync(getWorkspaceSourcesPath(rootPath), { recursive: true });
   mkdirSync(getWorkspaceSessionsPath(rootPath), { recursive: true });
   mkdirSync(getWorkspaceSkillsPath(rootPath), { recursive: true });
@@ -366,7 +384,7 @@ export function deleteWorkspaceFolder(rootPath: string): boolean {
  * @param rootPath - Absolute path to check
  */
 export function isValidWorkspace(rootPath: string): boolean {
-  return existsSync(join(rootPath, 'config.json'));
+  return loadWorkspaceConfig(rootPath) !== null;
 }
 
 /**
@@ -510,7 +528,7 @@ export function isLocalMcpEnabled(rootPath: string): boolean {
  * @param workspaceName - Display name for the workspace (used in plugin name)
  */
 export function ensurePluginManifest(rootPath: string, workspaceName: string): void {
-  const pluginDir = join(rootPath, '.claude-plugin');
+  const pluginDir = join(getWorkspaceDataPath(rootPath), '.claude-plugin');
   const manifestPath = join(pluginDir, 'plugin.json');
 
   if (existsSync(manifestPath)) return;

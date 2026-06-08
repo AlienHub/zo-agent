@@ -12,6 +12,7 @@ import { loadTemplate, validateTemplateData } from '../templates/loader.ts';
 import { renderMustache } from '../templates/mustache.ts';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { getSourcePath } from '../source-helpers.ts';
 
 export interface RenderTemplateArgs {
   source: string;
@@ -36,7 +37,7 @@ export async function handleRenderTemplate(
     return errorResponse('render_template requires dataPath in context.');
   }
 
-  const sourcePath = join(ctx.workspacePath, 'sources', args.source);
+  const sourcePath = getSourcePath(ctx.workspacePath, args.source);
 
   // Validate source exists
   if (!existsSync(sourcePath)) {

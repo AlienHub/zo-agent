@@ -16,6 +16,7 @@ import { flattenLabels, findLabelById } from './tree.ts';
 import { readJsonFileSync } from '../utils/files.ts';
 import { migrateLabelColors } from '../colors/migrate.ts';
 import { debug } from '../utils/debug.ts';
+import { getWorkspaceDataPath } from '../workspaces/layout.ts';
 
 const LABEL_CONFIG_DIR = 'labels';
 const LABEL_CONFIG_FILE = 'labels/config.json';
@@ -99,7 +100,7 @@ export function getDefaultLabelConfig(): WorkspaceLabelConfig {
  * Auto-migrates old Tailwind color format to EntityColor on first load.
  */
 export function loadLabelConfig(workspaceRootPath: string): WorkspaceLabelConfig {
-  const configPath = join(workspaceRootPath, LABEL_CONFIG_FILE);
+  const configPath = join(getWorkspaceDataPath(workspaceRootPath), LABEL_CONFIG_FILE);
 
   // If no config file exists, seed with defaults and persist to disk.
   // This ensures existing workspaces (created before default labels existed) get populated.
@@ -136,8 +137,9 @@ export function saveLabelConfig(
   workspaceRootPath: string,
   config: WorkspaceLabelConfig
 ): void {
-  const labelDir = join(workspaceRootPath, LABEL_CONFIG_DIR);
-  const configPath = join(workspaceRootPath, LABEL_CONFIG_FILE);
+  const dataPath = getWorkspaceDataPath(workspaceRootPath);
+  const labelDir = join(dataPath, LABEL_CONFIG_DIR);
+  const configPath = join(dataPath, LABEL_CONFIG_FILE);
 
   if (!existsSync(labelDir)) {
     mkdirSync(labelDir, { recursive: true });
@@ -202,5 +204,4 @@ export function isValidLabelIdFormat(labelId: string): boolean {
   const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
   return SLUG_PATTERN.test(labelId);
 }
-
 

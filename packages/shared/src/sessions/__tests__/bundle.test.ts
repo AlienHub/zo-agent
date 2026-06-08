@@ -4,6 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { serializeSession, validateBundle, MAX_BUNDLE_SIZE_BYTES } from '../bundle'
 import { writeSessionJsonl } from '../jsonl'
+import { getSessionPath } from '../storage'
 import type { StoredSession, SessionHeader } from '../types'
 
 // ============================================================
@@ -49,7 +50,7 @@ function makeStoredSession(overrides: Partial<StoredSession> = {}): StoredSessio
 }
 
 function setupSessionDir(workspaceRoot: string, session: StoredSession): string {
-  const sessionsDir = join(workspaceRoot, 'sessions', session.id)
+  const sessionsDir = getSessionPath(workspaceRoot, session.id)
   mkdirSync(sessionsDir, { recursive: true })
 
   // Write JSONL

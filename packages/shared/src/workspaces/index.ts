@@ -14,6 +14,13 @@ export type {
 
 // Storage functions
 export {
+  getPreferredWorkspaceDataPath,
+  getWorkspaceConfigPath,
+  getWorkspaceDataPath,
+  WORKSPACE_DATA_DIR,
+} from './layout.ts';
+
+export {
   // Path utilities
   getDefaultWorkspacesDir,
   ensureDefaultWorkspacesDir,
