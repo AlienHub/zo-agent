@@ -3,10 +3,34 @@ import { join } from 'path'
 import { homedir } from 'os'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { getWorkspaceByNameOrId, addWorkspace, setActiveWorkspace, updateWorkspaceRemoteServer } from '@craft-agent/shared/config'
+import { getWorkspaceDataPath } from '@craft-agent/shared/workspaces'
 import { perf } from '@craft-agent/shared/utils'
 import { pushTyped, type RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { isValidWorkspaceRootPath } from '../../utils/path-validation'
+
+const WORKSPACE_DATA_IMAGE_PREFIXES = ['sources/', 'skills/', 'statuses/']
+
+function normalizeWorkspaceRelativePath(relativePath: string): string {
+  return relativePath.replace(/\\/g, '/').replace(/^\.\//, '')
+}
+
+export function resolveWorkspaceImageReadPath(
+  workspaceRootPath: string,
+  relativePath: string,
+  pathExists: (path: string) => boolean,
+): string {
+  const normalizedRelativePath = normalizeWorkspaceRelativePath(relativePath)
+  const isWorkspaceDataImage = WORKSPACE_DATA_IMAGE_PREFIXES.some(prefix => normalizedRelativePath.startsWith(prefix))
+
+  const dataPath = getWorkspaceDataPath(workspaceRootPath)
+  const preferredPath = join(dataPath, normalizedRelativePath)
+  const legacyPath = join(workspaceRootPath, normalizedRelativePath)
+
+  return isWorkspaceDataImage && pathExists(preferredPath)
+    ? preferredPath
+    : legacyPath
+}
 
 export const CORE_HANDLED_CHANNELS = [
   RPC_CHANNELS.workspaces.GET,
@@ -159,17 +183,22 @@ export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDe
     // - Must be a valid image extension
     const ALLOWED_EXTENSIONS = ['.svg', '.png', '.jpg', '.jpeg', '.webp', '.ico', '.gif']
 
-    if (relativePath.includes('..')) {
+    const normalizedRelativePath = normalizeWorkspaceRelativePath(relativePath)
+
+    if (normalizedRelativePath.includes('..')) {
       throw new Error('Invalid path: directory traversal not allowed')
     }
 
-    const ext = relativePath.toLowerCase().slice(relativePath.lastIndexOf('.'))
+    const ext = normalizedRelativePath.toLowerCase().slice(normalizedRelativePath.lastIndexOf('.'))
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
       throw new Error(`Invalid file type: ${ext}. Allowed: ${ALLOWED_EXTENSIONS.join(', ')}`)
     }
 
-    // Resolve path relative to workspace root
-    const absolutePath = normalize(join(workspace.rootPath, relativePath))
+    const absolutePath = normalize(resolveWorkspaceImageReadPath(
+      workspace.rootPath,
+      normalizedRelativePath,
+      existsSync,
+    ))
 
     // Double-check the resolved path is still within workspace
     if (!absolutePath.startsWith(workspace.rootPath)) {
