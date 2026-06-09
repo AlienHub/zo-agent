@@ -103,6 +103,10 @@ function PanelSlotInner({
     }
   }, [isFocusedPanel, setFocusedPanel, entry.id])
 
+  const explicitWidth = entry.width != null
+    ? Math.max(PANEL_MIN_WIDTH, entry.width)
+    : undefined
+
   return (
     <>
       {sash}
@@ -134,7 +138,15 @@ function PanelSlotInner({
           borderBottomRightRadius: isCompact ? 0 : (isAtRightEdge ? RADIUS_EDGE : RADIUS_INNER),
           ...(isOnly
             ? { flexGrow: 1, minWidth: 0 }
-            : { flexGrow: proportion, flexShrink: 1, flexBasis: 0, minWidth: PANEL_MIN_WIDTH }
+            : explicitWidth != null
+              ? {
+                  flexGrow: 0,
+                  flexShrink: 0,
+                  flexBasis: explicitWidth,
+                  width: explicitWidth,
+                  minWidth: PANEL_MIN_WIDTH,
+                }
+              : { flexGrow: proportion, flexShrink: 1, flexBasis: 0, minWidth: PANEL_MIN_WIDTH }
           ),
         }}
       >
@@ -156,6 +168,7 @@ export const PanelSlot = memo(PanelSlotInner, (prev, next) => {
     prev.entry.id === next.entry.id &&
     prev.entry.route === next.entry.route &&
     prev.entry.proportion === next.entry.proportion &&
+    prev.entry.width === next.entry.width &&
     prev.isOnly === next.isOnly &&
     prev.isFocusedPanel === next.isFocusedPanel &&
     prev.isSidebarAndNavigatorHidden === next.isSidebarAndNavigatorHidden &&

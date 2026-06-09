@@ -39,6 +39,7 @@ export interface PanelStackEntry {
   id: string
   route: ViewRoute
   proportion: number
+  width?: number
   panelType: PanelType
   laneId: PanelLaneId
 }
@@ -239,17 +240,42 @@ export const reconcilePanelStackAtom = atom(
 
 export const resizePanelsAtom = atom(
   null,
-  (get, set, { leftIndex, rightIndex, leftProportion, rightProportion }: {
+  (get, set, {
+    leftIndex,
+    rightIndex,
+    leftProportion,
+    rightProportion,
+    leftWidth,
+    rightWidth,
+  }: {
     leftIndex: number
     rightIndex: number
     leftProportion: number
     rightProportion: number
+    leftWidth?: number | null
+    rightWidth?: number | null
   }) => {
     const stack = get(panelStackAtom)
     if (leftIndex < 0 || rightIndex >= stack.length) return
     const newStack = stack.map((p, i) => {
-      if (i === leftIndex) return { ...p, proportion: leftProportion }
-      if (i === rightIndex) return { ...p, proportion: rightProportion }
+      if (i === leftIndex) {
+        const next = { ...p, proportion: leftProportion }
+        if (leftWidth === null) {
+          delete next.width
+        } else if (leftWidth !== undefined) {
+          next.width = leftWidth
+        }
+        return next
+      }
+      if (i === rightIndex) {
+        const next = { ...p, proportion: rightProportion }
+        if (rightWidth === null) {
+          delete next.width
+        } else if (rightWidth !== undefined) {
+          next.width = rightWidth
+        }
+        return next
+      }
       return p
     })
     set(panelStackAtom, newStack)

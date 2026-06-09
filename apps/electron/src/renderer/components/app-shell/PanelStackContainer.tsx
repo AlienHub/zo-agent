@@ -7,6 +7,8 @@
  * Content panels use CSS flex-grow with their proportions as weights:
  * - Each panel gets `flex: <proportion> 1 0px` with `min-width: PANEL_MIN_WIDTH`
  * - Flex distributes available space proportionally — panels fill the viewport
+ * - Once a panel is manually resized, it can carry an explicit pixel width
+ *   so dragging can expand the scrollable stack beyond the viewport
  * - When panels hit min-width, overflow-x: auto kicks in naturally
  *
  * Sidebar and Navigator are NOT part of the proportional layout —

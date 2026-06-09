@@ -22,6 +22,7 @@ import {
   PANEL_SASH_LINE_WIDTH,
   PANEL_STACK_VERTICAL_OVERFLOW,
 } from './panel-constants'
+import { computeResizedPanelWidths } from './panel-resize'
 
 export { PANEL_MIN_WIDTH }
 
@@ -68,20 +69,15 @@ export function PanelResizeSash({
 
     const handleMouseMove = (e: MouseEvent) => {
       const delta = e.clientX - startXRef.current
-      const combinedWidth = startLeftWidthRef.current + startRightWidthRef.current
 
-      // Compute new widths, clamped to min
-      let newLeftWidth = startLeftWidthRef.current + delta
-      let newRightWidth = startRightWidthRef.current - delta
-
-      if (newLeftWidth < PANEL_MIN_WIDTH) {
-        newLeftWidth = PANEL_MIN_WIDTH
-        newRightWidth = combinedWidth - PANEL_MIN_WIDTH
-      }
-      if (newRightWidth < PANEL_MIN_WIDTH) {
-        newRightWidth = PANEL_MIN_WIDTH
-        newLeftWidth = combinedWidth - PANEL_MIN_WIDTH
-      }
+      // Compute new widths, clamped to min. When the opposite side is already
+      // at min-width, allow the dragged side to grow the scrollable panel stack.
+      const { leftWidth: newLeftWidth, rightWidth: newRightWidth } = computeResizedPanelWidths({
+        startLeftWidth: startLeftWidthRef.current,
+        startRightWidth: startRightWidthRef.current,
+        delta,
+        minWidth: PANEL_MIN_WIDTH,
+      })
 
       // Convert pixel ratio to proportions, preserving the combined proportion
       const combined = combinedProportionRef.current
@@ -89,7 +85,14 @@ export function PanelResizeSash({
       const leftProportion = (newLeftWidth / total) * combined
       const rightProportion = combined - leftProportion
 
-      resizePanels({ leftIndex, rightIndex, leftProportion, rightProportion })
+      resizePanels({
+        leftIndex,
+        rightIndex,
+        leftProportion,
+        rightProportion,
+        leftWidth: Math.round(newLeftWidth),
+        rightWidth: Math.round(newRightWidth),
+      })
     }
 
     const handleMouseUp = () => {
@@ -117,6 +120,8 @@ export function PanelResizeSash({
       rightIndex,
       leftProportion: half,
       rightProportion: half,
+      leftWidth: null,
+      rightWidth: null,
     })
   }, [leftIndex, rightIndex, panelStack, resizePanels])
 
