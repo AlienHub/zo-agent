@@ -8,7 +8,8 @@
  * - Drag to resize the two adjacent panels
  * - Double-click to reset both panels to equal share of their combined proportion
  * - Enforces PANEL_MIN_WIDTH on both sides during drag
- * - Measures sibling panel widths from the DOM on drag start (no width props needed)
+ * - Reads stored panel basis widths on drag start and falls back to measured
+ *   DOM widths only for panels that have not been resized yet.
  */
 
 import { useCallback, useRef } from 'react'
@@ -22,7 +23,10 @@ import {
   PANEL_SASH_LINE_WIDTH,
   PANEL_STACK_VERTICAL_OVERFLOW,
 } from './panel-constants'
-import { computeResizedPanelWidths } from './panel-resize'
+import {
+  computeResizedPanelWidths,
+  resolveResizeStartWidths,
+} from './panel-resize'
 
 export { PANEL_MIN_WIDTH }
 
@@ -49,37 +53,47 @@ export function PanelResizeSash({
     e.preventDefault()
     handlers.onMouseDown()
 
+    const stack = panelStack
+    const leftEntry = stack[leftIndex]
+    const rightEntry = stack[rightIndex]
+    if (!leftEntry || !rightEntry) return
+
     const sashEl = ref.current
-    if (!sashEl) return
+    const measuredWidths = sashEl?.parentElement
+      ? Array.from(
+          sashEl.parentElement.querySelectorAll<HTMLElement>('[data-panel-role="content"]'),
+          panel => panel.getBoundingClientRect().width,
+        )
+      : []
+    const startWidths = resolveResizeStartWidths({
+      storedWidths: stack.map(p => p.width),
+      measuredWidths,
+      minWidth: PANEL_MIN_WIDTH,
+      measuredFirstIndices: [stack.length - 1],
+    })
 
-    // Measure sibling panel widths from the DOM
-    // The sash's previousElementSibling is the left panel div,
-    // and nextElementSibling is the right panel div.
-    const leftPanel = sashEl.previousElementSibling as HTMLElement | null
-    const rightPanel = sashEl.nextElementSibling as HTMLElement | null
-    if (!leftPanel || !rightPanel) return
-
+    // Use stored basis widths when present. Measured DOM widths can include
+    // flex-grown free space; writing that back would accumulate on each drag.
     startXRef.current = e.clientX
-    startLeftWidthRef.current = leftPanel.getBoundingClientRect().width
-    startRightWidthRef.current = rightPanel.getBoundingClientRect().width
+    startLeftWidthRef.current = startWidths[leftIndex] ?? PANEL_MIN_WIDTH
+    startRightWidthRef.current = startWidths[rightIndex] ?? PANEL_MIN_WIDTH
 
-    const leftProp = panelStack[leftIndex]?.proportion ?? 0.5
-    const rightProp = panelStack[rightIndex]?.proportion ?? 0.5
+    const leftProp = leftEntry.proportion
+    const rightProp = rightEntry.proportion
     combinedProportionRef.current = leftProp + rightProp
 
     const handleMouseMove = (e: MouseEvent) => {
       const delta = e.clientX - startXRef.current
 
-      // Compute new widths, clamped to min. When the opposite side is already
-      // at min-width, allow the dragged side to grow the scrollable panel stack.
-      const { leftWidth: newLeftWidth, rightWidth: newRightWidth } = computeResizedPanelWidths({
-        startLeftWidth: startLeftWidthRef.current,
-        startRightWidth: startRightWidthRef.current,
-        delta,
-        minWidth: PANEL_MIN_WIDTH,
-      })
+      const { leftWidth: newLeftWidth, rightWidth: newRightWidth } =
+        computeResizedPanelWidths({
+          startLeftWidth: startLeftWidthRef.current,
+          startRightWidth: startRightWidthRef.current,
+          delta,
+          minWidth: PANEL_MIN_WIDTH,
+        })
 
-      // Convert pixel ratio to proportions, preserving the combined proportion
+      // Convert pixel ratio to proportions, preserving the combined proportion.
       const combined = combinedProportionRef.current
       const total = newLeftWidth + newRightWidth
       const leftProportion = (newLeftWidth / total) * combined
@@ -91,7 +105,7 @@ export function PanelResizeSash({
         leftProportion,
         rightProportion,
         leftWidth: Math.round(newLeftWidth),
-        rightWidth: Math.round(newRightWidth),
+        rightWidth: rightIndex === stack.length - 1 ? null : Math.round(newRightWidth),
       })
     }
 

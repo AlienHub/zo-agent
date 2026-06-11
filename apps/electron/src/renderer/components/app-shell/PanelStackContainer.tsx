@@ -168,6 +168,7 @@ export function PanelStackContainer({
                 isAtLeftEdge={isLeftEdge}
                 isAtRightEdge={!isRightSidebarVisible}
                 proportion={focusedEntry.proportion}
+                fillsRemainingSpace={true}
                 isCompact={true}
               />
             </div>
@@ -263,6 +264,7 @@ export function PanelStackContainer({
               isAtLeftEdge={index === 0 && isLeftEdge}
               isAtRightEdge={index === visiblePanels.length - 1 && !isRightSidebarVisible}
               proportion={entry.proportion}
+              fillsRemainingSpace={index === visiblePanels.length - 1}
               isCompact={false}
               sash={index > 0 ? (
                 <PanelResizeSash

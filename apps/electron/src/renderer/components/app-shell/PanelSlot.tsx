@@ -24,6 +24,7 @@ import { useAppShellContext, AppShellProvider } from '@/context/AppShellContext'
 import { PanelHeaderCenterButton } from '@/components/ui/PanelHeaderCenterButton'
 import { MainContentPanel } from './MainContentPanel'
 import { PANEL_MIN_WIDTH, RADIUS_EDGE, RADIUS_INNER } from './panel-constants'
+import { getPanelSlotSizingStyle } from './panel-layout'
 
 interface PanelSlotProps {
   entry: PanelStackEntry
@@ -39,6 +40,8 @@ interface PanelSlotProps {
   proportion: number
   /** Optional sash element rendered before this panel */
   sash?: React.ReactNode
+  /** Whether this panel should absorb leftover horizontal space */
+  fillsRemainingSpace: boolean
   /** Compact (mobile) mode — shows back button in panel header */
   isCompact?: boolean
 }
@@ -52,6 +55,7 @@ function PanelSlotInner({
   isAtRightEdge,
   proportion,
   sash,
+  fillsRemainingSpace,
   isCompact,
 }: PanelSlotProps) {
   const { t } = useTranslation()
@@ -136,18 +140,13 @@ function PanelSlotInner({
           borderBottomLeftRadius: isCompact ? 0 : (isAtLeftEdge ? RADIUS_EDGE : RADIUS_INNER),
           borderTopRightRadius: RADIUS_INNER,
           borderBottomRightRadius: isCompact ? 0 : (isAtRightEdge ? RADIUS_EDGE : RADIUS_INNER),
-          ...(isOnly
-            ? { flexGrow: 1, minWidth: 0 }
-            : explicitWidth != null
-              ? {
-                  flexGrow: 0,
-                  flexShrink: 0,
-                  flexBasis: explicitWidth,
-                  width: explicitWidth,
-                  minWidth: PANEL_MIN_WIDTH,
-                }
-              : { flexGrow: proportion, flexShrink: 1, flexBasis: 0, minWidth: PANEL_MIN_WIDTH }
-          ),
+          ...getPanelSlotSizingStyle({
+            isOnly,
+            explicitWidth,
+            proportion,
+            minWidth: PANEL_MIN_WIDTH,
+            fillsRemainingSpace,
+          }),
         }}
       >
         <div className="h-full flex flex-col">
@@ -175,6 +174,7 @@ export const PanelSlot = memo(PanelSlotInner, (prev, next) => {
     prev.isAtLeftEdge === next.isAtLeftEdge &&
     prev.isAtRightEdge === next.isAtRightEdge &&
     prev.proportion === next.proportion &&
+    prev.fillsRemainingSpace === next.fillsRemainingSpace &&
     prev.isCompact === next.isCompact &&
     Boolean(prev.sash) === Boolean(next.sash)
   )
