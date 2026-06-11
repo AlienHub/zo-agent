@@ -295,7 +295,7 @@ function checkForExistingDownload(): { exists: boolean; version?: string } {
       const fileName = (info?.fileName || info?.path) as string | undefined
       if (fileName && fs.existsSync(path.join(cacheDir, fileName))) {
         mainLog.info(`[auto-update] Found existing download via update-info.json: ${fileName}`)
-        return { exists: true, version: info?.version as string }
+        return { exists: true, version: (info?.version as string | undefined) ?? inferVersionFromUpdateFileName(fileName) }
       }
     }
 
@@ -309,7 +309,7 @@ function checkForExistingDownload(): { exists: boolean; version?: string } {
     )
     if (downloadFile) {
       mainLog.info(`[auto-update] Found existing download file: ${downloadFile}`)
-      return { exists: true }
+      return { exists: true, version: inferVersionFromUpdateFileName(downloadFile) }
     }
 
     mainLog.info(`[auto-update] No existing download found in cache`)
@@ -318,6 +318,41 @@ function checkForExistingDownload(): { exists: boolean; version?: string } {
     mainLog.warn('[auto-update] Error checking for existing download:', error)
     return { exists: false }
   }
+}
+
+function inferVersionFromUpdateFileName(fileName: string): string | undefined {
+  const match = fileName.match(/(?:^|[-_])(\d+\.\d+\.\d+)(?:[-_.]|$)/)
+  return match?.[1]
+}
+
+async function refreshReadyUpdateState(): Promise<boolean> {
+  const internalState = checkElectronUpdaterState()
+  if (internalState.ready) {
+    updateInfo = {
+      ...updateInfo,
+      available: true,
+      latestVersion: internalState.version ?? updateInfo.latestVersion,
+      downloadState: 'ready',
+      downloadProgress: 100,
+    }
+    broadcastUpdateInfo()
+    return true
+  }
+
+  const existing = checkForExistingDownload()
+  if (existing.exists) {
+    updateInfo = {
+      ...updateInfo,
+      available: true,
+      latestVersion: existing.version ?? updateInfo.latestVersion,
+      downloadState: 'ready',
+      downloadProgress: 100,
+    }
+    broadcastUpdateInfo()
+    return true
+  }
+
+  return false
 }
 
 /**
@@ -382,6 +417,16 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
  * Then relaunches the app automatically.
  */
 export async function installUpdate(): Promise<void> {
+  if (updateInfo.downloadState !== 'ready') {
+    mainLog.warn(`[auto-update] installUpdate called while state is ${updateInfo.downloadState}; refreshing update state`)
+
+    if (!await refreshReadyUpdateState()) {
+      await checkForUpdates({ autoDownload: true })
+      await new Promise(resolve => setTimeout(resolve, 500))
+      await refreshReadyUpdateState()
+    }
+  }
+
   if (updateInfo.downloadState !== 'ready') {
     throw new Error('No update ready to install')
   }
