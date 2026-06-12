@@ -1,8 +1,11 @@
 import * as React from 'react'
+import { Provider as JotaiProvider, createStore, useSetAtom } from 'jotai'
 import type { ComponentEntry } from './types'
 import { AttachmentPreview } from '@/components/app-shell/AttachmentPreview'
 import { SetupAuthBanner } from '@/components/app-shell/SetupAuthBanner'
 import { TurnCard, type ActivityItem } from '@craft-agent/ui'
+import { ChatDisplay } from '@/components/app-shell/ChatDisplay'
+import SessionResourcePreviewPage from '@/pages/SessionResourcePreviewPage'
 import type { BackgroundTask } from '@/components/app-shell/ActiveTasksBar'
 import { ActiveOptionBadges } from '@/components/app-shell/ActiveOptionBadges'
 import { ChatInputZone, InputContainer } from '@/components/app-shell/input'
@@ -14,7 +17,16 @@ import { motion } from 'motion/react'
 import { ArrowUp, Paperclip, ChevronDown, Circle, Sparkles } from 'lucide-react'
 import type { LabelConfig } from '@craft-agent/shared/labels'
 import type { SessionStatus } from '@/config/session-status-config'
-import type { FileAttachment, PermissionRequest, PermissionMode } from '../../../shared/types'
+import type { Message } from '@craft-agent/core/types'
+import type { SessionMeta } from '@/atoms/sessions'
+import { loadedSessionsAtom, sessionAtomFamily, sessionMetaMapAtom } from '@/atoms/sessions'
+import { ActionRegistryProvider } from '@/actions/registry'
+import { DismissibleLayerProvider } from '@/context/DismissibleLayerContext'
+import { EscapeInterruptProvider } from '@/context/EscapeInterruptContext'
+import { FocusProvider } from '@/context/FocusContext'
+import { NavigationContext } from '@/contexts/NavigationContext'
+import { useOptionalAppShellContext } from '@/context/AppShellContext'
+import type { FileAttachment, NavigationState, PermissionRequest, PermissionMode, Session, SessionResourceDetails } from '../../../shared/types'
 import { cn } from '@/lib/utils'
 import { AppShellProvider } from '@/context/AppShellContext'
 import { ModalProvider } from '@/context/ModalContext'
@@ -850,6 +862,460 @@ function ActiveTasksBarContext({ tasks = sampleBackgroundTasks }: ActiveTasksBar
   )
 }
 
+const desktopChatMessages: Message[] = [
+  {
+    id: 'desktop-user-1',
+    role: 'user',
+    content: '帮我把这个 onboarding funnel 做成一个可以发给团队 review 的 HTML 报告，同时保留 markdown 版 brief。',
+    timestamp: Date.now() - 6 * 60_000,
+  },
+  {
+    id: 'desktop-assistant-1',
+    role: 'assistant',
+    content:
+      '可以。我会先把核心指标整理成一个简洁的 narrative，然后生成两个可预览产物：\n\n' +
+      '- `onboarding-funnel.html` 用于视觉 review\n' +
+      '- `onboarding-brief.md` 用于异步批注\n\n' +
+      '右侧预览面板现在显示 HTML 版本，你也可以切到 Markdown brief 查看结构。',
+    timestamp: Date.now() - 5 * 60_000,
+    turnId: 'desktop-turn-1',
+  },
+  {
+    id: 'desktop-user-2',
+    role: 'user',
+    content: '重点看激活率掉在哪一步，别做成 landing page。',
+    timestamp: Date.now() - 3 * 60_000,
+  },
+  {
+    id: 'desktop-assistant-2',
+    role: 'assistant',
+    content:
+      '收到。我把版式处理成工作台风格：左边保留对话上下文，右边是可读的预览结果。\n\n' +
+      '关键结论：从 `Connect account` 到 `First successful run` 掉了 **31%**，这一步需要补状态解释和失败恢复入口。\n\n' +
+      '```html\n' +
+      '<section class="metric">\n' +
+      '  <strong>31%</strong>\n' +
+      '  <span>drop between connect and first run</span>\n' +
+      '</section>\n' +
+      '```',
+    timestamp: Date.now() - 2 * 60_000,
+    turnId: 'desktop-turn-2',
+  },
+]
+
+const desktopChatSession: Session = {
+  id: 'desktop-chat-preview-session',
+  workspaceId: 'playground-workspace',
+  workspaceName: 'Playground',
+  name: 'Onboarding funnel review',
+  messages: desktopChatMessages,
+  isProcessing: false,
+  lastMessageAt: Date.now(),
+  permissionMode: 'ask',
+  sessionStatus: 'in-progress',
+  messageCount: desktopChatMessages.length,
+  lastFinalMessageId: 'desktop-assistant-2',
+  createdAt: Date.now() - 30 * 60_000,
+  workingDirectory: '/Users/demo/projects/craft-agent',
+  sessionFolderPath: '/Users/demo/projects/craft-agent/.craft/sessions/desktop-chat-preview-session',
+}
+
+const desktopChatSessionMeta: SessionMeta = {
+  id: desktopChatSession.id,
+  name: desktopChatSession.name,
+  workspaceId: desktopChatSession.workspaceId,
+  lastMessageAt: desktopChatSession.lastMessageAt,
+  sessionStatus: desktopChatSession.sessionStatus,
+  labels: ['feature', 'design'],
+  lastMessageRole: 'assistant',
+  messageCount: desktopChatMessages.length,
+  lastFinalMessageId: 'desktop-assistant-2',
+  workingDirectory: desktopChatSession.workingDirectory,
+}
+
+function DesktopChatHydrateAtoms({ children }: { children: React.ReactNode }) {
+  const setMetaMap = useSetAtom(sessionMetaMapAtom)
+  const setSession = useSetAtom(sessionAtomFamily(desktopChatSession.id))
+  const setLoadedSessions = useSetAtom(loadedSessionsAtom)
+
+  React.useEffect(() => {
+    setMetaMap(new Map([[desktopChatSessionMeta.id, desktopChatSessionMeta]]))
+    setSession(desktopChatSession)
+    setLoadedSessions(new Set([desktopChatSession.id]))
+  }, [setLoadedSessions, setMetaMap, setSession])
+
+  return <>{children}</>
+}
+
+const desktopPreviewPaths = {
+  html: '/Users/demo/projects/craft-agent/.craft/sessions/desktop-chat-preview-session/onboarding-funnel.html',
+  markdown: '/Users/demo/projects/craft-agent/.craft/sessions/desktop-chat-preview-session/onboarding-brief.md',
+} as const
+
+function DesktopChatAppShellOverride({ children }: { children: React.ReactNode }) {
+  const parent = useOptionalAppShellContext()
+  React.useEffect(() => {
+    ensureMockElectronAPI()
+    const electronAPI = (window as any).electronAPI
+    const previousReadFile = electronAPI.readFile
+    const previousSessionCommand = electronAPI.sessionCommand
+
+    electronAPI.readFile = async (path: string) => {
+      if (path === desktopPreviewPaths.html) return previewHtml
+      if (path === desktopPreviewPaths.markdown) return previewMarkdown
+      return previousReadFile ? previousReadFile(path) : ''
+    }
+    electronAPI.sessionCommand = async (sessionId: string, command: unknown) => {
+      console.log('[Playground] sessionCommand called:', sessionId, command)
+      return previousSessionCommand ? previousSessionCommand(sessionId, command) : { success: true }
+    }
+
+    return () => {
+      electronAPI.readFile = previousReadFile
+      electronAPI.sessionCommand = previousSessionCommand
+    }
+  }, [])
+
+  const value = React.useMemo(
+    () => ({
+      ...(parent ?? playgroundAppShellContext),
+      isCompactMode: false,
+      activeWorkspaceId: 'playground-workspace',
+      activeWorkspaceSlug: 'playground',
+      llmConnections: [
+        {
+          slug: 'anthropic-playground',
+          name: 'Anthropic',
+          providerType: 'anthropic' as const,
+          authType: 'api_key' as const,
+          defaultModel: 'claude-sonnet-4-6',
+          isAuthenticated: true,
+          createdAt: Date.now() - 86_400_000,
+        },
+      ],
+      onCreateSession: async () => desktopChatSession,
+      getDraftAttachmentRefs: () => [],
+      hydrateDraftAttachments: async () => [],
+      getDraft: () => '',
+      onSendMessage: (sessionId: string, message: string) => console.log('[Playground] Send message:', sessionId, message),
+      onOpenUrl: (url: string) => console.log('[Playground] Open URL:', url),
+      onOpenFile: (path: string) => console.log('[Playground] Open file:', path),
+      onSessionSourcesChange: (sessionId: string, slugs: string[]) => console.log('[Playground] Sources changed:', sessionId, slugs),
+      onSessionLabelsChange: (sessionId: string, labels: string[]) => console.log('[Playground] Labels changed:', sessionId, labels),
+      sessionStatuses: inputContainerSampleStatuses,
+      labels: inputContainerSampleLabels,
+      enabledSources: mockSources,
+      skills: [],
+    }),
+    [parent],
+  )
+
+  return <AppShellProvider value={value as any}>{children}</AppShellProvider>
+}
+
+function DesktopChatPlaygroundProviders({ children }: { children: React.ReactNode }) {
+  const store = React.useMemo(() => createStore(), [])
+  const navigationValue = React.useMemo(() => ({
+    navigate: (route: unknown, options?: unknown) => {
+      console.log('[Playground] Static navigation requested:', route, options)
+    },
+    isReady: true,
+    navigationState: {
+      navigator: 'sessions',
+      filter: { kind: 'allSessions' },
+      details: { type: 'session', sessionId: desktopChatSession.id },
+    } satisfies NavigationState,
+    canGoBack: false,
+    canGoForward: false,
+    goBack: () => {},
+    goForward: () => {},
+    updateRightSidebar: () => {},
+    toggleRightSidebar: () => {},
+    navigateToSource: () => {},
+    navigateToSession: () => {},
+  }), [])
+
+  return (
+    <JotaiProvider store={store}>
+      <DesktopChatHydrateAtoms>
+        <ActionRegistryProvider>
+          <DismissibleLayerProvider>
+            <ModalProvider>
+              <EscapeInterruptProvider>
+                <FocusProvider>
+                  <NavigationContext.Provider value={navigationValue}>
+                    <DesktopChatAppShellOverride>{children}</DesktopChatAppShellOverride>
+                  </NavigationContext.Provider>
+                </FocusProvider>
+              </EscapeInterruptProvider>
+            </ModalProvider>
+          </DismissibleLayerProvider>
+        </ActionRegistryProvider>
+      </DesktopChatHydrateAtoms>
+    </JotaiProvider>
+  )
+}
+
+const previewHtml = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #1f2937;
+        background: #fbfaf8;
+      }
+      .page { padding: 28px; }
+      .eyebrow { color: #64748b; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+      h1 { margin: 8px 0 18px; font-size: 30px; line-height: 1.1; color: #111827; }
+      .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 18px 0 22px; }
+      .metric { border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; background: white; }
+      .metric strong { display: block; font-size: 24px; color: #0f766e; }
+      .metric span { color: #64748b; font-size: 12px; }
+      .section { border-top: 1px solid #e5e7eb; padding-top: 18px; margin-top: 16px; }
+      .bar { height: 10px; border-radius: 999px; background: #e5e7eb; overflow: hidden; margin: 9px 0 4px; }
+      .bar > span { display: block; height: 100%; background: #0f766e; }
+      .row { margin-bottom: 14px; }
+      .row label { display: flex; justify-content: space-between; font-size: 13px; font-weight: 650; }
+      h2 { margin: 28px 0 10px; font-size: 18px; color: #111827; }
+      p, li { color: #475569; font-size: 13px; line-height: 1.55; }
+      ul { padding-left: 18px; }
+      table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+      th, td { border-bottom: 1px solid #e5e7eb; padding: 10px 0; text-align: left; }
+      th { color: #64748b; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+      .callout { border-left: 3px solid #0f766e; background: #f0fdfa; padding: 12px 14px; margin-top: 12px; border-radius: 8px; }
+      .timeline { display: grid; gap: 12px; margin-top: 12px; }
+      .event { border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; background: white; }
+      .event strong { display: block; color: #111827; margin-bottom: 4px; }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <div class="eyebrow">Activation Review</div>
+      <h1>Onboarding loses momentum after account connection</h1>
+      <div class="grid">
+        <div class="metric"><strong>74%</strong><span>start setup</span></div>
+        <div class="metric"><strong>51%</strong><span>connect account</span></div>
+        <div class="metric"><strong>20%</strong><span>first successful run</span></div>
+      </div>
+      <section class="section">
+        <div class="row"><label><span>Invite accepted</span><span>91%</span></label><div class="bar"><span style="width: 91%"></span></div></div>
+        <div class="row"><label><span>Workspace created</span><span>74%</span></label><div class="bar"><span style="width: 74%"></span></div></div>
+        <div class="row"><label><span>Account connected</span><span>51%</span></label><div class="bar"><span style="width: 51%"></span></div></div>
+        <div class="row"><label><span>First successful run</span><span>20%</span></label><div class="bar"><span style="width: 20%"></span></div></div>
+      </section>
+      <section class="section">
+        <p><strong>Recommendation:</strong> add an inline recovery card when the first run fails, and keep the user inside the setup flow instead of sending them to settings.</p>
+      </section>
+      <section class="section">
+        <h2>What changed in the long-form review</h2>
+        <p>The report is intentionally document-shaped rather than landing-page-shaped. It keeps the operational question visible: where does activation fall apart, and what does the team need to change next?</p>
+        <div class="callout">
+          <p><strong>Primary issue:</strong> users believe connection is the finish line. The product treats the first successful run as the finish line, but the UI does not make that next step explicit.</p>
+        </div>
+      </section>
+      <section class="section">
+        <h2>Funnel diagnostic table</h2>
+        <table>
+          <thead>
+            <tr><th>Step</th><th>Conversion</th><th>Likely friction</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Invite accepted</td><td>91%</td><td>Clear email and workspace context</td></tr>
+            <tr><td>Workspace created</td><td>74%</td><td>Some users pause on naming and team scope</td></tr>
+            <tr><td>Account connected</td><td>51%</td><td>OAuth anxiety, unclear permission language</td></tr>
+            <tr><td>First successful run</td><td>20%</td><td>No recovery path when credentials or scopes fail</td></tr>
+          </tbody>
+        </table>
+      </section>
+      <section class="section">
+        <h2>Timeline of the first-run experience</h2>
+        <div class="timeline">
+          <div class="event"><strong>0:00 - Account connected</strong><p>User sees a success state, but no explanation of what will happen next.</p></div>
+          <div class="event"><strong>0:15 - First run begins</strong><p>The system checks permissions and reachable resources. Failures feel like product failure rather than setup feedback.</p></div>
+          <div class="event"><strong>0:45 - Recovery moment</strong><p>The user needs one clear retry action, a reason string, and a way to send diagnostics without leaving setup.</p></div>
+        </div>
+      </section>
+      <section class="section">
+        <h2>Implementation checklist</h2>
+        <ul>
+          <li>Add a persistent "First run" step after account connection.</li>
+          <li>Render OAuth scope failures as recoverable states.</li>
+          <li>Keep retry and diagnostics inside the setup panel.</li>
+          <li>Log first-run failure reasons as structured analytics events.</li>
+          <li>Run a week-long cohort comparison against the current flow.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>`
+
+const previewMarkdown = `# Onboarding Funnel Brief
+
+This is the Markdown companion to the HTML review. It is longer on purpose so the preview panel can exercise real document scrolling, annotations, copy actions, and dense text rhythm.
+
+## Finding
+
+The largest drop happens between **Account connected** and **First successful run**.
+
+| Step | Conversion |
+| --- | ---: |
+| Invite accepted | 91% |
+| Workspace created | 74% |
+| Account connected | 51% |
+| First successful run | 20% |
+
+## Recommendation
+
+- Explain what the first run is checking.
+- Keep failed credentials recoverable inside setup.
+- Add one retry CTA and one "send logs" escape hatch.
+
+## Narrative
+
+The current onboarding flow makes account connection feel like completion. That is understandable from the user's point of view: OAuth opens, permission is granted, and the product returns them to a success-looking screen. From the product's point of view, however, the work is not complete until the first run succeeds.
+
+This mismatch creates a fragile moment. When the first run fails, the user has already emotionally moved on from setup. The product then asks them to debug credentials, scopes, or reachable resources without explaining why this extra step exists.
+
+## Funnel Breakdown
+
+| Step | Conversion | Notes |
+| --- | ---: | --- |
+| Invite accepted | 91% | Email and workspace context are clear. |
+| Workspace created | 74% | Naming and team scope create mild hesitation. |
+| Account connected | 51% | Permission language needs more confidence. |
+| First successful run | 20% | This is the primary drop-off. |
+
+## Recovery Design
+
+The failed-run state should stay inside setup and answer three questions:
+
+1. What did the product try to do?
+2. Why did it fail?
+3. What is the smallest next action?
+
+Recommended UI:
+
+- A compact failure card under the first-run step.
+- A retry button as the primary action.
+- A secondary "send diagnostics" action.
+- A link to permissions only when the error is specifically scope-related.
+
+## Analytics Events
+
+Capture these events for the next cohort:
+
+- \`setup_first_run_started\`
+- \`setup_first_run_succeeded\`
+- \`setup_first_run_failed\`
+- \`setup_first_run_retry_clicked\`
+- \`setup_diagnostics_sent\`
+
+Each failure event should include a normalized reason, provider, connection age, and whether the user had already left and returned to setup.
+
+## Open Questions
+
+- Should a successful test run be required before the user reaches the main app?
+- Do we need provider-specific copy for GitHub, Google Drive, and Linear?
+- Can we infer missing scopes before the first run?
+- Should diagnostics be sent to support, workspace admins, or both?
+
+## Next Steps
+
+- Prototype the failure card in the setup panel.
+- Run five usability sessions with intentionally broken OAuth scopes.
+- Ship analytics first, then UI treatment.
+- Review cohort movement after one week.
+`
+
+type DesktopChatPreviewMode = 'html' | 'markdown'
+type DesktopChatPreviewSurface = 'flush' | 'raised'
+
+interface PreviewResourcePanelProps {
+  resourceDetails: SessionResourceDetails
+  previewSurface: DesktopChatPreviewSurface
+}
+
+function PreviewResourcePanel({
+  resourceDetails,
+  previewSurface,
+}: PreviewResourcePanelProps) {
+  const surfaceClassName = cn(
+    'h-full min-h-0',
+    previewSurface === 'flush' && '[&_.bg-foreground-3]:bg-background [&_.shadow-strong]:shadow-middle'
+  )
+
+  return (
+    <div className={surfaceClassName}>
+      <SessionResourcePreviewPage resourceDetails={resourceDetails} />
+    </div>
+  )
+}
+
+function DesktopChatWithPreview({
+  previewMode = 'html',
+  previewSurface = 'flush',
+}: {
+  previewMode?: DesktopChatPreviewMode
+  previewSurface?: DesktopChatPreviewSurface
+}) {
+  const [mode, setMode] = React.useState<PermissionMode>('ask')
+  const [model, setModel] = React.useState('claude-sonnet-4-6')
+  const [input, setInput] = React.useState('')
+
+  const resourceDetails = React.useMemo<SessionResourceDetails>(() => ({
+    type: 'resource',
+    sessionId: desktopChatSession.id,
+    resource: {
+      kind: 'file',
+      target: previewMode === 'html' ? desktopPreviewPaths.html : desktopPreviewPaths.markdown,
+    },
+  }), [previewMode])
+
+  return (
+    <DesktopChatPlaygroundProviders>
+      <div className="h-full w-full bg-background p-2">
+        <div className="flex h-full min-h-0 gap-[6px] overflow-hidden">
+          <section className="min-w-[460px] flex-[1.05] overflow-hidden rounded-[10px] border border-border bg-background shadow-middle">
+            <ChatDisplay
+              session={desktopChatSession}
+              onSendMessage={(message) => console.log('[Playground] Desktop chat send:', message)}
+              onOpenFile={(path) => console.log('[Playground] Open file:', path)}
+              onOpenUrl={(url) => console.log('[Playground] Open URL:', url)}
+              currentModel={model}
+              onModelChange={setModel}
+              permissionMode={mode}
+              onPermissionModeChange={setMode}
+              inputValue={input}
+              onInputChange={setInput}
+              sources={mockSources}
+              onSourcesChange={(slugs) => console.log('[Playground] Sources changed:', slugs)}
+              skills={[]}
+              labels={inputContainerSampleLabels}
+              onLabelsChange={(labels) => console.log('[Playground] Labels changed:', labels)}
+              sessionStatuses={inputContainerSampleStatuses}
+              onSessionStatusChange={(state) => console.log('[Playground] Status changed:', state)}
+              workspaceId="playground-workspace"
+              workingDirectory="/Users/demo/projects/craft-agent"
+              onWorkingDirectoryChange={(path) => console.log('[Playground] Working directory changed:', path)}
+              sessionFolderPath="/Users/demo/projects/craft-agent/.craft/sessions/desktop-chat-preview-session"
+            />
+          </section>
+
+          <section className="min-w-[420px] flex-[0.95] overflow-hidden rounded-[10px] border border-border bg-background shadow-middle">
+            <PreviewResourcePanel
+              resourceDetails={resourceDetails}
+              previewSurface={previewSurface}
+            />
+          </section>
+        </div>
+      </div>
+    </DesktopChatPlaygroundProviders>
+  )
+}
+
 /**
  * Interactive test component for Permission UI ↔ Input View animation transitions
  * Allows toggling between states to inspect the animate in/out behavior
@@ -1236,6 +1702,48 @@ export const chatComponents: ComponentEntry[] = [
     mockData: () => ({
       tasks: sampleBackgroundTasks,
     }),
+  },
+  {
+    id: 'desktop-chat-with-preview',
+    name: 'Desktop Chat + Preview',
+    category: 'Chat',
+    description: 'Full desktop chat surface with the production ChatDisplay on the left and HTML/Markdown preview panel on the right.',
+    component: DesktopChatWithPreview,
+    layout: 'full',
+    previewOverflow: 'hidden',
+    props: [
+      {
+        name: 'previewMode',
+        description: 'Initial preview panel mode',
+        control: {
+          type: 'select',
+          options: [
+            { label: 'HTML', value: 'html' },
+            { label: 'Markdown', value: 'markdown' },
+          ],
+        },
+        defaultValue: 'html',
+      },
+      {
+        name: 'previewSurface',
+        description: 'Preview content background treatment',
+        control: {
+          type: 'select',
+          options: [
+            { label: 'Flush with panel', value: 'flush' },
+            { label: 'Raised canvas', value: 'raised' },
+          ],
+        },
+        defaultValue: 'flush',
+      },
+    ],
+    variants: [
+      { name: 'HTML · Flush', props: { previewMode: 'html', previewSurface: 'flush' } },
+      { name: 'Markdown · Flush', props: { previewMode: 'markdown', previewSurface: 'flush' } },
+      { name: 'HTML · Raised', props: { previewMode: 'html', previewSurface: 'raised' } },
+      { name: 'Markdown · Raised', props: { previewMode: 'markdown', previewSurface: 'raised' } },
+    ],
+    mockData: () => ({}),
   },
   {
     id: 'input-container',

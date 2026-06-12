@@ -263,7 +263,10 @@ export default function SessionResourcePreviewPage({
   const [loadError, setLoadError] = React.useState<string | null>(null)
   const [isLoading, setIsLoading] = React.useState(false)
   const [copiedText, setCopiedText] = React.useState(false)
+  const [htmlPreviewHeight, setHtmlPreviewHeight] = React.useState(480)
   const lastTextContentRef = React.useRef<string | null>(null)
+  const htmlPreviewIframeRef = React.useRef<HTMLIFrameElement | null>(null)
+  const htmlPreviewResizeCleanupRef = React.useRef<(() => void) | null>(null)
   const resourceKind = resourceDetails.resource.kind
   const resourceTarget = resourceDetails.resource.target
 
@@ -458,6 +461,48 @@ export default function SessionResourcePreviewPage({
     toast.success(t('toast.copied'))
   }, [t, textContent])
 
+  const updateHtmlPreviewHeight = React.useCallback(() => {
+    const iframe = htmlPreviewIframeRef.current
+    const doc = iframe?.contentDocument
+    if (!doc) return
+
+    const bodyHeight = doc.body?.scrollHeight ?? 0
+    const documentHeight = doc.documentElement?.scrollHeight ?? 0
+    setHtmlPreviewHeight(Math.max(1, Math.ceil(bodyHeight), Math.ceil(documentHeight)))
+  }, [])
+
+  const handleHtmlPreviewLoad = React.useCallback(() => {
+    htmlPreviewResizeCleanupRef.current?.()
+    htmlPreviewResizeCleanupRef.current = null
+    updateHtmlPreviewHeight()
+
+    const iframe = htmlPreviewIframeRef.current
+    const doc = iframe?.contentDocument
+    if (!doc) return
+
+    const resizeObserver = new ResizeObserver(updateHtmlPreviewHeight)
+    if (doc.documentElement) resizeObserver.observe(doc.documentElement)
+    if (doc.body) resizeObserver.observe(doc.body)
+    const rafId = window.requestAnimationFrame(updateHtmlPreviewHeight)
+
+    htmlPreviewResizeCleanupRef.current = () => {
+      window.cancelAnimationFrame(rafId)
+      resizeObserver.disconnect()
+    }
+  }, [updateHtmlPreviewHeight])
+
+  React.useEffect(() => {
+    return () => {
+      htmlPreviewResizeCleanupRef.current?.()
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (classificationType === 'html') {
+      setHtmlPreviewHeight(480)
+    }
+  }, [classificationType, textContent])
+
   const handleOpenInAppBrowser = React.useCallback(async () => {
     try {
       await openInAppBrowser({
@@ -535,7 +580,7 @@ export default function SessionResourcePreviewPage({
   }, [onSendMessage, resourceAnnotations, resourceDetails.sessionId, resourceRef])
 
   const headerActions = (
-    <>
+    <div className="flex items-center gap-1.5">
       {supportsLiveBrowser && (
         <PanelHeaderCenterButton
           icon={<Monitor className="h-4 w-4" />}
@@ -548,7 +593,7 @@ export default function SessionResourcePreviewPage({
         onClick={openExternally}
         tooltip={t('common.open')}
       />
-    </>
+    </div>
   )
 
   const desktopTitleMenu = (
@@ -770,14 +815,30 @@ export default function SessionResourcePreviewPage({
       }
 
       return (
-        <div className="h-full bg-foreground-3 p-4">
-          <div className="mx-auto h-full w-full max-w-[1280px] overflow-hidden rounded-[16px] bg-white shadow-strong">
-            <iframe
-              srcDoc={injectHtmlPreviewBase(textContent ?? '', resource.target)}
-              title={fileTitle}
-              className="h-full w-full border-0"
-              sandbox="allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"
-            />
+        <div className="h-full min-h-0 bg-foreground-3">
+          <div
+            className="h-full"
+            style={{
+              maskImage: 'linear-gradient(to bottom, transparent 0%, black 32px, black calc(100% - 32px), transparent 100%)',
+              WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 32px, black calc(100% - 32px), transparent 100%)',
+            }}
+          >
+            <ScrollArea className="h-full min-w-0">
+              <div className="mx-auto min-h-full w-full max-w-[1280px] px-4 py-3">
+                <div className="mx-auto w-full overflow-hidden rounded-[16px] bg-white shadow-strong">
+                  <iframe
+                    ref={htmlPreviewIframeRef}
+                    srcDoc={injectHtmlPreviewBase(textContent ?? '', resource.target)}
+                    title={fileTitle}
+                    className="block w-full border-0"
+                    style={{ height: htmlPreviewHeight }}
+                    sandbox="allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"
+                    scrolling="no"
+                    onLoad={handleHtmlPreviewLoad}
+                  />
+                </div>
+              </div>
+            </ScrollArea>
           </div>
         </div>
       )
