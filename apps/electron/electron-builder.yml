@@ -49,7 +49,6 @@ files:
   - resources/bin/ical-tool.cmd
   # Include bundled uv binary (platform-specific, only the relevant one ships per build)
   - resources/bin/darwin-arm64/**/*
-  - resources/bin/darwin-x64/**/*
   - resources/bin/win32-x64/**/*
   - resources/bin/linux-x64/**/*
   # Include bundled Bun runtime (platform-specific, set by build script)
@@ -58,7 +57,7 @@ files:
   - "!node_modules/**/*"
 
 # Since SDK 0.2.113 the SDK ships a thin core (`@anthropic-ai/claude-agent-sdk`)
-# and a per-platform optional dependency (`-darwin-arm64`, `-darwin-x64`, etc.)
+# and a per-platform optional dependency (`-darwin-arm64`, `-win32-x64`, etc.)
 # containing the ~210 MB native `claude` binary. The afterPack hook copies the
 # core SDK, target-arch native binary alias, and ripgrep into the packaged app
 # for each platform/arch, and fails the build if any required runtime file is
@@ -93,11 +92,9 @@ mac:
     - target: dmg
       arch:
         - arm64
-        - x64
     - target: zip
       arch:
         - arm64
-        - x64
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
@@ -108,6 +105,7 @@ mac:
       to: messaging-whatsapp-worker/worker.cjs
   # Exclude binaries for other platforms
   files:
+    - "!**/resources/bin/darwin-x64/**"
     - "!**/resources/bin/win32-*/**"
     - "!**/resources/bin/linux-*/**"
   # Use predictable naming for macOS packages (applies to zip; dmg uses its own config below)

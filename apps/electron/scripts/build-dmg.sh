@@ -44,10 +44,10 @@ UPLOAD_SCRIPT=false
 
 show_help() {
     cat << EOF
-Usage: build-dmg.sh [arm64|x64] [--upload] [--latest] [--script]
+Usage: build-dmg.sh [arm64] [--upload] [--latest] [--script]
 
 Arguments:
-  arm64|x64    Target architecture (default: arm64)
+  arm64        Target architecture (default: arm64)
   --upload     Upload DMG to S3 after building
   --latest     Also update electron/latest (requires --upload)
   --script     Also upload install-app.sh (requires --upload)
@@ -64,7 +64,11 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        arm64|x64)     ARCH="$1"; shift ;;
+        arm64)         ARCH="$1"; shift ;;
+        x64)
+            echo "ERROR: macOS Intel (x64) builds are no longer supported. Use arm64."
+            exit 1
+            ;;
         --upload)      UPLOAD=true; shift ;;
         --latest)      UPLOAD_LATEST=true; shift ;;
         --script)      UPLOAD_SCRIPT=true; shift ;;
@@ -100,7 +104,7 @@ bun install
 # 3. Download Bun binary with checksum verification
 echo "Downloading Bun ${BUN_VERSION} for darwin-${ARCH}..."
 mkdir -p "$ELECTRON_DIR/vendor/bun"
-BUN_DOWNLOAD="bun-darwin-$([ "$ARCH" = "arm64" ] && echo "aarch64" || echo "x64")"
+BUN_DOWNLOAD="bun-darwin-aarch64"
 
 # Create temp directory to avoid race conditions
 TEMP_DIR=$(mktemp -d)
@@ -142,7 +146,7 @@ cp -r "$SDK_SOURCE" "$ELECTRON_DIR/node_modules/@anthropic-ai/"
 # 4a. Resolve the target arch's binary package. If the host arch matches the
 #     target, bun install already placed it in node_modules/@anthropic-ai/.
 #     Otherwise, fetch and unpack the matching tarball directly via npm.
-SDK_BIN_PKG="claude-agent-sdk-darwin-${ARCH}"
+SDK_BIN_PKG="claude-agent-sdk-darwin-arm64"
 SDK_BIN_SOURCE="$ROOT_DIR/node_modules/@anthropic-ai/${SDK_BIN_PKG}"
 if [ ! -d "$SDK_BIN_SOURCE" ]; then
     echo "Cross-arch build: ${SDK_BIN_PKG} not in node_modules — fetching from npm..."
