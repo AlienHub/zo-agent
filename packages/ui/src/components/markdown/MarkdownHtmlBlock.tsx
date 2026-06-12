@@ -29,7 +29,7 @@
  */
 
 import * as React from 'react'
-import { Globe, Maximize2, Monitor } from 'lucide-react'
+import { ExternalLink, Globe, Maximize2, Monitor } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { CodeBlock } from './CodeBlock'
 import { HTMLPreviewOverlay } from '../overlay/HTMLPreviewOverlay'
@@ -130,9 +130,10 @@ function toBrowserTarget(sourcePath: string): { url?: string; filePath?: string 
 export interface MarkdownHtmlBlockProps {
   code: string
   className?: string
+  onFileClick?: (path: string) => void
 }
 
-export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
+export function MarkdownHtmlBlock({ code, className, onFileClick }: MarkdownHtmlBlockProps) {
   const { t } = useTranslation()
   const { onReadFile, onOpenInAppBrowser } = usePlatform()
 
@@ -201,6 +202,7 @@ export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
 
   const hasCachedContent = Object.keys(contentCache).length > 0
   const hasMultiple = items.length > 1
+  const canOpenActiveItem = Boolean(activeItem?.src && onFileClick)
 
   const handleOpenInAppBrowser = React.useCallback(() => {
     if (!activeItem?.src || !onOpenInAppBrowser) return
@@ -236,6 +238,24 @@ export function MarkdownHtmlBlock({ code, className }: MarkdownHtmlBlockProps) {
           </span>
           <div className="flex items-center gap-1">
             <ItemNavigator items={items} activeIndex={activeIndex} onSelect={setActiveIndex} />
+            {canOpenActiveItem && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (activeItem?.src) onFileClick?.(activeItem.src)
+                }}
+                className={cn(
+                  "p-1 rounded-[6px] transition-all select-none",
+                  "bg-background shadow-minimal",
+                  "text-muted-foreground/50 hover:text-foreground",
+                  "focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                )}
+                title={t('sessionMenu.openInNewPanel')}
+                aria-label={t('sessionMenu.openInNewPanel')}
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </button>
+            )}
             {activeItem?.src && onOpenInAppBrowser && (
               <button
                 type="button"

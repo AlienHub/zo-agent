@@ -295,7 +295,7 @@ function createComponents(
           }
           // HTML preview blocks → sandboxed iframe
           if (match?.[1] === 'html-preview' && isPreviewEnabled('html-preview')) {
-            return wrapBlock('html-preview', code, <MarkdownHtmlBlock code={code} className="my-2" />, props.node?.position)
+            return wrapBlock('html-preview', code, <MarkdownHtmlBlock code={code} className="my-2" onFileClick={onFileClick} />, props.node?.position)
           }
           // PDF preview blocks → inline first page with expand to full viewer
           if (match?.[1] === 'pdf-preview' && isPreviewEnabled('pdf-preview')) {
@@ -433,7 +433,7 @@ function createComponents(
         }
         // HTML preview blocks → sandboxed iframe
         if (match?.[1] === 'html-preview' && isPreviewEnabled('html-preview')) {
-          return wrapBlock('html-preview', code, <MarkdownHtmlBlock code={code} className="my-2" />, props.node?.position)
+          return wrapBlock('html-preview', code, <MarkdownHtmlBlock code={code} className="my-2" onFileClick={onFileClick} />, props.node?.position)
         }
         // PDF preview blocks → inline first page with expand to full viewer
         if (match?.[1] === 'pdf-preview' && isPreviewEnabled('pdf-preview')) {
