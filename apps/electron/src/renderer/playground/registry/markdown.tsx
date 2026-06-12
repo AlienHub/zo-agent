@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { ComponentEntry } from './types'
-import { Markdown, CollapsibleMarkdownProvider, CodeBlock, InlineCode, MarkdownDatatableBlock, MarkdownSpreadsheetBlock, MarkdownImageBlock, ImageCardStack, PlatformProvider } from '@craft-agent/ui'
+import { Markdown, CollapsibleMarkdownProvider, CodeBlock, InlineCode, MarkdownDatatableBlock, MarkdownSpreadsheetBlock, MarkdownImageBlock, MarkdownHtmlBlock, MarkdownDocBlock, ImageCardStack, PlatformProvider } from '@craft-agent/ui'
 
 const sampleMarkdown = `# Welcome to Markdown
 
@@ -182,6 +182,132 @@ const MOCK_IMAGE_DATA: Record<string, string> = {
   '/mock/images/gallery-5.png': 'https://picsum.photos/id/1067/1200/900',
 }
 
+const MOCK_HTML_DATA: Record<string, string> = {
+  '/mock/html/report.html': `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        margin: 0;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        color: #17202a;
+        background: #f8fafc;
+      }
+      main {
+        padding: 28px;
+      }
+      .hero {
+        border: 1px solid #dbe3ea;
+        border-radius: 14px;
+        padding: 22px;
+        background: #ffffff;
+        box-shadow: 0 16px 42px rgba(15, 23, 42, 0.08);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 26px;
+        letter-spacing: 0;
+      }
+      p {
+        margin: 0;
+        color: #536171;
+        line-height: 1.55;
+      }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 18px;
+      }
+      .metric {
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        padding: 14px;
+        background: #fbfdff;
+      }
+      .label {
+        color: #64748b;
+        font-size: 12px;
+      }
+      .value {
+        margin-top: 6px;
+        font-size: 24px;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <h1>HTML Preview Report</h1>
+        <p>This mock document is loaded through MarkdownHtmlBlock, so the header actions can be checked in isolation.</p>
+        <div class="metrics">
+          <div class="metric"><div class="label">Open Panel</div><div class="value">Ready</div></div>
+          <div class="metric"><div class="label">Fullscreen</div><div class="value">Ready</div></div>
+          <div class="metric"><div class="label">Live Browser</div><div class="value">Mock</div></div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>`,
+  '/mock/html/email.html': `<!doctype html>
+<html>
+  <body style="margin:0;background:#eef2f7;font-family:Arial,sans-serif;color:#1f2937">
+    <table role="presentation" style="width:100%;padding:24px">
+      <tr>
+        <td>
+          <table role="presentation" style="max-width:560px;margin:auto;background:white;border:1px solid #dbe4ef;border-radius:12px;overflow:hidden">
+            <tr>
+              <td style="padding:22px;background:#0f766e;color:white">
+                <h1 style="margin:0;font-size:22px">Product Update</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:22px;line-height:1.55">
+                <p style="margin-top:0">This email-shaped fixture checks compact HTML layouts inside the preview iframe.</p>
+                <a href="https://example.com" style="display:inline-block;margin-top:10px;color:#0f766e;font-weight:bold">Read more</a>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`,
+}
+
+const MOCK_MARKDOWN_DATA: Record<string, string> = {
+  '/mock/markdown/spec.md': `# Markdown Preview Spec
+
+This mock document is loaded through \`MarkdownDocBlock\`.
+
+## Acceptance
+
+- Open panel action is visible
+- Fullscreen action is visible
+- Nested markdown renders through the shared renderer
+
+| Area | Status |
+| --- | --- |
+| Inline preview | Ready |
+| Panel handoff | Mocked |
+
+\`\`\`typescript
+export const preview = 'markdown-preview'
+\`\`\`
+`,
+  '/mock/markdown/notes.md': `# Release Notes Draft
+
+## Added
+
+- Playground coverage for \`markdown-preview\`
+- A tabbed fixture for multi-document preview checks
+
+> This is intentionally short so narrow preview sizes stay readable.
+`,
+}
+
 function MarkdownImageBlockWrapper({ children }: { children: React.ReactNode }) {
   return (
     <PlatformProvider
@@ -193,6 +319,47 @@ function MarkdownImageBlockWrapper({ children }: { children: React.ReactNode }) 
             throw new Error(`Mock image not found for: ${path}`)
           }
           return dataUrl
+        },
+      }}
+    >
+      {children}
+    </PlatformProvider>
+  )
+}
+
+function MarkdownHtmlBlockWrapper({ children }: { children: React.ReactNode }) {
+  return (
+    <PlatformProvider
+      actions={{
+        onReadFile: async (path: string) => {
+          await new Promise((resolve) => setTimeout(resolve, 120))
+          const html = MOCK_HTML_DATA[path]
+          if (!html) {
+            throw new Error(`Mock HTML not found for: ${path}`)
+          }
+          return html
+        },
+        onOpenInAppBrowser: (target) => {
+          console.log('[Playground] Open Live Browser:', target)
+        },
+      }}
+    >
+      {children}
+    </PlatformProvider>
+  )
+}
+
+function MarkdownDocBlockWrapper({ children }: { children: React.ReactNode }) {
+  return (
+    <PlatformProvider
+      actions={{
+        onReadFile: async (path: string) => {
+          await new Promise((resolve) => setTimeout(resolve, 120))
+          const markdown = MOCK_MARKDOWN_DATA[path]
+          if (!markdown) {
+            throw new Error(`Mock markdown not found for: ${path}`)
+          }
+          return markdown
         },
       }}
     >
@@ -515,6 +682,125 @@ export const markdownComponents: ComponentEntry[] = [
         props: { code: '{ invalid json here' },
       },
     ],
+  },
+  {
+    id: 'markdown-html-block',
+    name: 'MarkdownHtmlBlock',
+    category: 'Markdown',
+    description: 'Renders ```html-preview blocks with sandboxed iframe, fullscreen, Live Browser, and open-panel actions.',
+    component: MarkdownHtmlBlock,
+    wrapper: MarkdownHtmlBlockWrapper,
+    layout: 'top',
+    props: [
+      {
+        name: 'code',
+        description: 'JSON spec for html-preview block.',
+        control: { type: 'textarea', rows: 12 },
+        defaultValue: JSON.stringify({
+          title: 'HTML Preview',
+          src: '/mock/html/report.html',
+        }, null, 2),
+      },
+    ],
+    variants: [
+      {
+        name: 'Single HTML',
+        props: {
+          code: JSON.stringify({
+            title: 'HTML Preview',
+            src: '/mock/html/report.html',
+          }, null, 2),
+        },
+      },
+      {
+        name: 'Tabbed HTML',
+        props: {
+          code: JSON.stringify({
+            title: 'HTML Preview Set',
+            items: [
+              { src: '/mock/html/report.html', label: 'Report' },
+              { src: '/mock/html/email.html', label: 'Email' },
+            ],
+          }, null, 2),
+        },
+      },
+      {
+        name: 'Missing File Error',
+        props: {
+          code: JSON.stringify({
+            title: 'Missing HTML',
+            src: '/mock/html/does-not-exist.html',
+          }, null, 2),
+        },
+      },
+      {
+        name: 'Invalid JSON (Fallback)',
+        props: { code: '{ invalid json here' },
+      },
+    ],
+    mockData: () => ({
+      onFileClick: (path: string) => console.log('[Playground] Open in panel:', path),
+    }),
+  },
+  {
+    id: 'markdown-doc-block',
+    name: 'MarkdownDocBlock',
+    category: 'Markdown',
+    description: 'Renders ```markdown-preview blocks with rendered markdown, fullscreen, tabs, and open-panel actions.',
+    component: MarkdownDocBlock,
+    wrapper: MarkdownDocBlockWrapper,
+    layout: 'top',
+    props: [
+      {
+        name: 'code',
+        description: 'JSON spec for markdown-preview block.',
+        control: { type: 'textarea', rows: 12 },
+        defaultValue: JSON.stringify({
+          title: 'Markdown Preview',
+          src: '/mock/markdown/spec.md',
+        }, null, 2),
+      },
+    ],
+    variants: [
+      {
+        name: 'Single Markdown',
+        props: {
+          code: JSON.stringify({
+            title: 'Markdown Preview',
+            src: '/mock/markdown/spec.md',
+          }, null, 2),
+        },
+      },
+      {
+        name: 'Tabbed Markdown',
+        props: {
+          code: JSON.stringify({
+            title: 'Markdown Preview Set',
+            items: [
+              { src: '/mock/markdown/spec.md', label: 'Spec' },
+              { src: '/mock/markdown/notes.md', label: 'Notes' },
+            ],
+          }, null, 2),
+        },
+      },
+      {
+        name: 'Missing File Error',
+        props: {
+          code: JSON.stringify({
+            title: 'Missing Markdown',
+            src: '/mock/markdown/does-not-exist.md',
+          }, null, 2),
+        },
+      },
+      {
+        name: 'Invalid JSON (Fallback)',
+        props: { code: '{ invalid json here' },
+      },
+    ],
+    mockData: () => ({
+      onUrlClick: (url: string) => console.log('[Playground] URL clicked:', url),
+      onFileClick: (path: string) => console.log('[Playground] Open in panel:', path),
+    }),
   },
   {
     id: 'image-card-stack',

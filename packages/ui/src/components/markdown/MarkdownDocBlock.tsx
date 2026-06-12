@@ -57,6 +57,7 @@ class MarkdownDocBlockErrorBoundary extends React.Component<
 }
 
 const DISABLE_INNER_MARKDOWN_PREVIEW: ReadonlySet<'markdown-preview'> = new Set(['markdown-preview'])
+const PREVIEW_FADE_MIN_OVERFLOW_PX = 40
 
 export interface MarkdownDocBlockProps {
   code: string
@@ -78,6 +79,8 @@ export function MarkdownDocBlock({ code, className, onUrlClick, onFileClick }: M
   const [contentCache, setContentCache] = React.useState<Record<string, string>>({})
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const contentViewportRef = React.useRef<HTMLDivElement>(null)
+  const [isContentOverflowing, setIsContentOverflowing] = React.useState(false)
 
   const activeItem = items[activeIndex]
   const activeContent = activeItem ? contentCache[activeItem.src] : undefined
@@ -115,6 +118,26 @@ export function MarkdownDocBlock({ code, className, onUrlClick, onFileClick }: M
       })
     return () => { cancelled = true }
   }, [activeItem?.src, onReadFile, contentCache])
+
+  React.useLayoutEffect(() => {
+    const element = contentViewportRef.current
+    if (!element) return
+
+    const updateOverflow = () => {
+      setIsContentOverflowing(element.scrollHeight > element.clientHeight + PREVIEW_FADE_MIN_OVERFLOW_PX)
+    }
+
+    updateOverflow()
+
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(updateOverflow)
+    observer.observe(element)
+    for (const child of Array.from(element.children)) {
+      observer.observe(child)
+    }
+
+    return () => observer.disconnect()
+  }, [activeContent, error, loading, isFullscreen])
 
   const fallback = <CodeBlock code={code} language="json" mode="full" className={className} />
 
@@ -168,6 +191,7 @@ export function MarkdownDocBlock({ code, className, onUrlClick, onFileClick }: M
         </div>
 
         <div
+          ref={contentViewportRef}
           className={cn(
             'relative px-3 py-2 overflow-auto',
             isFullscreen ? 'max-h-[80vh]' : 'max-h-[400px]'
@@ -192,7 +216,7 @@ export function MarkdownDocBlock({ code, className, onUrlClick, onFileClick }: M
             <div className="py-6 text-center text-destructive/70 text-[13px]">{error}</div>
           )}
 
-          {!isFullscreen && activeContent !== undefined && (
+          {!isFullscreen && activeContent !== undefined && isContentOverflowing && (
             <div
               className="absolute bottom-0 left-0 right-0 h-8 pointer-events-none"
               style={{

@@ -78,6 +78,8 @@ export {
   MarkdownDatatableBlock,
   MarkdownSpreadsheetBlock,
   MarkdownImageBlock,
+  MarkdownHtmlBlock,
+  MarkdownDocBlock,
   ImageCardStack,
   type MarkdownProps,
   type RenderMode,
@@ -87,6 +89,8 @@ export {
   type MarkdownDatatableBlockProps,
   type MarkdownSpreadsheetBlockProps,
   type MarkdownImageBlockProps,
+  type MarkdownHtmlBlockProps,
+  type MarkdownDocBlockProps,
   type ImageCardStackProps,
   type ImageCardStackItem,
 } from './components/markdown'
