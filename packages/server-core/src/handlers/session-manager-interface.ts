@@ -18,6 +18,7 @@ import type {
   FileAttachment,
   SendMessageOptions,
   PermissionResponseOptions,
+  SessionPermissionAllowances,
   CredentialResponse,
   PermissionModeState,
   UnreadSummary,
@@ -123,6 +124,7 @@ export interface ISessionManager {
   ): boolean
   respondToCredential(sessionId: string, requestId: string, response: CredentialResponse): Promise<boolean>
   getSessionPermissionModeState(sessionId: string): PermissionModeState | null
+  getSessionPermissionAllowances(sessionId: string): SessionPermissionAllowances
 
   // ---------------------------------------------------------------------------
   // Plans

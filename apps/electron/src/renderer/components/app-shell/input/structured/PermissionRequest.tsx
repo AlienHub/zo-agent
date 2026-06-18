@@ -12,6 +12,12 @@ interface PermissionRequestProps {
   unstyled?: boolean
 }
 
+function extractSensitiveRule(reason?: string): string | null {
+  if (!reason) return null
+  const match = reason.match(/Matched sensitive credential file rule:\s*(.+?)(?:\n|$)/)
+  return match?.[1]?.trim() || null
+}
+
 /**
  * PermissionRequest - Self-contained structured input for permission approval
  *
@@ -24,17 +30,44 @@ interface PermissionRequestProps {
  */
 export function PermissionRequest({ request, onResponse, unstyled = false }: PermissionRequestProps) {
   const { t } = useTranslation()
+  const isSensitiveEgress = request.description.startsWith('Sensitive external send:')
+  const isSensitiveFileAccess = request.description === 'Sensitive file access'
+  const sensitiveRule = isSensitiveFileAccess ? extractSensitiveRule(request.reason) : null
+  const description = isSensitiveFileAccess
+    ? t('chat.sensitiveFileAccessTitle')
+    : request.description
 
   const handleAllow = () => {
-    onResponse({ type: 'permission', allowed: true, alwaysAllow: false })
+    onResponse({ type: 'permission', allowed: true, alwaysAllow: false, permissionScope: 'once' })
+  }
+
+  const handleSend = () => {
+    onResponse({ type: 'permission', allowed: true, alwaysAllow: false, egressAction: 'send' })
+  }
+
+  const handleSendRedacted = () => {
+    onResponse({ type: 'permission', allowed: true, alwaysAllow: false, egressAction: 'send_redacted' })
   }
 
   const handleAlwaysAllow = () => {
     onResponse({ type: 'permission', allowed: true, alwaysAllow: true })
   }
 
+  const handleAllowForSession = () => {
+    onResponse({ type: 'permission', allowed: true, alwaysAllow: true, permissionScope: 'session' })
+  }
+
+  const handleAllowPermanently = () => {
+    onResponse({ type: 'permission', allowed: true, alwaysAllow: true, permissionScope: 'permanent' })
+  }
+
   const handleDeny = () => {
-    onResponse({ type: 'permission', allowed: false, alwaysAllow: false })
+    onResponse({
+      type: 'permission',
+      allowed: false,
+      alwaysAllow: false,
+      ...(isSensitiveEgress ? { egressAction: 'cancel' as const } : {}),
+    })
   }
 
   return (
@@ -57,8 +90,32 @@ export function PermissionRequest({ request, onResponse, unstyled = false }: Per
           <div className="text-xs leading-[18px] text-muted-foreground">
             <span className="font-medium text-foreground">Tool:</span> {request.toolName}
             <br />
-            {request.description}
+            {description}
           </div>
+          {(request.reason || request.impact) && (
+            <div className="rounded-md border border-info/20 bg-background/60 p-2 text-xs leading-[18px] text-muted-foreground">
+              {isSensitiveFileAccess ? (
+                <>
+                  <div>
+                    {t('chat.sensitiveFileAccessIntro', {
+                      path: request.command || t('common.unknown'),
+                    })}
+                  </div>
+                  {sensitiveRule && (
+                    <div className="mt-1">
+                      {t('chat.sensitiveFileAccessMatchedRule', { rule: sensitiveRule })}
+                    </div>
+                  )}
+                  <div className="mt-1">{t('chat.sensitiveFileAccessImpact')}</div>
+                </>
+              ) : (
+                <>
+                  {request.reason && <div>{request.reason}</div>}
+                  {request.impact && <div className="mt-1">{request.impact}</div>}
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Command preview */}
@@ -67,29 +124,96 @@ export function PermissionRequest({ request, onResponse, unstyled = false }: Per
             {request.command}
           </div>
         )}
+        {isSensitiveEgress && request.safePreview && (
+          <div className="space-y-1">
+            <div className="text-[11px] font-medium text-muted-foreground">
+              {t('chat.permissionSafePreview')}
+            </div>
+            <div className="bg-foreground/5 rounded-md p-3 font-mono text-xs text-foreground/90 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+              {request.safePreview}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Action buttons */}
       <div className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-t border-border/50">
-        <Button
-          size="sm"
-          variant="default"
-          className="h-7 gap-1.5"
-          onClick={handleAllow}
-          data-tutorial="permission-allow-button"
-        >
-          <Check className="h-3.5 w-3.5" />
-          Allow
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 gap-1.5 border border-foreground/10 hover:bg-foreground/5 active:bg-foreground/10"
-          onClick={handleAlwaysAllow}
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Always Allow
-        </Button>
+        {isSensitiveEgress ? (
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 gap-1.5 border border-foreground/10 hover:bg-foreground/5 active:bg-foreground/10"
+              onClick={handleSend}
+            >
+              <Check className="h-3.5 w-3.5" />
+              {t('chat.permissionSend')}
+            </Button>
+            <Button
+              size="sm"
+              variant="default"
+              className="h-7 gap-1.5"
+              onClick={handleSendRedacted}
+              data-tutorial="permission-allow-button"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              {t('chat.permissionSendRedacted')}
+            </Button>
+          </>
+        ) : isSensitiveFileAccess ? (
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 gap-1.5 border border-foreground/10 hover:bg-foreground/5 active:bg-foreground/10"
+              onClick={handleAllow}
+              data-tutorial="permission-allow-button"
+            >
+              <Check className="h-3.5 w-3.5" />
+              {t('chat.permissionAllowOnce')}
+            </Button>
+            <Button
+              size="sm"
+              variant="default"
+              className="h-7 gap-1.5"
+              onClick={handleAllowForSession}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              {t('chat.permissionAllowSession')}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 gap-1.5 border border-foreground/10 hover:bg-foreground/5 active:bg-foreground/10"
+              onClick={handleAllowPermanently}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              {t('chat.permissionAllowPermanent')}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              size="sm"
+              variant="default"
+              className="h-7 gap-1.5"
+              onClick={handleAllow}
+              data-tutorial="permission-allow-button"
+            >
+              <Check className="h-3.5 w-3.5" />
+              {t('chat.permissionAllow')}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 gap-1.5 border border-foreground/10 hover:bg-foreground/5 active:bg-foreground/10"
+              onClick={handleAlwaysAllow}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              {t('chat.permissionAlwaysAllow')}
+            </Button>
+          </>
+        )}
         <Button
           size="sm"
           variant="ghost"
@@ -97,13 +221,15 @@ export function PermissionRequest({ request, onResponse, unstyled = false }: Per
           onClick={handleDeny}
         >
           <X className="h-3.5 w-3.5" />
-          Deny
+          {isSensitiveEgress ? t('chat.permissionCancel') : t('chat.permissionDeny')}
         </Button>
 
         {/* Tip text */}
-        <span className="min-w-0 flex-1 basis-full text-[10px] text-muted-foreground sm:basis-auto sm:text-right">
-          "Always Allow" remembers this command for the session
-        </span>
+        {!isSensitiveEgress && (
+          <span className="min-w-0 flex-1 basis-full text-[10px] text-muted-foreground sm:basis-auto sm:text-right">
+            {t('chat.permissionRememberHint')}
+          </span>
+        )}
       </div>
     </div>
   )

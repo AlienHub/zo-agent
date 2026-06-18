@@ -12,6 +12,8 @@ import {
 } from '@mariozechner/pi-coding-agent';
 import { createSearchTool } from './tools/search/create-search-tool.ts';
 import { createWebFetchTool } from './tools/web-fetch.ts';
+import { normalizePiToolInputForPreToolUse } from './tool-input-normalization.ts';
+import { runPreToolUseChecks, type PermissionManagerLike } from '../../shared/src/agent/core/pre-tool-use.ts';
 import type { WebSearchProvider } from './tools/search/types.ts';
 
 /**
@@ -129,6 +131,59 @@ describe('Pi SDK 0.70.0 CreateAgentSessionOptions contract', () => {
     const allowlistSet = new Set(tools);
     for (const tool of customTools) {
       expect(allowlistSet.has(tool.name)).toBe(true);
+    }
+  });
+});
+
+describe('Pi pre-tool-use input normalization', () => {
+  it('normalizes Read path to file_path before permission guards run', () => {
+    const normalized = normalizePiToolInputForPreToolUse('Read', { path: '.env' });
+
+    expect(normalized).toEqual({ path: '.env', file_path: '.env' });
+  });
+
+  it('normalizes path-based write tools before permission guards run', () => {
+    const normalized = normalizePiToolInputForPreToolUse('Write', { path: 'notes.md', content: 'hello' });
+
+    expect(normalized).toEqual({ path: 'notes.md', file_path: 'notes.md', content: 'hello' });
+  });
+
+  it('preserves an existing file_path value', () => {
+    const normalized = normalizePiToolInputForPreToolUse('Read', { path: '.env', file_path: '/tmp/.env' });
+
+    expect(normalized).toEqual({ path: '.env', file_path: '/tmp/.env' });
+  });
+
+  it('lets the sensitive path guard prompt for Pi Read .env input', () => {
+    const permissionManager: PermissionManagerLike = {
+      isCommandWhitelisted: () => false,
+      isDomainWhitelisted: () => false,
+      getBaseCommand: command => command.split(/\s+/)[0] ?? command,
+    };
+    const input = normalizePiToolInputForPreToolUse('Read', { path: '.env' });
+
+    const result = runPreToolUseChecks({
+      toolName: 'Read',
+      input,
+      sessionId: 'pi-read-env-normalization-test',
+      permissionMode: 'allow-all',
+      workspaceRootPath: '/repo',
+      workspaceId: 'repo',
+      workingDirectory: '/repo',
+      activeSourceSlugs: [],
+      allSourceSlugs: [],
+      hasSourceActivation: false,
+      permissionManager,
+      sensitiveContextProtection: {
+        enabled: true,
+        sensitiveFiles: { enabled: true, action: 'prompt' },
+      },
+    });
+
+    expect(result.type).toBe('prompt');
+    if (result.type === 'prompt') {
+      expect(result.description).toBe('Sensitive file access');
+      expect(result.command).toBe('/repo/.env');
     }
   });
 });

@@ -117,6 +117,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.sessions.COMMAND,
   RPC_CHANNELS.sessions.GET_PENDING_PLAN_EXECUTION,
   RPC_CHANNELS.sessions.GET_PERMISSION_MODE_STATE,
+  RPC_CHANNELS.sessions.GET_PERMISSION_ALLOWANCES,
   RPC_CHANNELS.sessions.SEARCH_CONTENT,
   RPC_CHANNELS.sessions.GET_FILES,
   RPC_CHANNELS.sessions.GET_NOTES,
@@ -279,8 +280,15 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
 
   // Respond to a permission request (bash command approval)
   // Returns true if the response was delivered, false if agent/session is gone
-  server.handle(RPC_CHANNELS.sessions.RESPOND_TO_PERMISSION, async (_ctx, sessionId: string, requestId: string, allowed: boolean, alwaysAllow: boolean) => {
-    return sessionManager.respondToPermission(sessionId, requestId, allowed, alwaysAllow)
+  server.handle(RPC_CHANNELS.sessions.RESPOND_TO_PERMISSION, async (
+    _ctx,
+    sessionId: string,
+    requestId: string,
+    allowed: boolean,
+    alwaysAllow: boolean,
+    options?: import('@craft-agent/shared/protocol').PermissionResponseOptions,
+  ) => {
+    return sessionManager.respondToPermission(sessionId, requestId, allowed, alwaysAllow, options)
   })
 
   // Respond to a credential request (secure auth input)
@@ -402,6 +410,13 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
     sessionId: string
   ) => {
     return sessionManager.getSessionPermissionModeState(sessionId)
+  })
+
+  server.handle(RPC_CHANNELS.sessions.GET_PERMISSION_ALLOWANCES, async (
+    _ctx,
+    sessionId: string
+  ) => {
+    return sessionManager.getSessionPermissionAllowances(sessionId)
   })
 
   // ============================================================

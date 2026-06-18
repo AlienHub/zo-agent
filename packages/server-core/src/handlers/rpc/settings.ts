@@ -40,6 +40,10 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.tools.GET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.tools.SET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.settings.GET_NETWORK_PROXY,
+  RPC_CHANNELS.settings.GET_SENSITIVE_CONTEXT_PROTECTION,
+  RPC_CHANNELS.settings.SET_SENSITIVE_CONTEXT_PROTECTION,
+  RPC_CHANNELS.settings.GET_SENSITIVE_PATH_ALLOW_RULES,
+  RPC_CHANNELS.settings.REMOVE_SENSITIVE_PATH_ALLOW_RULE,
   RPC_CHANNELS.dialog.OPEN_FOLDER,
 ] as const
 
@@ -363,5 +367,33 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   server.handle(RPC_CHANNELS.settings.GET_NETWORK_PROXY, async () => {
     const { getNetworkProxySettings } = await import('@craft-agent/shared/config/storage')
     return getNetworkProxySettings()
+  })
+
+  // ============================================================
+  // Sensitive Context Protection
+  // ============================================================
+
+  server.handle(RPC_CHANNELS.settings.GET_SENSITIVE_CONTEXT_PROTECTION, async () => {
+    const { getSensitiveContextProtectionSettings } = await import('@craft-agent/shared/config/storage')
+    return getSensitiveContextProtectionSettings()
+  })
+
+  server.handle(RPC_CHANNELS.settings.SET_SENSITIVE_CONTEXT_PROTECTION, async (_ctx, settings: import('@craft-agent/shared/config/types').SensitiveContextProtectionSettings) => {
+    const { setSensitiveContextProtectionSettings } = await import('@craft-agent/shared/config/storage')
+    setSensitiveContextProtectionSettings(settings)
+  })
+
+  server.handle(RPC_CHANNELS.settings.GET_SENSITIVE_PATH_ALLOW_RULES, async (_ctx, workspaceId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) return []
+    const { listSensitivePathAllowRules } = await import('@craft-agent/shared/agent/guards/sensitive-context')
+    return listSensitivePathAllowRules(workspace.rootPath)
+  })
+
+  server.handle(RPC_CHANNELS.settings.REMOVE_SENSITIVE_PATH_ALLOW_RULE, async (_ctx, workspaceId: string, path: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) return []
+    const { removeSensitivePathAllowRule } = await import('@craft-agent/shared/agent/guards/sensitive-context')
+    return removeSensitivePathAllowRule(workspace.rootPath, path)
   })
 }

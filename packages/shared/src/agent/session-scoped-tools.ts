@@ -35,7 +35,8 @@ import { createLLMTool, type LLMQueryRequest, type LLMQueryResult } from './llm-
 import { createSpawnSessionTool, type SpawnSessionFn } from './spawn-session-tool.ts';
 import { createBrowserTools, type BrowserPaneFns } from './browser-tools.ts';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
-import { getBrowserToolEnabled } from '../config/storage.ts';
+import { getBrowserToolEnabled, getSensitiveContextProtectionSettings } from '../config/storage.ts';
+import { formatFieldRuleSuggestionNotice, formatSensitiveProtectionNotice, guardToolResult } from './guards/sensitive-context/index.ts';
 
 // Re-export types for backward compatibility
 export type {
@@ -150,6 +151,51 @@ export function isPathInPlansDir(path: string, workspacePath: string, sessionId:
 /**
  * Convert shared ToolResult to SDK format
  */
+function protectSessionToolResult(
+  sessionId: string,
+  workspaceRootPath: string,
+  toolName: string,
+  args: Record<string, unknown>,
+  result: ToolResult,
+): ToolResult {
+  const text = result.content.map(c => c.text).join('\n');
+  if (!text) return result;
+
+  let config;
+  try {
+    config = getSensitiveContextProtectionSettings();
+  } catch {
+    config = undefined;
+  }
+
+  const guarded = guardToolResult({
+    sessionId,
+    toolName: `mcp__session__${toolName}`,
+    toolInput: args,
+    resultText: text,
+    permissionMode: 'ask',
+    sourceSlug: 'session',
+    workingDirectory: workspaceRootPath,
+    config,
+  });
+
+  if (guarded.action === 'allow') {
+    const suggestionNotice = formatFieldRuleSuggestionNotice(guarded.suggestions);
+    return suggestionNotice
+      ? { ...result, content: [{ type: 'text', text: `${suggestionNotice}${text}` }] }
+      : result;
+  }
+  return {
+    ...result,
+    content: [{
+      type: 'text',
+      text: guarded.action === 'block'
+        ? guarded.reason
+        : `${formatSensitiveProtectionNotice(guarded)}${formatFieldRuleSuggestionNotice(guarded.suggestions)}${guarded.text ?? text}`,
+    }],
+  };
+}
+
 function convertResult(result: ToolResult): { content: Array<{ type: 'text'; text: string }>; isError?: boolean } {
   return {
     content: result.content.map(c => ({ type: 'text' as const, text: c.text })),
@@ -252,7 +298,7 @@ export function getSessionScopedTools(
       const def = SESSION_TOOL_REGISTRY.get(name)!;
       return tool(name, TOOL_DESCRIPTIONS[name] || def.description, schema, async (args: any) => {
         const result = await def.handler!(ctx, args);
-        return convertResult(result);
+        return convertResult(protectSessionToolResult(sessionId, workspaceRootPath, name, args, result));
       }, def.readOnly ? { annotations: { readOnlyHint: true } } : undefined);
     }
 

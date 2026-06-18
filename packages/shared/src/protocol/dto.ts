@@ -289,6 +289,15 @@ export interface PermissionRequest extends BasePermissionRequest {
 
 export interface PermissionResponseOptions {
   rememberForMinutes?: number
+  egressAction?: 'send' | 'send_redacted' | 'cancel'
+  permissionScope?: 'once' | 'session' | 'permanent'
+}
+
+export interface SessionPermissionAllowances {
+  sensitivePaths: Array<{
+    path: string
+    createdAt: string
+  }>
 }
 
 // Re-export for handler convenience

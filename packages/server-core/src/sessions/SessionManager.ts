@@ -22,6 +22,7 @@ import {
 } from '@craft-agent/shared/agent/backend'
 import { getLlmConnection, getLlmConnections, getDefaultLlmConnection, getDefaultThinkingLevel, resetManagedAnthropicAuthEnvVars, resolveMidStreamBehavior } from '@craft-agent/shared/config'
 import { PrivilegedExecutionBroker } from '@craft-agent/server-core/services'
+import { addSensitivePathAllowRule } from '@craft-agent/shared/agent/guards/sensitive-context'
 import { isValidWorkingDirectory } from '../utils/path-validation'
 import { InitGate } from '@craft-agent/server-core/domain'
 import { i18n, LOCALE_REGISTRY, type LanguageCode } from '@craft-agent/shared/i18n'
@@ -1131,8 +1132,11 @@ export class SessionManager implements ISessionManager {
   private pendingPermissionRequests: Map<string, {
     sessionId: string
     type?: 'bash' | 'file_write' | 'mcp_mutation' | 'api_mutation' | 'admin_approval'
+    command?: string
+    description?: string
     commandHash?: string
   }> = new Map()
+  private sessionSensitivePathAllowances: Map<string, Map<string, { path: string; createdAt: string }>> = new Map()
   // Privileged approval binding + audit logger
   private privilegedExecutionBroker = new PrivilegedExecutionBroker(sessionLog)
   // Session-local admin remember windows (exact command hash binding)
@@ -2435,6 +2439,13 @@ export class SessionManager implements ISessionManager {
     await this.ensureMessagesLoaded(m)
 
     return managedToSession(m, { messages: m.messages })
+  }
+
+  getSessionPermissionAllowances(sessionId: string): import('@craft-agent/shared/protocol').SessionPermissionAllowances {
+    const sensitivePaths = Array.from(this.sessionSensitivePathAllowances.get(sessionId)?.values() ?? [])
+      .sort((a, b) => a.path.localeCompare(b.path))
+
+    return { sensitivePaths }
   }
 
   /**
@@ -3835,6 +3846,7 @@ export class SessionManager implements ISessionManager {
         appName?: string;
         reason?: string;
         impact?: string;
+        safePreview?: string;
         requiresSystemPrompt?: boolean;
         rememberForMinutes?: number;
         commandHash?: string;
@@ -3867,6 +3879,8 @@ export class SessionManager implements ISessionManager {
         this.pendingPermissionRequests.set(request.requestId, {
           sessionId: managed.id,
           type: request.type,
+          command: request.command,
+          description: request.description,
           commandHash: effectiveCommandHash,
         })
 
@@ -5598,6 +5612,7 @@ export class SessionManager implements ISessionManager {
     this.pendingDeltas.delete(sessionId)
     this.clearAdminRememberApprovalsForSession(sessionId)
     this.clearPendingPermissionRequestsForSession(sessionId)
+    this.sessionSensitivePathAllowances.delete(sessionId)
 
     // Cancel any pending persistence write (session is being deleted, no need to save)
     sessionPersistenceQueue.cancel(sessionId)
@@ -6751,7 +6766,7 @@ export class SessionManager implements ISessionManager {
         if (!brokerResult.ok) {
           sessionLog.warn(`Admin approval rejected by broker for ${requestId}: ${brokerResult.reason}`)
           // Broker rejection should fail closed.
-          managed.agent.respondToPermission(requestId, false, false)
+          managed.agent.respondToPermission(requestId, false, false, options)
           return false
         }
 
@@ -6760,8 +6775,43 @@ export class SessionManager implements ISessionManager {
         }
       }
 
+      const isSensitiveFileAccess = requestMeta?.description === 'Sensitive file access'
+      const permissionScope = options?.permissionScope
+
+      if (
+        allowed &&
+        isSensitiveFileAccess &&
+        requestMeta.command &&
+        permissionScope === 'permanent'
+      ) {
+        try {
+          addSensitivePathAllowRule(managed.workspace.rootPath, requestMeta.command, 'permission_prompt')
+        } catch (error) {
+          sessionLog.warn(`Failed to persist sensitive path allow rule for ${requestId}: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+
+      if (
+        allowed &&
+        isSensitiveFileAccess &&
+        requestMeta.command &&
+        permissionScope === 'session'
+      ) {
+        const sessionRules = this.sessionSensitivePathAllowances.get(sessionId) ?? new Map<string, { path: string; createdAt: string }>()
+        if (!this.sessionSensitivePathAllowances.has(sessionId)) {
+          this.sessionSensitivePathAllowances.set(sessionId, sessionRules)
+        }
+        const key = requestMeta.command.toLowerCase()
+        if (!sessionRules.has(key)) {
+          sessionRules.set(key, {
+            path: requestMeta.command,
+            createdAt: new Date().toISOString(),
+          })
+        }
+      }
+
       sessionLog.info(`Permission response for ${requestId}: allowed=${allowed}, alwaysAllow=${alwaysAllow}`)
-      managed.agent.respondToPermission(requestId, allowed, alwaysAllow)
+      managed.agent.respondToPermission(requestId, allowed, alwaysAllow, options)
       return true
     } else {
       sessionLog.warn(`Cannot respond to permission - no agent for session ${sessionId}`)

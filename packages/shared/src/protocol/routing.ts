@@ -203,6 +203,8 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
   RPC_CHANNELS.onboarding.DEFER_SETUP,
   RPC_CHANNELS.settings.GET_NETWORK_PROXY,
   RPC_CHANNELS.settings.SET_NETWORK_PROXY,
+  RPC_CHANNELS.settings.GET_SENSITIVE_CONTEXT_PROTECTION,
+  RPC_CHANNELS.settings.SET_SENSITIVE_CONTEXT_PROTECTION,
 
   // server config — local embedded server settings
   RPC_CHANNELS.settings.GET_SERVER_CONFIG,

@@ -58,6 +58,7 @@ setBedrockProviderModule(bedrockProviderModule);
 // Model resolution (extracted for testability + custom-endpoint precedence)
 import { resolvePiModel, isDeniedMiniModelId, isModelNotFoundError } from './model-resolution.ts';
 import { pickProviderAppropriateMiniModel } from './pick-mini-model.ts';
+import { normalizePiToolInputForPreToolUse } from './tool-input-normalization.ts';
 import {
   buildCustomEndpointModelDef,
   normalizeCustomEndpointModelEntry,
@@ -73,6 +74,15 @@ import { buildCallLlmRequest, withTimeout, LLM_QUERY_TIMEOUT_MS } from '../../sh
 import type { LLMQueryRequest, LLMQueryResult } from '../../shared/src/agent/llm-tool.ts';
 import { PI_TOOL_NAME_MAP, THINKING_TO_PI } from '../../shared/src/agent/backend/pi/constants.ts';
 import { getDefaultSummarizationModel } from '../../shared/src/config/models.ts';
+import {
+  appendSensitiveAuditEntry,
+  createSensitiveAuditEntry,
+  formatFieldRuleSuggestionNotice,
+  formatSensitiveProtectionNotice,
+  guardToolResult,
+} from '../../shared/src/agent/guards/sensitive-context/index.ts';
+import type { PermissionMode, SensitiveProtectionMode } from '../../shared/src/agent/guards/sensitive-context/index.ts';
+import type { SensitiveContextProtectionSettings } from '../../shared/src/config/types.ts';
 import { createWebFetchTool } from './tools/web-fetch.ts';
 import { resolveSearchProvider } from './tools/search/resolve-provider.ts';
 import { createSearchTool } from './tools/search/create-search-tool.ts';
@@ -104,6 +114,8 @@ interface InitMessage {
   sessionPath: string;
   workingDirectory: string;
   plansFolderPath: string;
+  permissionMode?: PermissionMode;
+  sensitiveContextProtection?: SensitiveContextProtectionSettings;
   miniModel?: string;
   agentDir?: string;
   providerType?: string;
@@ -726,6 +738,89 @@ function makeErrorResult(message: string): AgentToolResult<any> {
   };
 }
 
+function extractSourceSlug(toolName: string): string | undefined {
+  const parts = toolName.split('__');
+  if (parts.length >= 3 && parts[0] === 'mcp') {
+    return parts[1];
+  }
+  return undefined;
+}
+
+function auditSensitiveDecision(
+  toolName: string,
+  action: 'allow' | 'redact' | 'block' | 'prompt',
+  policyMode: SensitiveProtectionMode,
+  findings: Parameters<typeof createSensitiveAuditEntry>[0]['findings'],
+) {
+  if (!initConfig || findings.length === 0) return;
+  if (initConfig.sensitiveContextProtection?.audit?.enabled === false) return;
+
+  try {
+    const entry = createSensitiveAuditEntry({
+      sessionId: initConfig.sessionId,
+      toolName,
+      sourceSlug: extractSourceSlug(toolName),
+      action,
+      policyMode,
+      findings,
+    });
+    const auditPath = join(initConfig.sessionPath || getSessionPath(initConfig.workspaceRootPath, initConfig.sessionId), 'audit', 'sensitive-context.jsonl');
+    appendSensitiveAuditEntry(auditPath, entry);
+  } catch (error) {
+    debugLog(`Sensitive context audit failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function protectToolResult(
+  toolName: string,
+  inputObj: Record<string, unknown>,
+  result: AgentToolResult<any>,
+): AgentToolResult<any> {
+  if (!initConfig) return result;
+
+  const resultText = result.content
+    .filter((c): c is PiTextContent => c.type === 'text')
+    .map(c => c.text)
+    .join('');
+
+  if (!resultText) return result;
+
+  const guarded = guardToolResult({
+    sessionId: initConfig.sessionId,
+    toolName,
+    toolInput: inputObj,
+    resultText,
+    permissionMode: initConfig.permissionMode ?? 'ask',
+    sourceSlug: extractSourceSlug(toolName),
+    workingDirectory: initConfig.workingDirectory,
+    config: initConfig.sensitiveContextProtection,
+  });
+
+  auditSensitiveDecision(toolName, guarded.action, guarded.policyMode, guarded.findings);
+
+  if (guarded.action === 'allow') {
+    const suggestionNotice = formatFieldRuleSuggestionNotice(guarded.suggestions);
+    return suggestionNotice
+      ? {
+        content: [{ type: 'text', text: `${suggestionNotice}${resultText}` }],
+        details: result.details,
+      }
+      : result;
+  }
+
+  if (guarded.action === 'block') {
+    return {
+      content: [{ type: 'text', text: guarded.reason }],
+      details: result.details,
+    };
+  }
+
+  return {
+    content: [{ type: 'text', text: `${formatSensitiveProtectionNotice(guarded)}${formatFieldRuleSuggestionNotice(guarded.suggestions)}${guarded.text ?? ''}` }],
+    details: result.details,
+  };
+}
+
 function wrapSingleTool(tool: ToolDefinition<any, any>): ToolDefinition<any, any> {
   const originalExecute = tool.execute;
   const parameters = allowCraftMetadataProperties(tool.parameters);
@@ -743,11 +838,8 @@ function wrapSingleTool(tool: ToolDefinition<any, any>): ToolDefinition<any, any
     // Extract intent before main process strips metadata (used for summarization)
     const intent = typeof inputObj._intent === 'string' ? inputObj._intent : undefined;
 
-    // Normalize Pi SDK parameter names: path → file_path
-    if ((sdkToolName === 'Write' || sdkToolName === 'Edit' || sdkToolName === 'MultiEdit' || sdkToolName === 'NotebookEdit')
-        && typeof inputObj.path === 'string' && !inputObj.file_path) {
-      inputObj = { ...inputObj, file_path: inputObj.path };
-    }
+    // Normalize Pi SDK parameter names before pre-tool-use guards run.
+    inputObj = normalizePiToolInputForPreToolUse(sdkToolName, inputObj);
 
     // Send to main process for permission checking + transforms
     inputObj = await requestPreToolUseApproval(sdkToolName, inputObj, toolCallId);
@@ -758,7 +850,8 @@ function wrapSingleTool(tool: ToolDefinition<any, any>): ToolDefinition<any, any
     inputObj = stripCraftMetadata(inputObj);
 
     // Execute original tool with (potentially modified) input
-    const result = await originalExecute(toolCallId, inputObj, signal, onUpdate, ctx);
+    let result = await originalExecute(toolCallId, inputObj, signal, onUpdate, ctx);
+    result = protectToolResult(sdkToolName, inputObj, result);
 
     // --- Post-execute: large response summarization ---
 
@@ -847,10 +940,10 @@ function buildProxyTools(): ToolDefinition<any, any>[] {
         prefetchCache.delete(toolCallId);
         debugLog(`Prefetch cache hit for ${def.name} (toolCallId: ${toolCallId})`);
         const result = await prefetched;
-        return {
+        return protectToolResult(def.name, params as Record<string, unknown>, {
           content: [{ type: 'text', text: result.content }],
           details: result.isError ? { isError: true } : undefined,
-        };
+        });
       }
 
       const inputObj = params as Record<string, unknown>;
@@ -872,10 +965,10 @@ function buildProxyTools(): ToolDefinition<any, any>[] {
         pendingToolExecutions.set(requestId, { resolve });
       });
 
-      return {
+      return protectToolResult(def.name, approvedInput, {
         content: [{ type: 'text', text: result.content }],
         details: result.isError ? { isError: true } : undefined,
-      };
+      });
     },
   }));
 }

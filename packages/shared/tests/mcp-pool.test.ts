@@ -26,13 +26,14 @@ const mockTools: Tool[] = [
 
 function makeMockClient(
   tools: Tool[] = mockTools,
-  onCallTool?: (name: string, args: Record<string, unknown>) => void
+  onCallTool?: (name: string, args: Record<string, unknown>) => void,
+  responseText = 'ok',
 ): PoolClient {
   return {
     listTools: async () => tools,
     callTool: async (name, args) => {
       onCallTool?.(name, args);
-      return { content: [{ type: 'text', text: 'ok' }] };
+      return { content: [{ type: 'text', text: responseText }] };
     },
     close: async () => {},
   };
@@ -59,9 +60,10 @@ class TestablePool extends McpClientPool {
   async registerTools(
     slug: string,
     tools: Tool[],
-    onCallTool?: (name: string, args: Record<string, unknown>) => void
+    onCallTool?: (name: string, args: Record<string, unknown>) => void,
+    responseText = 'ok',
   ): Promise<void> {
-    await this.registerClient(slug, makeMockClient(tools, onCallTool));
+    await this.registerClient(slug, makeMockClient(tools, onCallTool, responseText));
   }
 
   async disconnect(slug: string): Promise<void> {
@@ -245,6 +247,41 @@ describe('McpClientPool proxy tool names', () => {
       'mcp__source__foo_bar_2',
       'mcp__source__foo_bar_3',
     ]);
+  });
+
+  it('redacts sensitive MCP tool results before returning content', async () => {
+    await pool.registerTools(
+      'crm',
+      [{ name: 'getContact', description: 'Contact details', inputSchema: { type: 'object' as const, properties: {} } }],
+      undefined,
+      'email=jane@example.com token=sk-proj-abcdefghijklmnopqrstuvwxyz123456'
+    );
+
+    const [def] = pool.getProxyToolDefs();
+    const result = await pool.callTool(def.name, {});
+
+    expect(result.content).toContain('Sensitive data redacted');
+    expect(result.content).toContain('Reason: email x1, openai_key x1');
+    expect(result.content).toContain('[REDACTED:EMAIL]');
+    expect(result.content).toContain('[REDACTED:OPENAI_KEY]');
+    expect(result.content).not.toContain('jane@example.com');
+    expect(result.content).not.toContain('sk-proj-abcdefghijklmnopqrstuvwxyz123456');
+  });
+
+  it('surfaces field-rule suggestions for suspicious structured source fields', async () => {
+    await pool.registerTools(
+      'crm',
+      [{ name: 'getAccount', description: 'Account details', inputSchema: { type: 'object' as const, properties: {} } }],
+      undefined,
+      JSON.stringify({ name: 'Acme', address: '1 Main St', city: 'Shanghai' })
+    );
+
+    const [def] = pool.getProxyToolDefs();
+    const result = await pool.callTool(def.name, {});
+
+    expect(result.content).toContain('Sensitive field rule suggestion');
+    expect(result.content).toContain('address (address field)');
+    expect(result.content).not.toContain('1 Main St');
   });
 
   it('keeps generated proxy names within provider length limits', async () => {

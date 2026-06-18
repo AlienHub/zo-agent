@@ -70,6 +70,10 @@ export {
 
 // Permission Manager
 export { PermissionManager } from './permission-manager.ts';
+export {
+  resolvePermissionResponse,
+  type PermissionResolution,
+} from './permission-response.ts';
 
 // Source Manager
 export { SourceManager } from './source-manager.ts';
@@ -135,6 +139,9 @@ export {
   runPreToolUseChecks,
   shouldPromptInAskMode,
 } from './pre-tool-use.ts';
+
+// Sensitive Context Protection
+export * from '../guards/sensitive-context/index.ts';
 
 // Prerequisite Manager
 export { PrerequisiteManager } from './prerequisite-manager.ts';

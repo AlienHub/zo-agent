@@ -31,6 +31,7 @@ import { SourceActivationDrainController } from './source-activation-drain.ts';
 
 import type { PermissionMode } from './mode-manager.ts';
 import type { ThinkingLevel } from './thinking-levels.ts';
+import { resolvePermissionResponse, type PermissionResolution } from './core/permission-response.ts';
 
 // Import models from centralized registry
 import { getModelById } from '../config/models.ts';
@@ -93,7 +94,7 @@ import { parseError, type AgentError } from './errors.ts';
 // Centralized PreToolUse pipeline
 import { runPreToolUseChecks, type PreToolUseCheckResult } from './core/pre-tool-use.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
-import { getRtkEnabled, getBrowserToolEnabled } from '../config/storage.ts';
+import { getRtkEnabled, getBrowserToolEnabled, getSensitiveContextProtectionSettings } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
 
 // Workspace slug extraction for skill qualification
@@ -103,6 +104,7 @@ import { extractWorkspaceSlug } from '../utils/workspace.ts';
 import { LLM_QUERY_TIMEOUT_MS, type LLMQueryRequest, type LLMQueryResult } from './llm-tool.ts';
 import { executeBrowserToolCommand } from './browser-tool-runtime.ts';
 import { saveBinaryResponse } from '../utils/binary-detection.ts';
+import { formatFieldRuleSuggestionNotice, formatSensitiveProtectionNotice, guardToolResult } from './guards/sensitive-context/index.ts';
 
 // ============================================================
 // PiAgent Implementation
@@ -225,8 +227,11 @@ export class PiAgent extends BaseAgent {
 
   // Pending permission requests (used by handlePreToolUseRequest for ask-mode prompting)
   private pendingPermissions: Map<string, {
-    resolve: (allowed: boolean) => void;
+    resolve: (resolution: PermissionResolution) => void;
     toolName: string;
+    command?: string;
+    baseCommand?: string;
+    description?: string;
   }> = new Map();
 
   // Pending tool executions (correlation map for subprocess tool_execute_request -> main process -> tool_execute_response)
@@ -517,6 +522,8 @@ export class PiAgent extends BaseAgent {
       sessionPath,
       workingDirectory,
       plansFolderPath,
+      permissionMode: this.permissionManager.getPermissionMode(),
+      sensitiveContextProtection: getSensitiveContextProtectionSettings(),
       miniModel: this.config.miniModel,
       providerType: this.config.providerType,
       authType: this.config.authType,
@@ -1211,6 +1218,7 @@ export class PiAgent extends BaseAgent {
       hasSourceActivation: !!this.onSourceActivationRequest,
       permissionManager: this.permissionManager,
       prerequisiteManager: this.prerequisiteManager,
+      sensitiveContextProtection: getSensitiveContextProtectionSettings(),
       rtkContext,
       onDebug: (msg) => this.debug(`PreToolUse(sessionId=${sessionId}): ${msg}`),
     });
@@ -1284,6 +1292,7 @@ export class PiAgent extends BaseAgent {
           hasSourceActivation: !!this.onSourceActivationRequest,
           permissionManager: this.permissionManager,
           prerequisiteManager: this.prerequisiteManager,
+          sensitiveContextProtection: getSensitiveContextProtectionSettings(),
           rtkContext,
           onDebug: (msg) => this.debug(`PreToolUse(sessionId=${sessionId}): ${msg}`),
         });
@@ -1319,10 +1328,14 @@ export class PiAgent extends BaseAgent {
         this.debug(`PreToolUse(sessionId=${sessionId}): Prompting user for ${toolName} - ${checkResult.description}`);
 
         // Wait for user response via pendingPermissions
-        const permissionPromise = new Promise<boolean>((resolve) => {
+        const permissionPromise = new Promise<{ allowed: boolean; useModifiedInput: boolean }>((resolve) => {
+          const command = checkResult.command || '';
           this.pendingPermissions.set(permRequestId, {
             resolve,
             toolName,
+            command,
+            baseCommand: command ? this.permissionManager.getBaseCommand(command) : undefined,
+            description: checkResult.description,
           });
         });
 
@@ -1335,21 +1348,22 @@ export class PiAgent extends BaseAgent {
           appName: checkResult.appName,
           reason: checkResult.reason,
           impact: checkResult.impact,
+          safePreview: checkResult.safePreview,
           requiresSystemPrompt: checkResult.requiresSystemPrompt,
           rememberForMinutes: checkResult.rememberForMinutes,
           commandHash: checkResult.commandHash,
           approvalTtlSeconds: checkResult.approvalTtlSeconds,
         });
 
-        const allowed = await permissionPromise;
+        const permissionResolution = await permissionPromise;
         this.pendingPermissions.delete(permRequestId);
 
-        if (!allowed) {
+        if (!permissionResolution.allowed) {
           this.send({ type: 'pre_tool_use_response', requestId, action: 'block', reason: 'Permission denied by user.' });
           return;
         }
 
-        if (checkResult.modifiedInput) {
+        if (checkResult.modifiedInput && permissionResolution.useModifiedInput) {
           this.send({ type: 'pre_tool_use_response', requestId, action: 'modify', input: checkResult.modifiedInput });
         } else {
           this.send({ type: 'pre_tool_use_response', requestId, action: 'allow' });
@@ -1566,7 +1580,34 @@ export class PiAgent extends BaseAgent {
 
       // Convert ToolResult to subprocess response format
       const text = result.content.map(c => c.text).join('\n');
-      return { content: text, isError: !!result.isError };
+      let sensitiveConfig;
+      try {
+        sensitiveConfig = getSensitiveContextProtectionSettings();
+      } catch {
+        sensitiveConfig = undefined;
+      }
+      const guarded = guardToolResult({
+        sessionId: this.config.session?.id || this._sessionId,
+        toolName: `mcp__session__${toolName}`,
+        toolInput: args,
+        resultText: text,
+        permissionMode: this.permissionManager.getPermissionMode(),
+        sourceSlug: 'session',
+        workingDirectory: this.config.workspace.rootPath,
+        config: sensitiveConfig,
+      });
+      if (guarded.action === 'allow') {
+        return {
+          content: `${formatFieldRuleSuggestionNotice(guarded.suggestions)}${text}`,
+          isError: !!result.isError,
+        };
+      }
+      return {
+        content: guarded.action === 'block'
+          ? guarded.reason
+          : `${formatSensitiveProtectionNotice(guarded)}${formatFieldRuleSuggestionNotice(guarded.suggestions)}${guarded.text ?? text}`,
+        isError: !!result.isError,
+      };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.debug(`Session tool ${toolName} failed: ${msg}`);
@@ -2148,11 +2189,26 @@ export class PiAgent extends BaseAgent {
    * Respond to a pending permission request.
    * Permission checking now happens in the main process, so this resolves locally.
    */
-  respondToPermission(requestId: string, allowed: boolean, _alwaysAllow?: boolean): void {
+  respondToPermission(
+    requestId: string,
+    allowed: boolean,
+    alwaysAllow?: boolean,
+    options?: import('../protocol/dto.ts').PermissionResponseOptions,
+  ): void {
     const pending = this.pendingPermissions.get(requestId);
     if (pending) {
       this.pendingPermissions.delete(requestId);
-      pending.resolve(allowed);
+      if (allowed && alwaysAllow) {
+        if (options?.permissionScope === 'session' && pending.description === 'Sensitive file access' && pending.command) {
+          this.permissionManager.whitelistCommand(pending.command);
+        } else if (pending.baseCommand && ['curl', 'wget'].includes(pending.baseCommand) && pending.command) {
+          const domain = this.permissionManager.extractDomainFromNetworkCommand(pending.command);
+          if (domain) this.permissionManager.whitelistDomain(domain);
+        } else if (pending.baseCommand && !this.permissionManager.isDangerousCommand(pending.baseCommand)) {
+          this.permissionManager.whitelistCommand(pending.baseCommand);
+        }
+      }
+      pending.resolve(resolvePermissionResponse(allowed, options));
     }
   }
 
@@ -2247,7 +2303,7 @@ export class PiAgent extends BaseAgent {
 
     // Deny all pending permissions
     for (const [, pending] of this.pendingPermissions) {
-      pending.resolve(false);
+      pending.resolve({ allowed: false, useModifiedInput: false });
     }
     this.pendingPermissions.clear();
 
@@ -2268,7 +2324,7 @@ export class PiAgent extends BaseAgent {
 
     // Reject all pending permissions
     for (const [, pending] of this.pendingPermissions) {
-      pending.resolve(false);
+      pending.resolve({ allowed: false, useModifiedInput: false });
     }
     this.pendingPermissions.clear();
 

@@ -24,6 +24,7 @@ import { isValidThinkingLevel, normalizeThinkingLevel } from '../agent/thinking-
 import { parsePermissionMode, PERMISSION_MODE_ORDER } from '../agent/mode-types.ts';
 import { type ConfigDefaults } from './config-defaults-schema.ts';
 import { isValidThemeFile } from './validators.ts';
+import type { SensitiveContextProtectionSettings } from './types.ts';
 
 // Re-export CONFIG_DIR for convenience (centralized in paths.ts)
 export { CONFIG_DIR } from './paths.ts';
@@ -77,6 +78,7 @@ export interface StoredConfig {
   richToolDescriptions?: boolean;  // Add intent/action metadata to all tool calls (default: true)
   // Tools
   browserToolEnabled?: boolean;  // Enable built-in browser tool (default: true). Disable for Playwright/Puppeteer.
+  sensitiveContextProtection?: SensitiveContextProtectionSettings; // Scan tool results before they enter model context.
   allowRemoteEvaluate?: boolean;  // Allow remote agents to call `browser_tool evaluate` on local browser (default: true).
   // Prompt caching & context
   extendedPromptCache?: boolean;  // Use 1h prompt cache TTL instead of 5m (default: false)
@@ -124,6 +126,21 @@ const FALLBACK_CONFIG_DEFAULTS: ConfigDefaults = {
     richToolDescriptions: true,
     extendedPromptCache: false,
     browserToolEnabled: true,
+    sensitiveContextProtection: {
+      enabled: true,
+      sensitiveFiles: { enabled: true, action: 'prompt' },
+      outputRedaction: { enabled: true },
+      fieldRedaction: { enabled: true },
+      egressConfirmation: { enabled: false },
+      mode: 'balanced',
+      credentialFiles: { enabled: true, action: 'prompt' },
+      secrets: { enabled: true, action: 'redact' },
+      privateKeys: { enabled: true, action: 'block' },
+      pii: { enabled: true, action: 'redact' },
+      lowConfidence: { action: 'allow' },
+      audit: { enabled: true, storeRawValues: false },
+      customPatterns: [],
+    },
     allowRemoteEvaluate: true,
   },
   workspaceDefaults: {
@@ -2902,6 +2919,106 @@ export function setNetworkProxySettings(settings: NetworkProxySettings): void {
     config.networkProxy = normalized;
   }
 
+  saveConfig(config);
+}
+
+// ============================================
+// Sensitive Context Protection
+// ============================================
+
+const DEFAULT_SENSITIVE_CONTEXT_PROTECTION_SETTINGS: SensitiveContextProtectionSettings = {
+  enabled: true,
+  sensitiveFiles: { enabled: true, action: 'prompt' },
+  outputRedaction: { enabled: true },
+  fieldRedaction: { enabled: true },
+  egressConfirmation: { enabled: false },
+  mode: 'balanced',
+  credentialFiles: { enabled: true, action: 'prompt' },
+  secrets: { enabled: true, action: 'redact' },
+  privateKeys: { enabled: true, action: 'block' },
+  pii: { enabled: true, action: 'redact' },
+  lowConfidence: { action: 'allow' },
+  audit: { enabled: true, storeRawValues: false },
+  customPatterns: [],
+};
+
+export function getDefaultSensitiveContextProtectionSettings(): SensitiveContextProtectionSettings {
+  const defaults = loadConfigDefaults();
+  return normalizeSensitiveContextProtectionSettings(
+    defaults.defaults.sensitiveContextProtection ?? DEFAULT_SENSITIVE_CONTEXT_PROTECTION_SETTINGS,
+  );
+}
+
+export function normalizeSensitiveContextProtectionSettings(
+  settings: Partial<SensitiveContextProtectionSettings> | undefined,
+): SensitiveContextProtectionSettings {
+  const base = DEFAULT_SENSITIVE_CONTEXT_PROTECTION_SETTINGS;
+  const sensitiveFiles = {
+    ...base.sensitiveFiles,
+    ...settings?.sensitiveFiles,
+    enabled: settings?.sensitiveFiles?.enabled ?? settings?.credentialFiles?.enabled ?? base.sensitiveFiles.enabled,
+  };
+  const outputRedaction = {
+    ...base.outputRedaction,
+    ...settings?.outputRedaction,
+  };
+  const fieldRedaction = {
+    ...base.fieldRedaction,
+    ...settings?.fieldRedaction,
+  };
+  const egressConfirmation = {
+    ...base.egressConfirmation,
+    ...settings?.egressConfirmation,
+    enabled: false,
+  };
+
+  return {
+    ...base,
+    ...settings,
+    sensitiveFiles,
+    outputRedaction,
+    fieldRedaction,
+    egressConfirmation,
+    mode: settings?.mode ?? base.mode,
+    credentialFiles: {
+      ...base.credentialFiles,
+      ...settings?.credentialFiles,
+      enabled: sensitiveFiles.enabled,
+      action: sensitiveFiles.action,
+    },
+    secrets: {
+      ...base.secrets,
+      ...settings?.secrets,
+      enabled: outputRedaction.enabled && (settings?.secrets?.enabled ?? base.secrets.enabled),
+    },
+    privateKeys: {
+      ...base.privateKeys,
+      ...settings?.privateKeys,
+      enabled: outputRedaction.enabled && (settings?.privateKeys?.enabled ?? base.privateKeys.enabled),
+    },
+    pii: {
+      ...base.pii,
+      ...settings?.pii,
+      enabled: outputRedaction.enabled && (settings?.pii?.enabled ?? base.pii.enabled),
+    },
+    lowConfidence: { ...base.lowConfidence, ...settings?.lowConfidence },
+    audit: { ...base.audit, ...settings?.audit, storeRawValues: false },
+    customPatterns: settings?.customPatterns ?? [],
+  };
+}
+
+export function getSensitiveContextProtectionSettings(): SensitiveContextProtectionSettings {
+  const config = loadStoredConfig();
+  return normalizeSensitiveContextProtectionSettings(
+    config?.sensitiveContextProtection ?? getDefaultSensitiveContextProtectionSettings(),
+  );
+}
+
+export function setSensitiveContextProtectionSettings(settings: SensitiveContextProtectionSettings): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+
+  config.sensitiveContextProtection = normalizeSensitiveContextProtectionSettings(settings);
   saveConfig(config);
 }
 

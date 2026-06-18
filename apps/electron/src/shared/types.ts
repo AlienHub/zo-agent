@@ -69,7 +69,8 @@ export type { ExportResourcesOptions, ExportResult, ResourceImportMode, Resource
 
 // LLM connection types
 import type { LlmConnection, LlmConnectionWithStatus, LlmAuthType, LlmProviderType, NetworkProxySettings } from '@craft-agent/shared/config';
-export type { LlmConnection, LlmConnectionWithStatus, LlmAuthType, LlmProviderType, NetworkProxySettings };
+import type { SensitiveContextProtectionMode, SensitiveContextProtectionSettings } from '@craft-agent/shared/config';
+export type { LlmConnection, LlmConnectionWithStatus, LlmAuthType, LlmProviderType, NetworkProxySettings, SensitiveContextProtectionMode, SensitiveContextProtectionSettings };
 
 // =============================================================================
 // GUI-only types (not used by server/handler code)
@@ -258,6 +259,7 @@ export interface ElectronAPI {
   getPendingPlanExecution(sessionId: string): Promise<{ planPath: string; draftInputSnapshot?: string; awaitingCompaction: boolean; executionDispatched: boolean } | null>
   // Permission mode reconciliation
   getSessionPermissionModeState(sessionId: string): Promise<PermissionModeState | null>
+  getSessionPermissionAllowances(sessionId: string): Promise<import('@craft-agent/shared/protocol').SessionPermissionAllowances>
 
   // Workspace management
   getWorkspaces(): Promise<Workspace[]>
@@ -563,6 +565,10 @@ export interface ElectronAPI {
   // Network proxy settings
   getNetworkProxySettings(): Promise<NetworkProxySettings | undefined>
   setNetworkProxySettings(settings: NetworkProxySettings): Promise<void>
+  getSensitiveContextProtectionSettings(): Promise<SensitiveContextProtectionSettings>
+  setSensitiveContextProtectionSettings(settings: SensitiveContextProtectionSettings): Promise<void>
+  getSensitivePathAllowRules(workspaceId: string): Promise<import('@craft-agent/shared/agent/guards/sensitive-context').SensitivePathAllowRule[]>
+  removeSensitivePathAllowRule(workspaceId: string, path: string): Promise<import('@craft-agent/shared/agent/guards/sensitive-context').SensitivePathAllowRule[]>
 
   refreshBadge(): Promise<void>
   setDockIconWithBadge(dataUrl: string): Promise<void>

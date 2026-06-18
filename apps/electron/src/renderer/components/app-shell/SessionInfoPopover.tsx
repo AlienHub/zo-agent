@@ -102,11 +102,29 @@ function SessionInfoPopoverContent({ sessionId, sessionFolderPath }: { sessionId
   const session = useSession(sessionId)
   const { onRenameSession } = useAppShellContext()
   const [name, setName] = React.useState('')
+  const [sessionAllowances, setSessionAllowances] = React.useState<import('../../../shared/types').SessionPermissionAllowances | null>(null)
   const renameTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   React.useEffect(() => {
     setName(session?.name || '')
   }, [session?.name])
+
+  React.useEffect(() => {
+    let cancelled = false
+
+    window.electronAPI.getSessionPermissionAllowances(sessionId)
+      .then((allowances) => {
+        if (!cancelled) setSessionAllowances(allowances)
+      })
+      .catch((error) => {
+        console.error('[SessionInfoPopover] Failed to load session permission allowances:', error)
+        if (!cancelled) setSessionAllowances({ sensitivePaths: [] })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId])
 
   React.useEffect(() => {
     return () => {
@@ -147,6 +165,30 @@ function SessionInfoPopoverContent({ sessionId, sessionFolderPath }: { sessionId
           />
         </div>
       </div>
+      {sessionAllowances?.sensitivePaths.length ? (
+        <div className="shrink-0 p-3 border-b border-border/50 space-y-2">
+          <div>
+            <div className="text-xs font-medium text-muted-foreground select-none">
+              {t('chat.sessionAllowances')}
+            </div>
+            <p className="mt-1 text-[11px] leading-[16px] text-muted-foreground/80">
+              {t('chat.sessionAllowancesDesc')}
+            </p>
+          </div>
+          <div className="space-y-1">
+            {sessionAllowances.sensitivePaths.map((allowance) => (
+              <div key={allowance.path} className="rounded-md border border-border/60 bg-foreground/[0.03] px-2 py-1.5">
+                <div className="text-[11px] font-medium text-muted-foreground">
+                  {t('chat.sessionSensitivePath')}
+                </div>
+                <div className="mt-0.5 break-all font-mono text-[11px] leading-[16px] text-foreground/85">
+                  {allowance.path}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="flex-1 min-h-0 overflow-hidden">
         <SessionFilesSection
           sessionId={sessionId}

@@ -13,8 +13,9 @@
  * 2. Source blocking: Block tools from inactive MCP sources
  * 3. Prerequisite check: Block source tools until guide.md is read
  * 4. call_llm detection: Intercept mcp__session__call_llm
- * 5. Input transforms: Path expansion, config validation, skill qualification, metadata stripping
- * 6. Ask-mode prompt decision: Determine if user approval is needed
+ * 5. Input transforms: Path expansion, sensitive path guard, config validation, skill qualification, metadata stripping
+ * 6. Sensitive egress confirmation: Prompt before external sends containing sensitive data
+ * 7. Ask-mode prompt decision: Determine if user approval is needed
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -49,6 +50,8 @@ import {
 import { permissionsConfigCache, type PermissionsContext } from '../permissions-config.ts';
 import type { PrerequisiteCheckResult } from './prerequisite-manager.ts';
 import { rewriteBashWithRtk } from './rtk-rewrite.ts';
+import { buildSensitiveEgressPrompt, guardSensitiveToolPath, isSensitivePathPermanentlyAllowed } from '../guards/sensitive-context/index.ts';
+import type { SensitiveContextProtectionConfig } from '../guards/sensitive-context/index.ts';
 
 // ============================================================
 // TYPES
@@ -593,6 +596,7 @@ export type PreToolUseCheckResult =
       appName?: string;
       reason?: string;
       impact?: string;
+      safePreview?: string;
       requiresSystemPrompt?: boolean;
       rememberForMinutes?: number;
       commandHash?: string;
@@ -639,6 +643,8 @@ export interface PreToolUseInput {
   backendMetadata?: { intent?: string; displayName?: string };
   /** RTK Bash-rewrite context (undefined when toggle is off or rtk binary missing) */
   rtkContext?: import('./rtk-rewrite.ts').RtkContext;
+  /** Sensitive Context Protection settings for pre-execution path guards */
+  sensitiveContextProtection?: Partial<SensitiveContextProtectionConfig>;
   /** Debug callback */
   onDebug?: (message: string) => void;
 }
@@ -680,8 +686,9 @@ const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
  * 2. Source blocking (inactive MCP sources)
  * 3. Prerequisite check (guide.md before source tools)
  * 4. call_llm interception
- * 5. Input transforms (paths, config validation, skills, metadata)
- * 6. Ask-mode prompt decision
+ * 5. Input transforms (paths, sensitive path guard, config validation, skills, metadata)
+ * 6. Sensitive egress confirmation
+ * 7. Ask-mode prompt decision
  *
  * @returns A discriminated union that the agent translates to its SDK format
  */
@@ -810,7 +817,54 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     wasModified = true;
   }
 
-  // 5b. Config-domain Bash guard (block direct labels/automations path operations unless using craft-agent)
+  // 5b. Sensitive path guard (block credential files before tool execution)
+  const sensitiveProtection = ctx.sensitiveContextProtection;
+  const sensitiveFileSettings = sensitiveProtection?.sensitiveFiles ?? sensitiveProtection?.credentialFiles;
+  const sensitivePathGuardEnabled =
+    sensitiveProtection?.enabled !== false &&
+    sensitiveFileSettings?.enabled !== false &&
+    sensitiveFileSettings?.action !== 'allow';
+
+  if (sensitivePathGuardEnabled) {
+    const sensitivePathResult = guardSensitiveToolPath(
+      toolName,
+      currentInput,
+      workingDirectory ?? workspaceRootPath,
+    );
+    if (sensitivePathResult.action === 'block') {
+      const allowKey = sensitivePathResult.path;
+      if (
+        allowKey &&
+        sensitivePathResult.recommendedAction !== 'block' &&
+        (permissionManager.isCommandWhitelisted(allowKey) || isSensitivePathPermanentlyAllowed(workspaceRootPath, allowKey))
+      ) {
+        onDebug?.(`Auto-allowing sensitive path "${allowKey}" (previously approved for this session)`);
+      } else if (
+        sensitiveFileSettings?.action === 'prompt' &&
+        sensitivePathResult.recommendedAction !== 'block'
+      ) {
+        return {
+          type: 'prompt',
+          promptType: toolName === 'Bash' ? 'bash' : 'file_write',
+          description: 'Sensitive file access',
+          command: allowKey ?? (typeof currentInput.command === 'string'
+            ? currentInput.command
+            : typeof currentInput.file_path === 'string'
+              ? currentInput.file_path
+              : undefined),
+          modifiedInput: wasModified ? currentInput : undefined,
+          reason: sensitivePathResult.reason,
+          impact: 'This may add credential or private data to the model context.',
+          requiresSystemPrompt: true,
+          rememberForMinutes: 10,
+        };
+      } else {
+        return { type: 'block', reason: sensitivePathResult.reason! };
+      }
+    }
+  }
+
+  // 5c. Config-domain Bash guard (block direct labels/automations path operations unless using craft-agent)
   if (FEATURE_FLAGS.craftAgentsCli && toolName === 'Bash') {
     const configDomainBashRedirect = getConfigDomainBashRedirect(currentInput, workspaceRootPath, workingDirectory);
     if (configDomainBashRedirect) {
@@ -818,13 +872,13 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     }
   }
 
-  // 5c. Config file validation
+  // 5d. Config file validation
   const configResult = validateConfigWrite(toolName, currentInput, workspaceRootPath, onDebug);
   if (!configResult.valid) {
     return { type: 'block', reason: configResult.error! };
   }
 
-  // 5d. Config file CLI redirect (labels + automations)
+  // 5e. Config file CLI redirect (labels + automations)
   if (FEATURE_FLAGS.craftAgentsCli) {
     const cliRedirect = getConfigCliRedirect(toolName, currentInput, workspaceRootPath, workingDirectory);
     if (cliRedirect) {
@@ -832,7 +886,7 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     }
   }
 
-  // 5e. Skill qualification
+  // 5f. Skill qualification
   if (toolName === 'Skill') {
     const skillResult = qualifySkillName(
       currentInput,
@@ -847,14 +901,14 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     }
   }
 
-  // 5f. Metadata stripping
+  // 5g. Metadata stripping
   const metadataResult = stripToolMetadata(toolName, currentInput, onDebug);
   if (metadataResult.modified) {
     currentInput = metadataResult.input;
     wasModified = true;
   }
 
-  // 5g. RTK Bash rewrite (last input transform — flows into both 'modify' and 'prompt' results).
+  // 5h. RTK Bash rewrite (last input transform — flows into both 'modify' and 'prompt' results).
   // Permission decisions above and the ask-mode prompt below operate on the
   // ORIGINAL `input` parameter, so the LLM still believes it ran the original
   // command and our permission system gates the original command — only the
@@ -874,7 +928,26 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
   }
 
   // ============================================================
-  // 6. ASK MODE PROMPT DECISION
+  // 6. SENSITIVE EGRESS CONFIRMATION
+  // ============================================================
+  const sensitiveEgressPrompt = buildSensitiveEgressPrompt(toolName, currentInput, ctx.sensitiveContextProtection);
+  if (sensitiveEgressPrompt) {
+    return {
+      type: 'prompt',
+      promptType: sensitiveEgressPrompt.promptType,
+      description: sensitiveEgressPrompt.description,
+      command: sensitiveEgressPrompt.command,
+      modifiedInput: sensitiveEgressPrompt.modifiedInput,
+      reason: sensitiveEgressPrompt.reason,
+      impact: sensitiveEgressPrompt.impact,
+      safePreview: sensitiveEgressPrompt.safePreview,
+      requiresSystemPrompt: true,
+      rememberForMinutes: 5,
+    };
+  }
+
+  // ============================================================
+  // 7. ASK MODE PROMPT DECISION
   // ============================================================
   if (effectivePermissionMode === 'ask') {
     const promptInfo = shouldPromptInAskMode(

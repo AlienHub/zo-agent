@@ -20,6 +20,8 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { isLocalMcpEnabled } from '../workspaces/storage.ts';
 import { guardLargeResult } from '../utils/large-response.ts';
+import { getSensitiveContextProtectionSettings } from '../config/storage.ts';
+import { formatFieldRuleSuggestionNotice, formatSensitiveProtectionNotice, guardToolResult } from '../agent/guards/sensitive-context/index.ts';
 import {
   saveBinaryResponse,
   detectExtensionFromMagic,
@@ -57,6 +59,36 @@ export interface McpToolResult {
 
 const LLM_TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const LLM_TOOL_NAME_MAX_LENGTH = 128;
+
+function protectMcpResult(
+  proxyName: string,
+  sourceSlug: string,
+  args: Record<string, unknown>,
+  text: string,
+  workspaceRootPath?: string,
+): string {
+  let config;
+  try {
+    config = getSensitiveContextProtectionSettings();
+  } catch {
+    config = undefined;
+  }
+
+  const guarded = guardToolResult({
+    sessionId: 'mcp-pool',
+    toolName: proxyName,
+    toolInput: args,
+    resultText: text,
+    permissionMode: 'ask',
+    sourceSlug,
+    workingDirectory: workspaceRootPath,
+    config,
+  });
+
+  if (guarded.action === 'allow') return `${formatFieldRuleSuggestionNotice(guarded.suggestions)}${text}`;
+  if (guarded.action === 'block') return guarded.reason;
+  return `${formatSensitiveProtectionNotice(guarded)}${formatFieldRuleSuggestionNotice(guarded.suggestions)}${guarded.text ?? text}`;
+}
 
 function sanitizeToolNamePart(value: string): string {
   const sanitized = value.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -485,10 +517,11 @@ export class McpClientPool {
 
       // 2. Combine parts (fallback to JSON.stringify if no content extracted)
       const text = parts.join('\n') || JSON.stringify(result);
+      const protectedText = protectMcpResult(proxyName, slug, args, text, this.workspaceRootPath);
 
       // 3. Centralized binary + large response handling
       if (!result.isError && this.sessionPath) {
-        const guarded = await guardLargeResult(text, {
+        const guarded = await guardLargeResult(protectedText, {
           sessionPath: this.sessionPath,
           toolName: proxyName,
           input: args,
@@ -500,7 +533,7 @@ export class McpClientPool {
       }
 
       return {
-        content: text,
+        content: protectedText,
         isError: !!result.isError,
       };
     } catch (err) {

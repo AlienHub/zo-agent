@@ -34,6 +34,8 @@ export interface PermissionResponse {
   type: 'permission'
   allowed: boolean
   alwaysAllow: boolean
+  egressAction?: 'send' | 'send_redacted' | 'cancel'
+  permissionScope?: 'once' | 'session' | 'permanent'
 }
 
 /**

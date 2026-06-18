@@ -76,6 +76,7 @@ export type PermissionCallback = (request: {
   appName?: string;
   reason?: string;
   impact?: string;
+  safePreview?: string;
   requiresSystemPrompt?: boolean;
   rememberForMinutes?: number;
   commandHash?: string;
@@ -592,7 +593,12 @@ export interface AgentBackend {
    * @param allowed - Whether permission was granted
    * @param alwaysAllow - Whether to remember this permission for session
    */
-  respondToPermission(requestId: string, allowed: boolean, alwaysAllow?: boolean): void;
+  respondToPermission(
+    requestId: string,
+    allowed: boolean,
+    alwaysAllow?: boolean,
+    options?: import('../../protocol/dto.ts').PermissionResponseOptions,
+  ): void;
 
   // ============================================================
   // Callbacks (set by facade after construction)

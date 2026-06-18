@@ -68,8 +68,9 @@ import {
   type PreToolUseCheckResult,
   BUILT_IN_TOOLS,
 } from './core/pre-tool-use.ts';
+import { resolvePermissionResponse, type PermissionResolution } from './core/permission-response.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
-import { getRtkEnabled } from '../config/storage.ts';
+import { getRtkEnabled, getSensitiveContextProtectionSettings } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
 import { type ThinkingLevel, THINKING_TO_EFFORT, getThinkingTokens, DEFAULT_THINKING_LEVEL } from './thinking-levels.ts';
 import { generateConversationSummary } from './conversation-summary.ts';
@@ -230,12 +231,12 @@ export interface ClaudeAgentConfig {
   enable1MContext?: boolean;
 }
 
-// Permission request tracking
 interface PendingPermission {
-  resolve: (allowed: boolean, alwaysAllow?: boolean) => void;
+  resolve: (resolution: PermissionResolution) => void;
   toolName: string;
   command: string;
   baseCommand: string;
+  description?: string;
   type?: 'bash' | 'safe_mode';  // Type of permission request
 }
 
@@ -530,6 +531,7 @@ export class ClaudeAgent extends BaseAgent {
     appName?: string;
     reason?: string;
     impact?: string;
+    safePreview?: string;
     requiresSystemPrompt?: boolean;
     rememberForMinutes?: number;
     commandHash?: string;
@@ -718,7 +720,12 @@ export class ClaudeAgent extends BaseAgent {
    * Respond to a pending permission request.
    * Uses permissionManager for whitelisting.
    */
-  respondToPermission(requestId: string, allowed: boolean, alwaysAllow: boolean = false): void {
+  respondToPermission(
+    requestId: string,
+    allowed: boolean,
+    alwaysAllow: boolean = false,
+    options?: import('../protocol/dto.ts').PermissionResponseOptions,
+  ): void {
     this.debug(`respondToPermission: ${requestId}, allowed=${allowed}, alwaysAllow=${alwaysAllow}, pending=${this.pendingPermissions.has(requestId)}`);
     const pending = this.pendingPermissions.get(requestId);
     if (pending) {
@@ -726,7 +733,10 @@ export class ClaudeAgent extends BaseAgent {
 
       // If "always allow" was selected, remember it (with special handling for curl/wget)
       if (alwaysAllow && allowed) {
-        if (['curl', 'wget'].includes(pending.baseCommand)) {
+        if (options?.permissionScope === 'session' && pending.description === 'Sensitive file access' && pending.command) {
+          this.permissionManager.whitelistCommand(pending.command);
+          this.debug(`Added sensitive path "${pending.command}" to session-allowed paths`);
+        } else if (['curl', 'wget'].includes(pending.baseCommand)) {
           // For curl/wget, whitelist the domain instead of the command
           const domain = this.permissionManager.extractDomainFromNetworkCommand(pending.command);
           if (domain) {
@@ -739,7 +749,7 @@ export class ClaudeAgent extends BaseAgent {
         }
       }
 
-      pending.resolve(allowed);
+      pending.resolve(resolvePermissionResponse(allowed, options));
       this.pendingPermissions.delete(requestId);
     } else {
       this.debug(`No pending permission found for ${requestId}`);
@@ -764,12 +774,13 @@ export class ClaudeAgent extends BaseAgent {
       const requestId = `perm-${toolUseId}`;
 
       // Create a promise that will be resolved when user responds
-      const permissionPromise = new Promise<boolean>((resolve) => {
+      const permissionPromise = new Promise<PermissionResolution>((resolve) => {
         this.pendingPermissions.set(requestId, {
           resolve,
           toolName,
           command,
           baseCommand,
+          description: `Execute bash command: ${command}`,
         });
       });
 
@@ -788,8 +799,8 @@ export class ClaudeAgent extends BaseAgent {
       }
 
       // Wait for user response
-      const allowed = await permissionPromise;
-      return { allowed, updatedInput: input };
+      const permissionResolution = await permissionPromise;
+      return { allowed: permissionResolution.allowed, updatedInput: input };
     }
 
     // All other tools are auto-approved
@@ -1131,6 +1142,7 @@ export class ClaudeAgent extends BaseAgent {
                 hasSourceActivation: !!this.onSourceActivationRequest,
                 permissionManager: this.permissionManager,
                 prerequisiteManager: this.prerequisiteManager,
+                sensitiveContextProtection: getSensitiveContextProtectionSettings(),
                 rtkContext,
                 onDebug: (msg) => this.onDebug?.(msg),
               });
@@ -1234,12 +1246,13 @@ export class ClaudeAgent extends BaseAgent {
 
                   debug(`[PreToolUse] Requesting permission for ${input.tool_name}: ${command}`);
 
-                  const permissionPromise = new Promise<boolean>((resolve) => {
+                  const permissionPromise = new Promise<PermissionResolution>((resolve) => {
                     this.pendingPermissions.set(requestId, {
                       resolve,
                       toolName: input.tool_name,
                       command,
                       baseCommand,
+                      description: checkResult.description,
                     });
                   });
 
@@ -1253,6 +1266,7 @@ export class ClaudeAgent extends BaseAgent {
                       appName: checkResult.appName,
                       reason: checkResult.reason,
                       impact: checkResult.impact,
+                      safePreview: checkResult.safePreview,
                       requiresSystemPrompt: checkResult.requiresSystemPrompt,
                       rememberForMinutes: checkResult.rememberForMinutes,
                       commandHash: checkResult.commandHash,
@@ -1267,8 +1281,8 @@ export class ClaudeAgent extends BaseAgent {
                     };
                   }
 
-                  const allowed = await permissionPromise;
-                  if (!allowed) {
+                  const permissionResolution = await permissionPromise;
+                  if (!permissionResolution.allowed) {
                     return {
                       continue: false,
                       decision: 'block' as const,
@@ -1277,7 +1291,7 @@ export class ClaudeAgent extends BaseAgent {
                   }
 
                   // User approved — return with modified input if transforms were applied
-                  if (checkResult.modifiedInput) {
+                  if (checkResult.modifiedInput && permissionResolution.useModifiedInput) {
                     return {
                       continue: true,
                       hookSpecificOutput: {

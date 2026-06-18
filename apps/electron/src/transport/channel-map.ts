@@ -37,6 +37,7 @@ export const CHANNEL_MAP = {
   importRemoteSessionTransfer: invoke(RPC_CHANNELS.sessions.IMPORT_REMOTE_TRANSFER),
   getPendingPlanExecution: invoke(RPC_CHANNELS.sessions.GET_PENDING_PLAN_EXECUTION),
   getSessionPermissionModeState: invoke(RPC_CHANNELS.sessions.GET_PERMISSION_MODE_STATE),
+  getSessionPermissionAllowances: invoke(RPC_CHANNELS.sessions.GET_PERMISSION_ALLOWANCES),
 
   // Event listeners
   onSessionEvent: listener(RPC_CHANNELS.sessions.EVENT),
@@ -160,6 +161,10 @@ export const CHANNEL_MAP = {
   setDefaultThinkingLevel: invoke(RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL),
   getNetworkProxySettings: invoke(RPC_CHANNELS.settings.GET_NETWORK_PROXY),
   setNetworkProxySettings: invoke(RPC_CHANNELS.settings.SET_NETWORK_PROXY),
+  getSensitiveContextProtectionSettings: invoke(RPC_CHANNELS.settings.GET_SENSITIVE_CONTEXT_PROTECTION),
+  setSensitiveContextProtectionSettings: invoke(RPC_CHANNELS.settings.SET_SENSITIVE_CONTEXT_PROTECTION),
+  getSensitivePathAllowRules: invoke(RPC_CHANNELS.settings.GET_SENSITIVE_PATH_ALLOW_RULES),
+  removeSensitivePathAllowRule: invoke(RPC_CHANNELS.settings.REMOVE_SENSITIVE_PATH_ALLOW_RULE),
 
   // Pi provider discovery
   getPiApiKeyProviders: invoke(RPC_CHANNELS.pi.GET_API_KEY_PROVIDERS),
