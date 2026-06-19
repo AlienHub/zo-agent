@@ -112,9 +112,14 @@ mac:
     - "!**/resources/bin/linux-*/**"
   # Use predictable naming for macOS packages (applies to zip; dmg uses its own config below)
   artifactName: "Zo-${version}-${arch}.${ext}"
-  # Production macOS releases are signed with a Developer ID Application
-  # certificate and notarized by Apple when the CI secrets are present.
-  notarize: true
+  # This fork ships UNSIGNED macOS builds — CI has no Apple Developer credentials.
+  # `identity: null` skips code signing and `notarize: false` skips notarization,
+  # so the dmg/zip build succeeds without signing secrets (users see a Gatekeeper
+  # prompt on first launch). To ship SIGNED + NOTARIZED releases: add the
+  # MAC_CSC_LINK / MAC_CSC_KEY_PASSWORD and APPLE_* CI secrets (see
+  # release-electron.yml), then remove `identity: null` and set `notarize: true`.
+  identity: null
+  notarize: false
 
 dmg:
   artifactName: "Zo-${version}-${arch}.dmg"

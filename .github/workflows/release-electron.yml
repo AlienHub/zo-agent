@@ -80,3 +80,43 @@ jobs:
           APPLE_API_KEY: ${{ matrix.platform == 'mac' && secrets.APPLE_API_KEY || '' }}
           APPLE_API_KEY_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_API_KEY_ID || '' }}
           APPLE_API_ISSUER: ${{ matrix.platform == 'mac' && secrets.APPLE_API_ISSUER || '' }}
+
+  # Auto-generate the GitHub Release changelog from git history. The build jobs
+  # create the release (electron-builder `--publish always`); this job overwrites
+  # its body with a commit-derived changelog since the previous tag.
+  release-notes:
+    name: release-notes
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Generate changelog from commits
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then
+            RANGE="${PREV}..${TAG}"
+            HEADER="Changes since ${PREV}"
+          else
+            RANGE="$TAG"
+            HEADER="Changes"
+          fi
+          {
+            echo "## ${HEADER}"
+            echo
+            git log --no-merges --pretty=format:'- %s (%h)' "$RANGE"
+            echo
+            echo
+            echo "_Full history: ${PREV:+https://github.com/${{ github.repository }}/compare/${PREV}...${TAG}}_"
+          } > RELEASE_NOTES.md
+          echo "----- generated release notes -----"
+          cat RELEASE_NOTES.md
+          gh release edit "$TAG" --repo "${{ github.repository }}" --notes-file RELEASE_NOTES.md
