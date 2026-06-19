@@ -75,9 +75,9 @@ import type { LLMQueryRequest, LLMQueryResult } from '../../shared/src/agent/llm
 import { PI_TOOL_NAME_MAP, THINKING_TO_PI } from '../../shared/src/agent/backend/pi/constants.ts';
 import { getDefaultSummarizationModel } from '../../shared/src/config/models.ts';
 import {
-  appendSensitiveAuditEntry,
   createSensitiveAuditEntry,
-  formatFieldRuleSuggestionNotice,
+  sensitiveAuditFilePath,
+  writeSensitiveAuditEntry,
   formatSensitiveProtectionNotice,
   guardToolResult,
 } from '../../shared/src/agent/guards/sensitive-context/index.ts';
@@ -752,23 +752,19 @@ function auditSensitiveDecision(
   policyMode: SensitiveProtectionMode,
   findings: Parameters<typeof createSensitiveAuditEntry>[0]['findings'],
 ) {
-  if (!initConfig || findings.length === 0) return;
-  if (initConfig.sensitiveContextProtection?.audit?.enabled === false) return;
+  if (!initConfig) return;
 
-  try {
-    const entry = createSensitiveAuditEntry({
-      sessionId: initConfig.sessionId,
-      toolName,
-      sourceSlug: extractSourceSlug(toolName),
-      action,
-      policyMode,
-      findings,
-    });
-    const auditPath = join(initConfig.sessionPath || getSessionPath(initConfig.workspaceRootPath, initConfig.sessionId), 'audit', 'sensitive-context.jsonl');
-    appendSensitiveAuditEntry(auditPath, entry);
-  } catch (error) {
-    debugLog(`Sensitive context audit failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  const sessionDir = initConfig.sessionPath || getSessionPath(initConfig.workspaceRootPath, initConfig.sessionId);
+  writeSensitiveAuditEntry({
+    auditFilePath: sensitiveAuditFilePath(sessionDir),
+    auditEnabled: initConfig.sensitiveContextProtection?.audit?.enabled !== false,
+    sessionId: initConfig.sessionId,
+    toolName,
+    sourceSlug: extractSourceSlug(toolName),
+    action,
+    policyMode,
+    findings,
+  });
 }
 
 function protectToolResult(
@@ -799,13 +795,7 @@ function protectToolResult(
   auditSensitiveDecision(toolName, guarded.action, guarded.policyMode, guarded.findings);
 
   if (guarded.action === 'allow') {
-    const suggestionNotice = formatFieldRuleSuggestionNotice(guarded.suggestions);
-    return suggestionNotice
-      ? {
-        content: [{ type: 'text', text: `${suggestionNotice}${resultText}` }],
-        details: result.details,
-      }
-      : result;
+    return result;
   }
 
   if (guarded.action === 'block') {
@@ -816,7 +806,7 @@ function protectToolResult(
   }
 
   return {
-    content: [{ type: 'text', text: `${formatSensitiveProtectionNotice(guarded)}${formatFieldRuleSuggestionNotice(guarded.suggestions)}${guarded.text ?? ''}` }],
+    content: [{ type: 'text', text: `${formatSensitiveProtectionNotice(guarded)}${guarded.text ?? ''}` }],
     details: result.details,
   };
 }

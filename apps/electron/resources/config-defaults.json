@@ -15,16 +15,10 @@
       "enabled": true,
       "sensitiveFiles": { "enabled": true, "action": "prompt" },
       "outputRedaction": { "enabled": true },
-      "fieldRedaction": { "enabled": true },
-      "egressConfirmation": { "enabled": false },
-      "mode": "balanced",
       "credentialFiles": { "enabled": true, "action": "prompt" },
       "secrets": { "enabled": true, "action": "redact" },
       "privateKeys": { "enabled": true, "action": "block" },
-      "pii": { "enabled": true, "action": "redact" },
-      "lowConfidence": { "action": "allow" },
-      "audit": { "enabled": true, "storeRawValues": false },
-      "customPatterns": []
+      "audit": { "enabled": true, "storeRawValues": false }
     },
     "allowRemoteEvaluate": true
   },

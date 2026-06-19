@@ -169,63 +169,6 @@ describe('runPreToolUseChecks', () => {
     mockCraftAgentsCliFlag = false;
   });
 
-  describe('sensitive egress confirmation', () => {
-    it('does not prompt MCP mutation inputs while egress confirmation is coming soon', () => {
-      const result = runPreToolUseChecks(createInput({
-        toolName: 'mcp__linear__createIssue',
-        input: {
-          title: 'Credential cleanup',
-          description: 'OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz123456',
-        },
-        activeSourceSlugs: ['linear'],
-        allSourceSlugs: ['linear'],
-        sensitiveContextProtection: {
-          enabled: true,
-          egressConfirmation: { enabled: true },
-        },
-      }));
-
-      expect(result.type).toBe('allow');
-    });
-
-    it('does not prompt non-GET API inputs while egress confirmation is coming soon', () => {
-      const result = runPreToolUseChecks(createInput({
-        toolName: 'api_github',
-        input: {
-          method: 'POST',
-          path: '/repos/acme/private/issues',
-          body: {
-            title: 'Token report',
-            token: 'ghp_abcdefghijklmnopqrstuvwxyz1234567890',
-          },
-        },
-        sensitiveContextProtection: {
-          enabled: true,
-          egressConfirmation: { enabled: true },
-        },
-      }));
-
-      expect(result.type).toBe('allow');
-    });
-
-    it('does not prompt for sensitive egress when confirmation is disabled', () => {
-      const result = runPreToolUseChecks(createInput({
-        toolName: 'api_github',
-        input: {
-          method: 'POST',
-          path: '/repos',
-          body: { api_key: 'sk-proj-abcdefghijklmnopqrstuvwxyz123456' },
-        },
-        sensitiveContextProtection: {
-          enabled: true,
-          egressConfirmation: { enabled: false },
-        },
-      }));
-
-      expect(result.type).toBe('allow');
-    });
-  });
-
   // ============================================================
   // Step 1: Permission mode check
   // ============================================================

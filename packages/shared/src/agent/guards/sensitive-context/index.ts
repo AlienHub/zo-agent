@@ -4,6 +4,5 @@ export * from './redact.ts';
 export * from './policy.ts';
 export * from './path-guard.ts';
 export * from './audit.ts';
-export * from './field-redaction.ts';
-export * from './egress.ts';
 export * from './redaction-rules.ts';
+export * from './tool-output.ts';

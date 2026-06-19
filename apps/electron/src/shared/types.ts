@@ -69,8 +69,8 @@ export type { ExportResourcesOptions, ExportResult, ResourceImportMode, Resource
 
 // LLM connection types
 import type { LlmConnection, LlmConnectionWithStatus, LlmAuthType, LlmProviderType, NetworkProxySettings } from '@craft-agent/shared/config';
-import type { SensitiveContextProtectionMode, SensitiveContextProtectionSettings } from '@craft-agent/shared/config';
-export type { LlmConnection, LlmConnectionWithStatus, LlmAuthType, LlmProviderType, NetworkProxySettings, SensitiveContextProtectionMode, SensitiveContextProtectionSettings };
+import type { SensitiveContextProtectionSettings } from '@craft-agent/shared/config';
+export type { LlmConnection, LlmConnectionWithStatus, LlmAuthType, LlmProviderType, NetworkProxySettings, SensitiveContextProtectionSettings };
 
 // =============================================================================
 // GUI-only types (not used by server/handler code)

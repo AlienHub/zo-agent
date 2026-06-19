@@ -104,7 +104,7 @@ import { extractWorkspaceSlug } from '../utils/workspace.ts';
 import { LLM_QUERY_TIMEOUT_MS, type LLMQueryRequest, type LLMQueryResult } from './llm-tool.ts';
 import { executeBrowserToolCommand } from './browser-tool-runtime.ts';
 import { saveBinaryResponse } from '../utils/binary-detection.ts';
-import { formatFieldRuleSuggestionNotice, formatSensitiveProtectionNotice, guardToolResult } from './guards/sensitive-context/index.ts';
+import { formatSensitiveProtectionNotice, guardToolResult, sensitiveAuditFilePath, writeSensitiveAuditEntry } from './guards/sensitive-context/index.ts';
 
 // ============================================================
 // PiAgent Implementation
@@ -1315,6 +1315,18 @@ export class PiAgent extends BaseAgent {
 
       case 'prompt': {
         if (!this.onPermissionRequest) {
+          // Fail CLOSED for sensitive-file prompts even without a UI handler:
+          // a credential-file access must never proceed unprompted (matches
+          // ClaudeAgent, which blocks all prompts when no handler is present).
+          if (checkResult.sensitiveCategory === 'file_access') {
+            this.send({
+              type: 'pre_tool_use_response',
+              requestId,
+              action: 'block',
+              reason: checkResult.reason ?? 'Sensitive file access requires confirmation, but no permission handler is available.',
+            });
+            return;
+          }
           // No permission handler — allow
           if (checkResult.modifiedInput) {
             this.send({ type: 'pre_tool_use_response', requestId, action: 'modify', input: checkResult.modifiedInput });
@@ -1348,7 +1360,7 @@ export class PiAgent extends BaseAgent {
           appName: checkResult.appName,
           reason: checkResult.reason,
           impact: checkResult.impact,
-          safePreview: checkResult.safePreview,
+          sensitiveCategory: checkResult.sensitiveCategory,
           requiresSystemPrompt: checkResult.requiresSystemPrompt,
           rememberForMinutes: checkResult.rememberForMinutes,
           commandHash: checkResult.commandHash,
@@ -1586,8 +1598,9 @@ export class PiAgent extends BaseAgent {
       } catch {
         sensitiveConfig = undefined;
       }
+      const guardSessionId = this.config.session?.id || this._sessionId;
       const guarded = guardToolResult({
-        sessionId: this.config.session?.id || this._sessionId,
+        sessionId: guardSessionId,
         toolName: `mcp__session__${toolName}`,
         toolInput: args,
         resultText: text,
@@ -1596,16 +1609,28 @@ export class PiAgent extends BaseAgent {
         workingDirectory: this.config.workspace.rootPath,
         config: sensitiveConfig,
       });
+      if (guardSessionId) {
+        writeSensitiveAuditEntry({
+          auditFilePath: sensitiveAuditFilePath(getSessionPath(this.config.workspace.rootPath, guardSessionId)),
+          auditEnabled: sensitiveConfig?.audit?.enabled !== false,
+          sessionId: guardSessionId,
+          toolName: `mcp__session__${toolName}`,
+          sourceSlug: 'session',
+          action: guarded.action,
+          policyMode: guarded.policyMode,
+          findings: guarded.findings,
+        });
+      }
       if (guarded.action === 'allow') {
         return {
-          content: `${formatFieldRuleSuggestionNotice(guarded.suggestions)}${text}`,
+          content: text,
           isError: !!result.isError,
         };
       }
       return {
         content: guarded.action === 'block'
           ? guarded.reason
-          : `${formatSensitiveProtectionNotice(guarded)}${formatFieldRuleSuggestionNotice(guarded.suggestions)}${guarded.text ?? text}`,
+          : `${formatSensitiveProtectionNotice(guarded)}${guarded.text ?? text}`,
         isError: !!result.isError,
       };
     } catch (error) {

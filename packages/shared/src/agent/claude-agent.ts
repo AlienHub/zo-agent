@@ -69,6 +69,7 @@ import {
   BUILT_IN_TOOLS,
 } from './core/pre-tool-use.ts';
 import { resolvePermissionResponse, type PermissionResolution } from './core/permission-response.ts';
+import { buildToolOutputRedaction, sensitiveAuditFilePath } from './guards/sensitive-context/index.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
 import { getRtkEnabled, getSensitiveContextProtectionSettings } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
@@ -531,7 +532,7 @@ export class ClaudeAgent extends BaseAgent {
     appName?: string;
     reason?: string;
     impact?: string;
-    safePreview?: string;
+    sensitiveCategory?: 'file_access';
     requiresSystemPrompt?: boolean;
     rememberForMinutes?: number;
     commandHash?: string;
@@ -1266,7 +1267,7 @@ export class ClaudeAgent extends BaseAgent {
                       appName: checkResult.appName,
                       reason: checkResult.reason,
                       impact: checkResult.impact,
-                      safePreview: checkResult.safePreview,
+                      sensitiveCategory: checkResult.sensitiveCategory,
                       requiresSystemPrompt: checkResult.requiresSystemPrompt,
                       rememberForMinutes: checkResult.rememberForMinutes,
                       commandHash: checkResult.commandHash,
@@ -1305,10 +1306,58 @@ export class ClaudeAgent extends BaseAgent {
               }
             }],
           }],
-          // NOTE: PostToolUse hook was removed because updatedMCPToolOutput is not a valid SDK output field.
-          // For API tools (api_*), summarization happens in api-tools.ts.
-          // For external MCP servers (stdio/HTTP), we cannot modify their output - they're responsible
-          // for their own size management via pagination or filtering.
+          // PostToolUse: redact sensitive data from built-in tool output before it
+          // reaches the model. The SDK's `hookSpecificOutput.updatedToolOutput`
+          // replaces the tool result for ALL tools (built-in + MCP) prior to the
+          // next model request (see @anthropic-ai/claude-agent-sdk hooks docs;
+          // `updatedMCPToolOutput` is the deprecated MCP-only predecessor).
+          //
+          // mcp__* tools (source tools via McpClientPool.protectMcpResult and
+          // session tools via session-scoped-tools) are already guarded upstream,
+          // so we skip them here to avoid double-redaction. This brings the Claude
+          // backend to parity with Pi (which wraps every tool).
+          PostToolUse: [{
+            hooks: [async (_hookInput) => {
+              if (_hookInput.hook_event_name !== 'PostToolUse') return { continue: true };
+              const toolName = _hookInput.tool_name;
+              if (!toolName) return { continue: true };
+
+              let sensitiveConfig;
+              try {
+                sensitiveConfig = getSensitiveContextProtectionSettings();
+              } catch {
+                sensitiveConfig = undefined;
+              }
+
+              const redaction = buildToolOutputRedaction({
+                toolName,
+                toolInput: ((_hookInput as { tool_input?: unknown }).tool_input as Record<string, unknown>) ?? {},
+                toolResponse: (_hookInput as { tool_response?: unknown }).tool_response,
+                sessionId,
+                permissionMode: getPermissionMode(sessionId),
+                workingDirectory: this.config.session?.workingDirectory ?? this.workspaceRootPath,
+                config: sensitiveConfig,
+                audit: sessionId
+                  ? {
+                    filePath: sensitiveAuditFilePath(getSessionPath(this.workspaceRootPath, sessionId)),
+                    enabled: sensitiveConfig?.audit?.enabled !== false,
+                  }
+                  : undefined,
+              });
+
+              if (!redaction || redaction.updatedToolOutput === undefined) return { continue: true };
+
+              this.onDebug?.(`PostToolUse sensitive guard redacted ${toolName} output before model context`);
+
+              return {
+                continue: true,
+                hookSpecificOutput: {
+                  hookEventName: 'PostToolUse' as const,
+                  updatedToolOutput: redaction.updatedToolOutput,
+                },
+              };
+            }],
+          }],
 
           // ═══════════════════════════════════════════════════════════════════════════
           // SUBAGENT HOOKS: Logging only - parent tracking uses SDK's parent_tool_use_id

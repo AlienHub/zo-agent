@@ -1134,6 +1134,7 @@ export class SessionManager implements ISessionManager {
     type?: 'bash' | 'file_write' | 'mcp_mutation' | 'api_mutation' | 'admin_approval'
     command?: string
     description?: string
+    sensitiveCategory?: 'file_access'
     commandHash?: string
   }> = new Map()
   private sessionSensitivePathAllowances: Map<string, Map<string, { path: string; createdAt: string }>> = new Map()
@@ -3846,7 +3847,7 @@ export class SessionManager implements ISessionManager {
         appName?: string;
         reason?: string;
         impact?: string;
-        safePreview?: string;
+        sensitiveCategory?: 'file_access';
         requiresSystemPrompt?: boolean;
         rememberForMinutes?: number;
         commandHash?: string;
@@ -3881,6 +3882,7 @@ export class SessionManager implements ISessionManager {
           type: request.type,
           command: request.command,
           description: request.description,
+          sensitiveCategory: request.sensitiveCategory,
           commandHash: effectiveCommandHash,
         })
 
@@ -6775,7 +6777,7 @@ export class SessionManager implements ISessionManager {
         }
       }
 
-      const isSensitiveFileAccess = requestMeta?.description === 'Sensitive file access'
+      const isSensitiveFileAccess = requestMeta?.sensitiveCategory === 'file_access'
       const permissionScope = options?.permissionScope
 
       if (

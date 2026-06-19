@@ -8,9 +8,15 @@ export function redactSensitiveText(text: string, matches: SensitiveMatch[]): st
   let cursor = 0;
 
   for (const match of ordered) {
-    if (match.start < cursor) continue;
+    // Fully contained within an already-redacted span — nothing left to cover.
+    if (match.end <= cursor) continue;
 
-    output += text.slice(cursor, match.start);
+    // Emit the untouched gap before this match. For a partial overlap
+    // (match.start < cursor) there is no gap; we still emit the replacement and
+    // advance the cursor to match.end so the overlapping tail is never left raw.
+    if (match.start > cursor) {
+      output += text.slice(cursor, match.start);
+    }
     output += match.replacement;
     cursor = match.end;
   }

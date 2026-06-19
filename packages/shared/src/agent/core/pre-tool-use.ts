@@ -14,8 +14,7 @@
  * 3. Prerequisite check: Block source tools until guide.md is read
  * 4. call_llm detection: Intercept mcp__session__call_llm
  * 5. Input transforms: Path expansion, sensitive path guard, config validation, skill qualification, metadata stripping
- * 6. Sensitive egress confirmation: Prompt before external sends containing sensitive data
- * 7. Ask-mode prompt decision: Determine if user approval is needed
+ * 6. Ask-mode prompt decision: Determine if user approval is needed
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -50,7 +49,7 @@ import {
 import { permissionsConfigCache, type PermissionsContext } from '../permissions-config.ts';
 import type { PrerequisiteCheckResult } from './prerequisite-manager.ts';
 import { rewriteBashWithRtk } from './rtk-rewrite.ts';
-import { buildSensitiveEgressPrompt, guardSensitiveToolPath, isSensitivePathPermanentlyAllowed } from '../guards/sensitive-context/index.ts';
+import { guardSensitiveToolPath, isSensitivePathPermanentlyAllowed } from '../guards/sensitive-context/index.ts';
 import type { SensitiveContextProtectionConfig } from '../guards/sensitive-context/index.ts';
 
 // ============================================================
@@ -596,7 +595,8 @@ export type PreToolUseCheckResult =
       appName?: string;
       reason?: string;
       impact?: string;
-      safePreview?: string;
+      /** Structured discriminator for sensitive-context prompts; avoids matching on `description`. */
+      sensitiveCategory?: 'file_access';
       requiresSystemPrompt?: boolean;
       rememberForMinutes?: number;
       commandHash?: string;
@@ -847,6 +847,7 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
           type: 'prompt',
           promptType: toolName === 'Bash' ? 'bash' : 'file_write',
           description: 'Sensitive file access',
+          sensitiveCategory: 'file_access',
           command: allowKey ?? (typeof currentInput.command === 'string'
             ? currentInput.command
             : typeof currentInput.file_path === 'string'
@@ -928,26 +929,7 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
   }
 
   // ============================================================
-  // 6. SENSITIVE EGRESS CONFIRMATION
-  // ============================================================
-  const sensitiveEgressPrompt = buildSensitiveEgressPrompt(toolName, currentInput, ctx.sensitiveContextProtection);
-  if (sensitiveEgressPrompt) {
-    return {
-      type: 'prompt',
-      promptType: sensitiveEgressPrompt.promptType,
-      description: sensitiveEgressPrompt.description,
-      command: sensitiveEgressPrompt.command,
-      modifiedInput: sensitiveEgressPrompt.modifiedInput,
-      reason: sensitiveEgressPrompt.reason,
-      impact: sensitiveEgressPrompt.impact,
-      safePreview: sensitiveEgressPrompt.safePreview,
-      requiresSystemPrompt: true,
-      rememberForMinutes: 5,
-    };
-  }
-
-  // ============================================================
-  // 7. ASK MODE PROMPT DECISION
+  // 6. ASK MODE PROMPT DECISION
   // ============================================================
   if (effectivePermissionMode === 'ask') {
     const promptInfo = shouldPromptInAskMode(

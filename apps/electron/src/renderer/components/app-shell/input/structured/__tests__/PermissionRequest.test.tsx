@@ -24,38 +24,14 @@ function renderPermissionRequest(request: PermissionRequestType): string {
   )
 }
 
-describe('PermissionRequest sensitive egress UI', () => {
-  it('shows redacted send controls and safe preview without raw sensitive values', () => {
-    const html = renderPermissionRequest({
-      requestId: 'perm-1',
-      sessionId: 'session-1',
-      toolName: 'api_github',
-      type: 'api_mutation',
-      description: 'Sensitive external send: POST /repos/acme/private/issues',
-      command: 'POST /repos/acme/private/issues',
-      reason: 'This outbound tool call contains sensitive data (github_token x1).',
-      impact: 'Approving sends a redacted version of the tool input. Denying cancels the external send.',
-      safePreview: JSON.stringify({
-        body: {
-          token: '[REDACTED:GITHUB_TOKEN]',
-        },
-      }, null, 2),
-    })
-
-    expect(html).toContain('chat.permissionSend')
-    expect(html).toContain('chat.permissionSendRedacted')
-    expect(html).toContain('chat.permissionCancel')
-    expect(html).toContain('chat.permissionSafePreview')
-    expect(html).toContain('[REDACTED:GITHUB_TOKEN]')
-    expect(html).not.toContain('ghp_syntheticabcdefghijklmnopqrstuvwxyz123456')
-  })
-
+describe('PermissionRequest sensitive file access UI', () => {
   it('shows once, session, and permanent allow choices for sensitive file access', () => {
     const html = renderPermissionRequest({
       requestId: 'perm-2',
       sessionId: 'session-1',
       toolName: 'Read',
       type: 'file_write',
+      sensitiveCategory: 'file_access',
       description: 'Sensitive file access',
       command: '/repo/.env',
       reason: [

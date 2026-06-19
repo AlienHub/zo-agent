@@ -24,7 +24,10 @@ import { isValidThinkingLevel, normalizeThinkingLevel } from '../agent/thinking-
 import { parsePermissionMode, PERMISSION_MODE_ORDER } from '../agent/mode-types.ts';
 import { type ConfigDefaults } from './config-defaults-schema.ts';
 import { isValidThemeFile } from './validators.ts';
-import type { SensitiveContextProtectionSettings } from './types.ts';
+import type {
+  SensitiveContextProtectionSettings,
+  SensitiveContextProtectionAction,
+} from './types.ts';
 
 // Re-export CONFIG_DIR for convenience (centralized in paths.ts)
 export { CONFIG_DIR } from './paths.ts';
@@ -130,16 +133,10 @@ const FALLBACK_CONFIG_DEFAULTS: ConfigDefaults = {
       enabled: true,
       sensitiveFiles: { enabled: true, action: 'prompt' },
       outputRedaction: { enabled: true },
-      fieldRedaction: { enabled: true },
-      egressConfirmation: { enabled: false },
-      mode: 'balanced',
       credentialFiles: { enabled: true, action: 'prompt' },
       secrets: { enabled: true, action: 'redact' },
       privateKeys: { enabled: true, action: 'block' },
-      pii: { enabled: true, action: 'redact' },
-      lowConfidence: { action: 'allow' },
       audit: { enabled: true, storeRawValues: false },
-      customPatterns: [],
     },
     allowRemoteEvaluate: true,
   },
@@ -2930,16 +2927,10 @@ const DEFAULT_SENSITIVE_CONTEXT_PROTECTION_SETTINGS: SensitiveContextProtectionS
   enabled: true,
   sensitiveFiles: { enabled: true, action: 'prompt' },
   outputRedaction: { enabled: true },
-  fieldRedaction: { enabled: true },
-  egressConfirmation: { enabled: false },
-  mode: 'balanced',
   credentialFiles: { enabled: true, action: 'prompt' },
   secrets: { enabled: true, action: 'redact' },
   privateKeys: { enabled: true, action: 'block' },
-  pii: { enabled: true, action: 'redact' },
-  lowConfidence: { action: 'allow' },
   audit: { enabled: true, storeRawValues: false },
-  customPatterns: [],
 };
 
 export function getDefaultSensitiveContextProtectionSettings(): SensitiveContextProtectionSettings {
@@ -2949,61 +2940,57 @@ export function getDefaultSensitiveContextProtectionSettings(): SensitiveContext
   );
 }
 
+const SENSITIVE_ACTIONS = new Set<string>(['allow', 'redact', 'block', 'prompt']);
+
+function coerceBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function coerceAction(value: unknown, fallback: SensitiveContextProtectionAction): SensitiveContextProtectionAction {
+  return typeof value === 'string' && SENSITIVE_ACTIONS.has(value)
+    ? (value as SensitiveContextProtectionAction)
+    : fallback;
+}
+
+function coerceFileAction(value: unknown, fallback: 'prompt' | 'block'): 'prompt' | 'block' {
+  return value === 'prompt' || value === 'block' ? value : fallback;
+}
+
+/**
+ * Normalize (and validate) the credential-safety-net settings into a
+ * fully-populated, well-typed object. Untrusted input (settings IPC or a
+ * hand-edited config.json) is coerced field-by-field — invalid enum values fall
+ * back to defaults and unknown keys are dropped — rather than spread verbatim.
+ */
 export function normalizeSensitiveContextProtectionSettings(
   settings: Partial<SensitiveContextProtectionSettings> | undefined,
 ): SensitiveContextProtectionSettings {
   const base = DEFAULT_SENSITIVE_CONTEXT_PROTECTION_SETTINGS;
-  const sensitiveFiles = {
-    ...base.sensitiveFiles,
-    ...settings?.sensitiveFiles,
-    enabled: settings?.sensitiveFiles?.enabled ?? settings?.credentialFiles?.enabled ?? base.sensitiveFiles.enabled,
-  };
-  const outputRedaction = {
-    ...base.outputRedaction,
-    ...settings?.outputRedaction,
-  };
-  const fieldRedaction = {
-    ...base.fieldRedaction,
-    ...settings?.fieldRedaction,
-  };
-  const egressConfirmation = {
-    ...base.egressConfirmation,
-    ...settings?.egressConfirmation,
-    enabled: false,
-  };
+  const s = settings ?? {};
+
+  const sensitiveFilesEnabled = coerceBool(
+    s.sensitiveFiles?.enabled,
+    coerceBool(s.credentialFiles?.enabled, base.sensitiveFiles.enabled),
+  );
+  // Fall back to the legacy credentialFiles.action so older/hand-edited configs
+  // that only set `credentialFiles: { action: 'block' }` aren't silently downgraded.
+  const sensitiveFilesAction = coerceFileAction(s.sensitiveFiles?.action ?? s.credentialFiles?.action, base.sensitiveFiles.action);
+  const outputRedactionEnabled = coerceBool(s.outputRedaction?.enabled, base.outputRedaction.enabled);
 
   return {
-    ...base,
-    ...settings,
-    sensitiveFiles,
-    outputRedaction,
-    fieldRedaction,
-    egressConfirmation,
-    mode: settings?.mode ?? base.mode,
-    credentialFiles: {
-      ...base.credentialFiles,
-      ...settings?.credentialFiles,
-      enabled: sensitiveFiles.enabled,
-      action: sensitiveFiles.action,
-    },
+    enabled: coerceBool(s.enabled, base.enabled),
+    sensitiveFiles: { enabled: sensitiveFilesEnabled, action: sensitiveFilesAction },
+    outputRedaction: { enabled: outputRedactionEnabled },
+    credentialFiles: { enabled: sensitiveFilesEnabled, action: sensitiveFilesAction },
     secrets: {
-      ...base.secrets,
-      ...settings?.secrets,
-      enabled: outputRedaction.enabled && (settings?.secrets?.enabled ?? base.secrets.enabled),
+      enabled: outputRedactionEnabled && coerceBool(s.secrets?.enabled, base.secrets.enabled),
+      action: coerceAction(s.secrets?.action, base.secrets.action),
     },
     privateKeys: {
-      ...base.privateKeys,
-      ...settings?.privateKeys,
-      enabled: outputRedaction.enabled && (settings?.privateKeys?.enabled ?? base.privateKeys.enabled),
+      enabled: outputRedactionEnabled && coerceBool(s.privateKeys?.enabled, base.privateKeys.enabled),
+      action: coerceAction(s.privateKeys?.action, base.privateKeys.action),
     },
-    pii: {
-      ...base.pii,
-      ...settings?.pii,
-      enabled: outputRedaction.enabled && (settings?.pii?.enabled ?? base.pii.enabled),
-    },
-    lowConfidence: { ...base.lowConfidence, ...settings?.lowConfidence },
-    audit: { ...base.audit, ...settings?.audit, storeRawValues: false },
-    customPatterns: settings?.customPatterns ?? [],
+    audit: { enabled: coerceBool(s.audit?.enabled, base.audit.enabled), storeRawValues: false },
   };
 }
 

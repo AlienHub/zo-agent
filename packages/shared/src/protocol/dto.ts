@@ -289,7 +289,6 @@ export interface PermissionRequest extends BasePermissionRequest {
 
 export interface PermissionResponseOptions {
   rememberForMinutes?: number
-  egressAction?: 'send' | 'send_redacted' | 'cancel'
   permissionScope?: 'once' | 'session' | 'permanent'
 }
 

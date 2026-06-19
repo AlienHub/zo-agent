@@ -33,16 +33,10 @@ const fallbackSettings: SensitiveContextProtectionSettings = {
   enabled: true,
   sensitiveFiles: { enabled: true, action: 'prompt' },
   outputRedaction: { enabled: true },
-  fieldRedaction: { enabled: true },
-  egressConfirmation: { enabled: false },
-  mode: 'balanced',
   credentialFiles: { enabled: true, action: 'prompt' },
   secrets: { enabled: true, action: 'redact' },
   privateKeys: { enabled: true, action: 'block' },
-  pii: { enabled: true, action: 'redact' },
-  lowConfidence: { action: 'allow' },
   audit: { enabled: true, storeRawValues: false },
-  customPatterns: [],
 }
 
 function cloneSettings(settings: SensitiveContextProtectionSettings): SensitiveContextProtectionSettings {
@@ -50,15 +44,10 @@ function cloneSettings(settings: SensitiveContextProtectionSettings): SensitiveC
     ...settings,
     sensitiveFiles: { ...settings.sensitiveFiles },
     outputRedaction: { ...settings.outputRedaction },
-    fieldRedaction: { ...settings.fieldRedaction },
-    egressConfirmation: { ...settings.egressConfirmation },
     credentialFiles: { ...settings.credentialFiles },
     secrets: { ...settings.secrets },
     privateKeys: { ...settings.privateKeys },
-    pii: { ...settings.pii },
-    lowConfidence: { ...settings.lowConfidence },
     audit: { ...settings.audit, storeRawValues: false },
-    customPatterns: [...settings.customPatterns],
   }
 }
 
@@ -126,7 +115,7 @@ export default function SecuritySettingsPage() {
   }, [settings, updateSettings])
 
   const patchToggle = useCallback((
-    key: 'sensitiveFiles' | 'outputRedaction' | 'fieldRedaction' | 'egressConfirmation',
+    key: 'sensitiveFiles' | 'outputRedaction',
     enabled: boolean,
   ) => {
     const next = cloneSettings(settings)
@@ -134,15 +123,10 @@ export default function SecuritySettingsPage() {
     if (key === 'sensitiveFiles') {
       next.sensitiveFiles = { ...next.sensitiveFiles, enabled }
       next.credentialFiles = { ...next.credentialFiles, enabled, action: next.sensitiveFiles.action }
-    } else if (key === 'outputRedaction') {
+    } else {
       next.outputRedaction = { ...next.outputRedaction, enabled }
       next.secrets = { ...next.secrets, enabled }
       next.privateKeys = { ...next.privateKeys, enabled }
-      next.pii = { ...next.pii, enabled }
-    } else if (key === 'fieldRedaction') {
-      next.fieldRedaction = { ...next.fieldRedaction, enabled }
-    } else {
-      next.egressConfirmation = { ...next.egressConfirmation, enabled }
     }
 
     updateSettings(next)
@@ -191,27 +175,6 @@ export default function SecuritySettingsPage() {
                     checked={settings.outputRedaction.enabled}
                     onCheckedChange={(enabled) => patchToggle('outputRedaction', enabled)}
                     disabled={isLoading || !settings.enabled}
-                  />
-                  <SettingsToggle
-                    label={t('settings.security.fieldRedaction')}
-                    description={t('settings.security.fieldRedactionDesc')}
-                    checked={settings.fieldRedaction.enabled}
-                    onCheckedChange={(enabled) => patchToggle('fieldRedaction', enabled)}
-                    disabled={isLoading || !settings.enabled}
-                  />
-                  <SettingsToggle
-                    label={(
-                      <span className="inline-flex items-center gap-2">
-                        <span>{t('settings.security.egressConfirmation')}</span>
-                        <span className="rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                          {t('common.comingSoon')}
-                        </span>
-                      </span>
-                    )}
-                    description={t('settings.security.egressConfirmationDesc')}
-                    checked={false}
-                    onCheckedChange={() => {}}
-                    disabled
                   />
                 </SettingsCard>
               </SettingsSection>

@@ -7,10 +7,8 @@ export interface PermissionResolution {
 
 export function resolvePermissionResponse(
   allowed: boolean,
-  options?: PermissionResponseOptions,
+  _options?: PermissionResponseOptions,
 ): PermissionResolution {
-  return {
-    allowed: allowed && options?.egressAction !== 'cancel',
-    useModifiedInput: options?.egressAction !== 'send',
-  };
+  // Modified input (path expansion, RTK rewrite, admin-wrap) is always applied when present.
+  return { allowed, useModifiedInput: true };
 }

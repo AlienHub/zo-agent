@@ -36,7 +36,7 @@ import { createSpawnSessionTool, type SpawnSessionFn } from './spawn-session-too
 import { createBrowserTools, type BrowserPaneFns } from './browser-tools.ts';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
 import { getBrowserToolEnabled, getSensitiveContextProtectionSettings } from '../config/storage.ts';
-import { formatFieldRuleSuggestionNotice, formatSensitiveProtectionNotice, guardToolResult } from './guards/sensitive-context/index.ts';
+import { formatSensitiveProtectionNotice, guardToolResult, sensitiveAuditFilePath, writeSensitiveAuditEntry } from './guards/sensitive-context/index.ts';
 
 // Re-export types for backward compatibility
 export type {
@@ -179,11 +179,19 @@ function protectSessionToolResult(
     config,
   });
 
+  writeSensitiveAuditEntry({
+    auditFilePath: sensitiveAuditFilePath(getSessionPath(workspaceRootPath, sessionId)),
+    auditEnabled: config?.audit?.enabled !== false,
+    sessionId,
+    toolName: `mcp__session__${toolName}`,
+    sourceSlug: 'session',
+    action: guarded.action,
+    policyMode: guarded.policyMode,
+    findings: guarded.findings,
+  });
+
   if (guarded.action === 'allow') {
-    const suggestionNotice = formatFieldRuleSuggestionNotice(guarded.suggestions);
-    return suggestionNotice
-      ? { ...result, content: [{ type: 'text', text: `${suggestionNotice}${text}` }] }
-      : result;
+    return result;
   }
   return {
     ...result,
@@ -191,7 +199,7 @@ function protectSessionToolResult(
       type: 'text',
       text: guarded.action === 'block'
         ? guarded.reason
-        : `${formatSensitiveProtectionNotice(guarded)}${formatFieldRuleSuggestionNotice(guarded.suggestions)}${guarded.text ?? text}`,
+        : `${formatSensitiveProtectionNotice(guarded)}${guarded.text ?? text}`,
     }],
   };
 }

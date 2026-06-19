@@ -16,6 +16,8 @@ interface SensitivePattern {
   replaceGroup?: number;
 }
 
+// Credential / secret patterns only. PII (email/phone/credit-card) is intentionally
+// out of scope — this guard is a credential safety net, not a general DLP layer.
 const PATTERNS: SensitivePattern[] = [
   {
     type: 'private_key',
@@ -97,34 +99,6 @@ const PATTERNS: SensitivePattern[] = [
     regex: /\b((?:password|passwd|pwd)\s*[:=]\s*['"]?)([^'"\s]{8,})/gi,
     replaceGroup: 2,
   },
-  {
-    type: 'credit_card',
-    severity: 'medium',
-    confidence: 'medium',
-    replacement: '[REDACTED:CREDIT_CARD]',
-    regex: /\b(?:\d[ -]*?){13,19}\b/g,
-  },
-  {
-    type: 'email',
-    severity: 'low',
-    confidence: 'high',
-    replacement: '[REDACTED:EMAIL]',
-    regex: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
-  },
-  {
-    type: 'phone',
-    severity: 'low',
-    confidence: 'medium',
-    replacement: '[REDACTED:PHONE]',
-    regex: /(?<![A-Za-z0-9])(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}(?![A-Za-z0-9])/g,
-  },
-  {
-    type: 'phone',
-    severity: 'low',
-    confidence: 'medium',
-    replacement: '[REDACTED:PHONE]',
-    regex: /(?<![A-Za-z0-9])(?:\+?86[-.\s]*)?1[-.\s]*[3-9](?:[-.\s]*\d){9}(?![A-Za-z0-9])/g,
-  },
 ];
 
 function createLineNumberLookup(text: string): (index: number) => number {
@@ -175,97 +149,6 @@ function aggregateMatches(matches: SensitiveMatch[]): SensitiveFinding[] {
   return Array.from(grouped.values());
 }
 
-function scanHexDumpEncodedChinesePhones(text: string, lineNumberAt: (index: number) => number): SensitiveMatch[] {
-  const matches: SensitiveMatch[] = [];
-  const decoded: string[] = [];
-  const byteLineRanges: Array<{ start: number; end: number }> = [];
-  let offset = 0;
-
-  while (offset <= text.length) {
-    const newlineIndex = text.indexOf('\n', offset);
-    const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
-    const line = text.slice(offset, lineEnd);
-    const colonIndex = line.indexOf(':');
-    const prefixMatch = line.match(/^\s*[0-9a-fA-F]{6,16}\s+/);
-    let afterOffset: number | null = null;
-
-    if (colonIndex >= 0 && /^\s*[0-9a-fA-F]{6,16}$/.test(line.slice(0, colonIndex))) {
-      afterOffset = colonIndex + 1;
-    } else if (prefixMatch) {
-      afterOffset = prefixMatch[0].length;
-    }
-
-    if (afterOffset === null) {
-      if (newlineIndex === -1) break;
-      offset = newlineIndex + 1;
-      continue;
-    }
-
-    const lineStart = offset;
-    const afterOffsetValue = afterOffset;
-    const afterOffsetText = line.slice(afterOffsetValue);
-    const tokenRegex = /[0-9a-fA-F]{2,4}/g;
-    let tokenMatch: RegExpExecArray | null;
-    let consumedHexToken = false;
-    let consumedByteCount = 0;
-
-    while ((tokenMatch = tokenRegex.exec(afterOffsetText)) !== null) {
-      const token = tokenMatch[0];
-      const tokenStart = tokenMatch.index;
-      const previous = afterOffsetText[tokenStart - 1];
-      const next = afterOffsetText[tokenStart + token.length];
-
-      if ((previous && !/\s/.test(previous)) || (next && !/\s/.test(next))) {
-        break;
-      }
-
-      consumedHexToken = true;
-      for (let i = 0; i < token.length; i += 2) {
-        const byte = Number.parseInt(token.slice(i, i + 2), 16);
-        if (!Number.isFinite(byte)) continue;
-        decoded.push(String.fromCharCode(byte));
-        byteLineRanges.push({ start: lineStart, end: lineEnd });
-        consumedByteCount += 1;
-      }
-    }
-
-    if (!consumedHexToken || consumedByteCount < 4) {
-      if (newlineIndex === -1) break;
-      offset = newlineIndex + 1;
-      continue;
-    }
-
-    if (newlineIndex === -1) break;
-    offset = newlineIndex + 1;
-  }
-
-  const decodedText = decoded.join('');
-  if (!decodedText) return matches;
-
-  const phoneRegex = /(?<![A-Za-z0-9])(?:\+?86[-.\s]*)?1[-.\s]*[3-9](?:[-.\s]*\d){9}(?![A-Za-z0-9])/g;
-  let phoneMatch: RegExpExecArray | null;
-
-  while ((phoneMatch = phoneRegex.exec(decodedText)) !== null) {
-    const startByte = phoneMatch.index;
-    const endByte = startByte + phoneMatch[0].length - 1;
-    const startRange = byteLineRanges[startByte];
-    const endRange = byteLineRanges[endByte];
-    if (!startRange || !endRange) continue;
-
-    matches.push({
-      type: 'phone',
-      severity: 'low',
-      confidence: 'medium',
-      start: startRange.start,
-      end: endRange.end,
-      line: lineNumberAt(startRange.start),
-      replacement: '[REDACTED:PHONE]',
-    });
-  }
-
-  return matches;
-}
-
 export function scanSensitiveText(text: string): SensitiveScannerResult {
   const matches: SensitiveMatch[] = [];
   const lineNumberAt = createLineNumberLookup(text);
@@ -301,8 +184,6 @@ export function scanSensitiveText(text: string): SensitiveScannerResult {
       });
     }
   }
-
-  matches.push(...scanHexDumpEncodedChinesePhones(text, lineNumberAt));
 
   matches.sort((a, b) => a.start - b.start || b.end - a.end);
   return {

@@ -547,8 +547,8 @@ export interface PermissionRequest {
   reason?: string;
   /** Plain-language impact shown in admin approval prompt */
   impact?: string;
-  /** Safe preview for prompts that can show a sanitized payload; must not contain raw sensitive values */
-  safePreview?: string;
+  /** Structured discriminator for sensitive-context prompts (drives UI/persistence branches; avoids matching on `description`) */
+  sensitiveCategory?: 'file_access';
   /** Whether native OS auth prompt is expected */
   requiresSystemPrompt?: boolean;
   /** Optional remember window for this exact command */

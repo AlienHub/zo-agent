@@ -76,7 +76,7 @@ export type PermissionCallback = (request: {
   appName?: string;
   reason?: string;
   impact?: string;
-  safePreview?: string;
+  sensitiveCategory?: 'file_access';
   requiresSystemPrompt?: boolean;
   rememberForMinutes?: number;
   commandHash?: string;

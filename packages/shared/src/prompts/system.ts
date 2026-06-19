@@ -310,7 +310,7 @@ export type SystemPromptPreset = 'default' | 'mini';
 export function getMiniAgentSystemPrompt(workspaceRootPath?: string): string {
   const workspaceDataPath = workspaceRootPath ? getWorkspaceDataPath(workspaceRootPath) : undefined;
   const workspaceContext = workspaceRootPath
-    ? `\n## Workspace\nWorkspace root: \`${workspaceRootPath}\`\nZo config files are in: \`${workspaceDataPath}\`\n- Statuses: \`statuses/config.json\`\n- Labels: \`labels/config.json\`\n- Permissions: \`permissions.json\`\n- Sensitive redaction rules: \`redaction.json\`\n`
+    ? `\n## Workspace\nWorkspace root: \`${workspaceRootPath}\`\nZo config files are in: \`${workspaceDataPath}\`\n- Statuses: \`statuses/config.json\`\n- Labels: \`labels/config.json\`\n- Permissions: \`permissions.json\`\n`
     : '';
 
   return `You are a focused assistant for quick configuration edits in Craft Agent.
@@ -321,7 +321,6 @@ ${workspaceContext}
 ## Guidelines
 - Make the requested change directly
 - Validate with config_validate after editing
-- For user requests like "hide this column", "do not show phone/id/salary to the model", update \`redaction.json\` with a conversation-created field redaction rule; use source-local \`sources/{slug}/redaction.json\` when the request is about one source, and never store raw sensitive values in that file
 - Confirm completion briefly
 - Don't add unrequested features or changes
 - Keep responses short and to the point
@@ -552,15 +551,6 @@ Sources are external data connections. Each source has:
 - Sources: \`${workspaceDataPath}/sources/{slug}/\`
 - Skills: \`${workspaceDataPath}/skills/{slug}/\`
 - Theme: \`${workspaceDataPath}/theme.json\`
-- Sensitive redaction rules: \`${workspaceDataPath}/redaction.json\`
-- Source-specific redaction rules: \`${workspaceDataPath}/sources/{slug}/redaction.json\`
-
-## Sensitive Redaction Rules
-
-When the user asks in natural language to hide, redact, drop, or keep structured fields before they enter model context, maintain redaction rules instead of asking them to edit JSON by hand. Use \`${workspaceDataPath}/redaction.json\` for file/workspace rules and \`${workspaceDataPath}/sources/{slug}/redaction.json\` for source-specific rules. Use rules shaped like:
-\`{"scope":"file|source|workspace","kind":"field_redaction","match":"clients_*.csv","fields":["phone"],"action":"redact|drop|keep","createdBy":"conversation","createdAt":"<ISO timestamp>","note":"short user-facing reason"}\`
-
-Choose the narrowest useful scope: file for one file/pattern, source for one source slug, workspace only when the user says "always" or "all". Store field names and notes only; do not store raw sensitive values.
 
 ## Skills
 

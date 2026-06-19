@@ -21,7 +21,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { isLocalMcpEnabled } from '../workspaces/storage.ts';
 import { guardLargeResult } from '../utils/large-response.ts';
 import { getSensitiveContextProtectionSettings } from '../config/storage.ts';
-import { formatFieldRuleSuggestionNotice, formatSensitiveProtectionNotice, guardToolResult } from '../agent/guards/sensitive-context/index.ts';
+import { formatSensitiveProtectionNotice, guardToolResult, sensitiveAuditFilePath, writeSensitiveAuditEntry } from '../agent/guards/sensitive-context/index.ts';
+import { basename } from 'node:path';
 import {
   saveBinaryResponse,
   detectExtensionFromMagic,
@@ -66,6 +67,7 @@ function protectMcpResult(
   args: Record<string, unknown>,
   text: string,
   workspaceRootPath?: string,
+  sessionPath?: string,
 ): string {
   let config;
   try {
@@ -74,8 +76,10 @@ function protectMcpResult(
     config = undefined;
   }
 
+  // Derive a session id for the audit record from the session dir when available.
+  const sessionId = sessionPath ? basename(sessionPath) : 'mcp-pool';
   const guarded = guardToolResult({
-    sessionId: 'mcp-pool',
+    sessionId,
     toolName: proxyName,
     toolInput: args,
     resultText: text,
@@ -85,9 +89,24 @@ function protectMcpResult(
     config,
   });
 
-  if (guarded.action === 'allow') return `${formatFieldRuleSuggestionNotice(guarded.suggestions)}${text}`;
+  // Audit source MCP tool decisions too (Claude skips mcp__* in PostToolUse, so
+  // this is the only place these decisions are recorded).
+  if (sessionPath) {
+    writeSensitiveAuditEntry({
+      auditFilePath: sensitiveAuditFilePath(sessionPath),
+      auditEnabled: config?.audit?.enabled !== false,
+      sessionId,
+      toolName: proxyName,
+      sourceSlug,
+      action: guarded.action,
+      policyMode: guarded.policyMode,
+      findings: guarded.findings,
+    });
+  }
+
+  if (guarded.action === 'allow') return text;
   if (guarded.action === 'block') return guarded.reason;
-  return `${formatSensitiveProtectionNotice(guarded)}${formatFieldRuleSuggestionNotice(guarded.suggestions)}${guarded.text ?? text}`;
+  return `${formatSensitiveProtectionNotice(guarded)}${guarded.text ?? text}`;
 }
 
 function sanitizeToolNamePart(value: string): string {
@@ -517,7 +536,7 @@ export class McpClientPool {
 
       // 2. Combine parts (fallback to JSON.stringify if no content extracted)
       const text = parts.join('\n') || JSON.stringify(result);
-      const protectedText = protectMcpResult(proxyName, slug, args, text, this.workspaceRootPath);
+      const protectedText = protectMcpResult(proxyName, slug, args, text, this.workspaceRootPath, this.sessionPath);
 
       // 3. Centralized binary + large response handling
       if (!result.isError && this.sessionPath) {
@@ -537,8 +556,12 @@ export class McpClientPool {
         isError: !!result.isError,
       };
     } catch (err) {
+      // Upstream error text can carry secrets (e.g. an echoed `Authorization:
+      // Bearer …` header or token). Claude skips mcp__* in PostToolUse, so this
+      // is the only place these errors get redacted — run them through the guard.
+      const errorText = `MCP tool "${originalName}" (source: ${slug}) failed: ${err instanceof Error ? err.message : String(err)}`;
       return {
-        content: `MCP tool "${originalName}" (source: ${slug}) failed: ${err instanceof Error ? err.message : String(err)}`,
+        content: protectMcpResult(proxyName, slug, args, errorText, this.workspaceRootPath, this.sessionPath),
         isError: true,
         sourceSlug: slug,
       };

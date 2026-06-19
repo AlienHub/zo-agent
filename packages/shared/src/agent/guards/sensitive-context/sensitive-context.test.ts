@@ -3,17 +3,15 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  addFieldRedactionRule,
   addSensitivePathAllowRule,
-  addSourceFieldRedactionRule,
   formatSensitiveProtectionNotice,
-  formatFieldRuleSuggestionNotice,
   guardSensitiveToolPath,
   guardToolResult,
-  listFieldRedactionRules,
   listSensitivePathAllowRules,
+  redactSensitiveText,
   scanSensitiveText,
 } from './index.ts';
+import type { SensitiveMatch } from './types.ts';
 import { runPreToolUseChecks, type PermissionManagerLike } from '../../core/pre-tool-use.ts';
 
 const permissionManager: PermissionManagerLike = {
@@ -41,10 +39,36 @@ describe('SensitiveScanner', () => {
 
     expect(result.findings.map(finding => finding.type)).toEqual(['anthropic_key']);
   });
+
+  it('does not flag PII (out of scope for the credential safety net)', () => {
+    const result = scanSensitiveText('Contact jane@example.com or 415-555-0199, card 4111111111111111.');
+    expect(result.findings).toHaveLength(0);
+  });
+
+  describe('redactSensitiveText overlap handling', () => {
+    const m = (start: number, end: number, replacement: string): SensitiveMatch => ({
+      type: 'unknown_secret', severity: 'high', confidence: 'high', line: 1, start, end, replacement,
+    });
+
+    it('covers the tail of a partially-overlapping match (no raw leak)', () => {
+      const text = 'AAAAAAAAAABBBBBBBBBB'; // [0,10)=A, [10,20)=B
+      // match1 covers [0,12), match2 overlaps at [8,20). The tail [12,20) must not leak.
+      const out = redactSensitiveText(text, [m(0, 12, '[R1]'), m(8, 20, '[R2]')]);
+      expect(out).not.toContain('A');
+      expect(out).not.toContain('B');
+      expect(out).toBe('[R1][R2]');
+    });
+
+    it('skips a match fully contained in an earlier one', () => {
+      const text = '0123456789';
+      const out = redactSensitiveText(text, [m(0, 10, '[ALL]'), m(3, 6, '[INNER]')]);
+      expect(out).toBe('[ALL]');
+    });
+  });
 });
 
 describe('ToolResultGuard', () => {
-  it('redacts secrets in balanced mode', () => {
+  it('redacts secrets in tool output', () => {
     const decision = guardToolResult({
       sessionId: 'session-1',
       toolName: 'Bash',
@@ -97,361 +121,18 @@ describe('ToolResultGuard', () => {
     expect('text' in decision).toBe(false);
   });
 
-  it('redacts PII by default for personal protection', () => {
+  it('does not redact PII (email/phone) — out of scope', () => {
     const decision = guardToolResult({
       sessionId: 'session-1',
       toolName: 'Read',
       toolInput: { file_path: 'README.md' },
-      resultText: 'Contact jane@example.com for details.',
+      resultText: 'Contact jane@example.com or 415-555-0199 for details.',
       permissionMode: 'ask',
     });
 
-    expect(decision.action).toBe('redact');
-    expect(decision.findings).toHaveLength(1);
-    expect(decision.findings[0]?.type).toBe('email');
-    if (decision.action === 'redact') {
-      expect(decision.text).toBe('Contact [REDACTED:EMAIL] for details.');
-    }
-  });
-
-  it('redacts structured JSON fields by sensitive field name', () => {
-    const decision = guardToolResult({
-      sessionId: 'session-1',
-      toolName: 'mcp__crm__getContacts',
-      toolInput: {},
-      resultText: JSON.stringify({
-        customer: 'Jane',
-        email: 'jane@example.com',
-        mobile_phone: '19384007303',
-        notes: 'keep this',
-      }),
-      permissionMode: 'ask',
-    });
-
-    expect(decision.action).toBe('redact');
-    if (decision.action === 'redact') {
-      expect(decision.text).toContain('[REDACTED:EMAIL]');
-      expect(decision.text).toContain('[REDACTED:PHONE]');
-      expect(decision.text).toContain('keep this');
-      expect(decision.text).not.toContain('jane@example.com');
-      expect(decision.text).not.toContain('19384007303');
-    }
-  });
-
-  it('redacts structured CSV columns by sensitive header name', () => {
-    const decision = guardToolResult({
-      sessionId: 'session-1',
-      toolName: 'Bash',
-      toolInput: { command: 'cat customers.csv' },
-      resultText: [
-        'name,email,phone,city',
-        'Jane,jane@example.com,19384007303,Shanghai',
-        'John,john@example.com,18328076061,Beijing',
-      ].join('\n'),
-      permissionMode: 'ask',
-    });
-
-    expect(decision.action).toBe('redact');
-    if (decision.action === 'redact') {
-      expect(decision.text).toContain('name,email,phone,city');
-      expect(decision.text).toContain('Jane,[REDACTED:EMAIL],[REDACTED:PHONE],Shanghai');
-      expect(decision.text).not.toContain('jane@example.com');
-      expect(decision.text).not.toContain('18328076061');
-    }
-  });
-
-  it('applies conversation-created workspace field redaction rules', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sensitive-context-rules-'));
-    try {
-      addFieldRedactionRule(dir, {
-        scope: 'workspace',
-        fields: ['salary'],
-        action: 'redact',
-        note: 'User asked to hide salary fields in this workspace.',
-      });
-
-      expect(listFieldRedactionRules(dir)).toHaveLength(1);
-
-      const decision = guardToolResult({
-        sessionId: 'session-1',
-        toolName: 'mcp__crm__getContacts',
-        toolInput: {},
-        resultText: JSON.stringify({ name: 'Jane', salary: 123000, city: 'Shanghai' }),
-        permissionMode: 'ask',
-        workingDirectory: dir,
-        config: {
-          outputRedaction: { enabled: false },
-          fieldRedaction: { enabled: true },
-        },
-      });
-
-      expect(decision.action).toBe('redact');
-      if (decision.action === 'redact') {
-        expect(decision.text).toContain('"salary": "[REDACTED:FIELD]"');
-        expect(decision.text).toContain('"city": "Shanghai"');
-        expect(decision.text).not.toContain('123000');
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('suggests conversation-created rules for suspicious structured fields without storing raw values', () => {
-    const decision = guardToolResult({
-      sessionId: 'session-1',
-      toolName: 'Read',
-      toolInput: { file_path: 'clients.csv' },
-      resultText: [
-        'name,salary,city',
-        'Jane,123000,Shanghai',
-      ].join('\n'),
-      permissionMode: 'ask',
-      config: {
-        outputRedaction: { enabled: false },
-        fieldRedaction: { enabled: true },
-      },
-    });
-
-    expect(decision.action).toBe('redact');
-    expect(decision.suggestions).toEqual([{ field: 'salary', reason: 'compensation field' }]);
-    if (decision.action === 'redact') {
-      const notice = formatFieldRuleSuggestionNotice(decision.suggestions);
-      expect(notice).toContain('Sensitive field rule suggestion');
-      expect(notice).toContain('salary (compensation field)');
-      expect(notice).not.toContain('123000');
-      expect(decision.text).toContain('Jane,[REDACTED:FIELD],Shanghai');
-      expect(decision.text).not.toContain('123000');
-    }
-  });
-
-  it('does not suggest a field rule when a keep rule already exists', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sensitive-context-keep-rule-'));
-    try {
-      addFieldRedactionRule(dir, {
-        scope: 'workspace',
-        fields: ['salary'],
-        action: 'keep',
-        note: 'User said salary is safe to use for this workspace.',
-      });
-
-      const decision = guardToolResult({
-        sessionId: 'session-1',
-        toolName: 'Read',
-        toolInput: { file_path: 'clients.csv' },
-        resultText: [
-          'name,salary,city',
-          'Jane,123000,Shanghai',
-        ].join('\n'),
-        permissionMode: 'ask',
-        workingDirectory: dir,
-        config: {
-          outputRedaction: { enabled: false },
-          fieldRedaction: { enabled: true },
-        },
-      });
-
-      expect(decision.action).toBe('allow');
-      expect(decision.suggestions).toEqual([]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('suggests source-local field rules for source result fields', () => {
-    const decision = guardToolResult({
-      sessionId: 'session-1',
-      toolName: 'mcp__crm__getAccounts',
-      toolInput: {},
-      resultText: JSON.stringify({ name: 'Acme', address: '1 Main St', city: 'Shanghai' }),
-      permissionMode: 'ask',
-      sourceSlug: 'crm',
-      config: {
-        outputRedaction: { enabled: false },
-        fieldRedaction: { enabled: true },
-      },
-    });
-
-    expect(decision.action).toBe('redact');
-    expect(decision.suggestions).toEqual([{ field: 'address', reason: 'address field' }]);
-    if (decision.action === 'redact') {
-      expect(decision.text).toContain('"address": "[REDACTED:FIELD]"');
-      expect(decision.text).not.toContain('1 Main St');
-    }
-  });
-
-  it('applies file-scoped field drop rules from redaction.json', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sensitive-context-file-rules-'));
-    try {
-      addFieldRedactionRule(dir, {
-        scope: 'file',
-        match: 'clients_*.csv',
-        fields: ['salary'],
-        action: 'drop',
-        note: 'User asked to remove salary from client exports.',
-      });
-
-      const decision = guardToolResult({
-        sessionId: 'session-1',
-        toolName: 'Read',
-        toolInput: { file_path: 'clients_june.csv' },
-        resultText: [
-          'name,salary,city',
-          'Jane,123000,Shanghai',
-          'John,98000,Beijing',
-        ].join('\n'),
-        permissionMode: 'ask',
-        workingDirectory: dir,
-        config: {
-          outputRedaction: { enabled: false },
-          fieldRedaction: { enabled: true },
-        },
-      });
-
-      expect(decision.action).toBe('redact');
-      if (decision.action === 'redact') {
-        expect(decision.text).toBe([
-          'name,city',
-          'Jane,Shanghai',
-          'John,Beijing',
-        ].join('\n'));
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('applies source-scoped field redaction rules from redaction.json', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sensitive-context-source-rules-'));
-    try {
-      addFieldRedactionRule(dir, {
-        scope: 'source',
-        match: 'crm',
-        fields: ['account_tier'],
-        action: 'redact',
-        note: 'User asked to hide account tier for CRM source results.',
-      });
-
-      const decision = guardToolResult({
-        sessionId: 'session-1',
-        toolName: 'mcp__crm__getAccounts',
-        toolInput: {},
-        resultText: JSON.stringify({ name: 'Acme', account_tier: 'enterprise', city: 'Shanghai' }),
-        permissionMode: 'ask',
-        sourceSlug: 'crm',
-        workingDirectory: dir,
-        config: {
-          outputRedaction: { enabled: false },
-          fieldRedaction: { enabled: true },
-        },
-      });
-
-      expect(decision.action).toBe('redact');
-      if (decision.action === 'redact') {
-        expect(decision.text).toContain('"account_tier": "[REDACTED:FIELD]"');
-        expect(decision.text).not.toContain('enterprise');
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('applies source-local redaction.json field rules', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'sensitive-context-source-local-rules-'));
-    try {
-      addSourceFieldRedactionRule(dir, 'crm', {
-        fields: ['internal_notes'],
-        action: 'drop',
-        note: 'User asked to drop CRM internal notes.',
-      });
-
-      const decision = guardToolResult({
-        sessionId: 'session-1',
-        toolName: 'mcp__crm__getAccounts',
-        toolInput: {},
-        resultText: JSON.stringify({ name: 'Acme', internal_notes: 'renewal risk', city: 'Shanghai' }),
-        permissionMode: 'ask',
-        sourceSlug: 'crm',
-        workingDirectory: dir,
-        config: {
-          outputRedaction: { enabled: false },
-          fieldRedaction: { enabled: true },
-        },
-      });
-
-      expect(decision.action).toBe('redact');
-      if (decision.action === 'redact') {
-        expect(decision.text).toContain('"name": "Acme"');
-        expect(decision.text).not.toContain('internal_notes');
-        expect(decision.text).not.toContain('renewal risk');
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('redacts segmented Chinese mobile numbers when PII protection is enabled', () => {
-    const decision = guardToolResult({
-      sessionId: 'session-1',
-      toolName: 'Bash',
-      toolInput: { command: 'python3 split_phone.py' },
-      resultText: [
-        'chunked=193 840 073 03',
-        'chars=1 9 3 8 4 0 0 7 3 0 3',
-      ].join('\n'),
-      permissionMode: 'ask',
-      config: {
-        pii: { enabled: true, action: 'redact' },
-      },
-    });
-
-    expect(decision.action).toBe('redact');
-    if (decision.action === 'redact') {
-      expect(decision.text).toContain('chunked=[REDACTED:PHONE]');
-      expect(decision.text).toContain('chars=[REDACTED:PHONE]');
-      expect(decision.text).not.toContain('193 840 073 03');
-      expect(decision.text).not.toContain('1 9 3 8 4 0 0 7 3 0 3');
-    }
-  });
-
-  it('redacts xxd-style hex dump lines that encode Chinese mobile numbers', () => {
-    const decision = guardToolResult({
-      sessionId: 'session-1',
-      toolName: 'Bash',
-      toolInput: { command: 'xxd phone_test_data.csv | head' },
-      resultText: [
-        '000000b0: e9ab 98e7 a38a 2c31 3833 3238 3037 3630  ......,183280760',
-        '000000c0: 3631 2c2c 2ce6 b7b1 e59c b32c 7573 6572  61,,,......,user',
-      ].join('\n'),
-      permissionMode: 'ask',
-      config: {
-        pii: { enabled: true, action: 'redact' },
-      },
-    });
-
-    expect(decision.action).toBe('redact');
-    if (decision.action === 'redact') {
-      expect(decision.text).toContain('[REDACTED:PHONE]');
-      expect(decision.text).not.toContain('183280760');
-      expect(decision.text).not.toContain('3631');
-    }
-  });
-
-  it('redacts od-style hex dump lines that encode Chinese mobile numbers', () => {
-    const decision = guardToolResult({
-      sessionId: 'session-1',
-      toolName: 'Bash',
-      toolInput: { command: 'od -Ax -tx1 phone_test_data.csv | head' },
-      resultText: '0000260 31 38 33 32 38 30 37 36 30 36 31 2c 2c 2c',
-      permissionMode: 'ask',
-      config: {
-        pii: { enabled: true, action: 'redact' },
-      },
-    });
-
-    expect(decision.action).toBe('redact');
-    if (decision.action === 'redact') {
-      expect(decision.text).toContain('[REDACTED:PHONE]');
-      expect(decision.text).not.toContain('31 38 33 32 38 30 37 36 30 36 31');
+    expect(decision.action).toBe('allow');
+    if (decision.action === 'allow') {
+      expect(decision.text).toContain('jane@example.com');
     }
   });
 
@@ -497,20 +178,18 @@ describe('ToolResultGuard', () => {
     }
   });
 
-  it('returns the effective policy mode used for decisions', () => {
+  it('allows output when output redaction is disabled', () => {
+    const secret = 'sk-proj-abcdefghijklmnopqrstuvwxyz123456';
     const decision = guardToolResult({
       sessionId: 'session-1',
       toolName: 'Bash',
       toolInput: { command: 'env' },
-      resultText: 'OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz123456',
+      resultText: `OPENAI_API_KEY=${secret}`,
       permissionMode: 'ask',
-      config: {
-        mode: 'strict',
-      },
+      config: { outputRedaction: { enabled: false } },
     });
 
-    expect(decision.policyMode).toBe('strict');
-    expect(decision.action).toBe('block');
+    expect(decision.action).toBe('allow');
   });
 });
 
@@ -528,6 +207,65 @@ describe('SensitivePathGuard', () => {
 
     expect(result.action).toBe('block');
     expect(result.rule).toBe('.env');
+  });
+
+  it('includes anti-bypass guidance in the block reason', () => {
+    const result = guardSensitiveToolPath('Read', { file_path: '~/.ssh/id_rsa' }, '/repo');
+    expect(result.action).toBe('block');
+    expect(result.reason).toContain('Do not attempt to bypass');
+    expect(result.reason).toContain('ask them to provide it manually');
+  });
+
+  it('blocks credential-file access via Grep / Glob / Edit / Write, not just Read', () => {
+    for (const toolName of ['Grep', 'Glob', 'Edit', 'Write', 'MultiEdit'] as const) {
+      const result = guardSensitiveToolPath(toolName, { path: '~/.ssh/id_rsa', file_path: '~/.ssh/id_rsa' }, '/repo');
+      expect(result.action).toBe('block');
+    }
+    // Grep targeting a .pem via its `path` argument is blocked
+    expect(guardSensitiveToolPath('Grep', { path: 'certs/server.pem' }, '/repo').action).toBe('block');
+    // NotebookEdit on an .env is blocked
+    expect(guardSensitiveToolPath('NotebookEdit', { notebook_path: '.env.local' }, '/repo').action).toBe('block');
+  });
+
+  it('blocks Grep/Glob that target credential files via a glob/pattern selector', () => {
+    // Grep restricted to .env files while `path` stays innocuous
+    expect(guardSensitiveToolPath('Grep', { path: '/repo', glob: '.env*', pattern: '.*' }, '/repo').action).toBe('block');
+    expect(guardSensitiveToolPath('Grep', { path: '/repo', glob: '**/*.pem' }, '/repo').action).toBe('block');
+    // Glob whose pattern targets private keys
+    expect(guardSensitiveToolPath('Glob', { path: '/repo', pattern: '**/id_rsa' }, '/repo').action).toBe('block');
+    // Grep `pattern` (content regex) must NOT be treated as a file selector
+    expect(guardSensitiveToolPath('Grep', { path: '/repo/src', pattern: 'id_rsa' }, '/repo').action).toBe('allow');
+    // A broad glob does not over-block
+    expect(guardSensitiveToolPath('Grep', { path: '/repo', glob: '*.ts' }, '/repo').action).toBe('allow');
+  });
+
+  describe('interpreter-embedded path bypass (best-effort)', () => {
+    const block = (command: string) => guardSensitiveToolPath('Bash', { command }, '/repo');
+
+    it('blocks a .ssh path assembled inside python -c', () => {
+      const r = block(`python3 -c "import os; open(os.path.join(os.environ['HOME'], '.ssh', 'config'))"`);
+      expect(r.action).toBe('block');
+      expect(r.rule).toBe('.ssh/**');
+    });
+
+    it('blocks id_rsa / .pem accessed via node -e', () => {
+      expect(block(`node -e "require('fs').readFileSync(process.env.HOME + '/x/a.pem')"`).action).toBe('block');
+      expect(block(`ruby -e 'File.read("#{ENV[%q(HOME)]}/x/id_rsa")'`).action).toBe('block');
+    });
+
+    it('blocks a path assembled from shell variables inside bash -c', () => {
+      expect(block(`bash -c 'p=.ssh; cat ~/$p/config'`).action).toBe('block');
+    });
+
+    it('does NOT flag os.environ / process.env (interpreter false positives)', () => {
+      expect(block(`python3 -c "import os; print(os.environ['HOME'])"`).action).toBe('allow');
+      expect(block(`node -e "console.log(process.env.NODE_ENV)"`).action).toBe('allow');
+      expect(block(`python3 -c "print({}.keys())"`).action).toBe('allow');
+    });
+
+    it('does not engage without an inline interpreter (plain text mentioning .ssh)', () => {
+      expect(block(`echo "remember to check your .ssh folder"`).action).toBe('allow');
+    });
   });
 
   it('blocks credential paths after PreToolUse path expansion', () => {

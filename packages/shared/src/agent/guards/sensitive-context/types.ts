@@ -10,10 +10,6 @@ export type SensitiveFindingType =
   | 'stripe_key'
   | 'anthropic_key'
   | 'openai_key'
-  | 'email'
-  | 'phone'
-  | 'id_number'
-  | 'credit_card'
   | 'credential_file'
   | 'unknown_secret';
 
@@ -52,27 +48,23 @@ export interface SensitiveScannerResult {
   matches: SensitiveMatch[];
 }
 
-export interface SensitiveFieldRuleSuggestion {
-  field: string;
-  reason: string;
-}
-
+/**
+ * Credential safety net configuration. Scope is deliberately narrow:
+ * block credential files before tools run, and redact high-confidence secrets
+ * (API keys, private keys, tokens) from tool output before they reach the model.
+ */
 export interface SensitiveContextProtectionConfig {
   enabled: boolean;
+  /** Pre-execution guard for credential files (.env, *.pem, .ssh/, .aws/credentials, …). */
   sensitiveFiles?: {
     enabled: boolean;
     action: 'prompt' | 'block';
   };
+  /** Redact secrets in tool output before they enter model context. */
   outputRedaction?: {
     enabled: boolean;
   };
-  fieldRedaction?: {
-    enabled: boolean;
-  };
-  egressConfirmation?: {
-    enabled: boolean;
-  };
-  mode?: SensitiveProtectionMode;
+  /** Legacy alias for sensitiveFiles (kept for back-compat with older configs). */
   credentialFiles: {
     enabled: boolean;
     action: SensitiveAction;
@@ -85,24 +77,10 @@ export interface SensitiveContextProtectionConfig {
     enabled: boolean;
     action: SensitiveAction;
   };
-  pii: {
-    enabled: boolean;
-    action: SensitiveAction;
-  };
-  lowConfidence: {
-    action: SensitiveAction;
-  };
   audit: {
     enabled: boolean;
     storeRawValues: false;
   };
-  customPatterns: Array<{
-    name: string;
-    pattern: string;
-    type: SensitiveFindingType;
-    severity: SensitiveSeverity;
-    action: SensitiveAction;
-  }>;
 }
 
 export interface ToolResultGuardInput {
@@ -117,10 +95,9 @@ export interface ToolResultGuardInput {
 }
 
 export type ToolResultGuardDecision =
-  | { action: 'allow'; text: string; findings: SensitiveFinding[]; policyMode: SensitiveProtectionMode; suggestions?: SensitiveFieldRuleSuggestion[] }
-  | { action: 'redact'; text: string; findings: SensitiveFinding[]; policyMode: SensitiveProtectionMode; suggestions?: SensitiveFieldRuleSuggestion[] }
-  | { action: 'block'; reason: string; findings: SensitiveFinding[]; policyMode: SensitiveProtectionMode; suggestions?: SensitiveFieldRuleSuggestion[] }
-  | { action: 'prompt'; reason: string; text?: string; findings: SensitiveFinding[]; policyMode: SensitiveProtectionMode; suggestions?: SensitiveFieldRuleSuggestion[] };
+  | { action: 'allow'; text: string; findings: SensitiveFinding[]; policyMode: SensitiveProtectionMode }
+  | { action: 'redact'; text: string; findings: SensitiveFinding[]; policyMode: SensitiveProtectionMode }
+  | { action: 'block'; reason: string; findings: SensitiveFinding[]; policyMode: SensitiveProtectionMode };
 
 export interface SensitivePathGuardResult {
   action: 'allow' | 'block';

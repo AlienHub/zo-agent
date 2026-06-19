@@ -1373,11 +1373,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
           pendingPermission.requestId,
           permResponse.allowed,
           permResponse.alwaysAllow,
-          permResponse.egressAction || permResponse.permissionScope
-            ? {
-                ...(permResponse.egressAction ? { egressAction: permResponse.egressAction } : {}),
-                ...(permResponse.permissionScope ? { permissionScope: permResponse.permissionScope } : {}),
-              }
+          permResponse.permissionScope
+            ? { permissionScope: permResponse.permissionScope }
             : undefined
         )
         return

@@ -30,8 +30,7 @@ function extractSensitiveRule(reason?: string): string | null {
  */
 export function PermissionRequest({ request, onResponse, unstyled = false }: PermissionRequestProps) {
   const { t } = useTranslation()
-  const isSensitiveEgress = request.description.startsWith('Sensitive external send:')
-  const isSensitiveFileAccess = request.description === 'Sensitive file access'
+  const isSensitiveFileAccess = request.sensitiveCategory === 'file_access'
   const sensitiveRule = isSensitiveFileAccess ? extractSensitiveRule(request.reason) : null
   const description = isSensitiveFileAccess
     ? t('chat.sensitiveFileAccessTitle')
@@ -39,14 +38,6 @@ export function PermissionRequest({ request, onResponse, unstyled = false }: Per
 
   const handleAllow = () => {
     onResponse({ type: 'permission', allowed: true, alwaysAllow: false, permissionScope: 'once' })
-  }
-
-  const handleSend = () => {
-    onResponse({ type: 'permission', allowed: true, alwaysAllow: false, egressAction: 'send' })
-  }
-
-  const handleSendRedacted = () => {
-    onResponse({ type: 'permission', allowed: true, alwaysAllow: false, egressAction: 'send_redacted' })
   }
 
   const handleAlwaysAllow = () => {
@@ -62,12 +53,7 @@ export function PermissionRequest({ request, onResponse, unstyled = false }: Per
   }
 
   const handleDeny = () => {
-    onResponse({
-      type: 'permission',
-      allowed: false,
-      alwaysAllow: false,
-      ...(isSensitiveEgress ? { egressAction: 'cancel' as const } : {}),
-    })
+    onResponse({ type: 'permission', allowed: false, alwaysAllow: false })
   }
 
   return (
@@ -124,43 +110,11 @@ export function PermissionRequest({ request, onResponse, unstyled = false }: Per
             {request.command}
           </div>
         )}
-        {isSensitiveEgress && request.safePreview && (
-          <div className="space-y-1">
-            <div className="text-[11px] font-medium text-muted-foreground">
-              {t('chat.permissionSafePreview')}
-            </div>
-            <div className="bg-foreground/5 rounded-md p-3 font-mono text-xs text-foreground/90 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
-              {request.safePreview}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Action buttons */}
       <div className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-t border-border/50">
-        {isSensitiveEgress ? (
-          <>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 gap-1.5 border border-foreground/10 hover:bg-foreground/5 active:bg-foreground/10"
-              onClick={handleSend}
-            >
-              <Check className="h-3.5 w-3.5" />
-              {t('chat.permissionSend')}
-            </Button>
-            <Button
-              size="sm"
-              variant="default"
-              className="h-7 gap-1.5"
-              onClick={handleSendRedacted}
-              data-tutorial="permission-allow-button"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              {t('chat.permissionSendRedacted')}
-            </Button>
-          </>
-        ) : isSensitiveFileAccess ? (
+        {isSensitiveFileAccess ? (
           <>
             <Button
               size="sm"
@@ -221,15 +175,13 @@ export function PermissionRequest({ request, onResponse, unstyled = false }: Per
           onClick={handleDeny}
         >
           <X className="h-3.5 w-3.5" />
-          {isSensitiveEgress ? t('chat.permissionCancel') : t('chat.permissionDeny')}
+          {t('chat.permissionDeny')}
         </Button>
 
         {/* Tip text */}
-        {!isSensitiveEgress && (
-          <span className="min-w-0 flex-1 basis-full text-[10px] text-muted-foreground sm:basis-auto sm:text-right">
-            {t('chat.permissionRememberHint')}
-          </span>
-        )}
+        <span className="min-w-0 flex-1 basis-full text-[10px] text-muted-foreground sm:basis-auto sm:text-right">
+          {t('chat.permissionRememberHint')}
+        </span>
       </div>
     </div>
   )

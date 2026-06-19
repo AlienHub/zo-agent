@@ -83,6 +83,7 @@ function buildBlockResult(
       `Tool target: ${path}`,
       `Matched sensitive credential file rule: ${rule}`,
       'The file contents were not read or sent to the model.',
+      'This is a security policy. Do not attempt to bypass it via other tools, interpreters (python/node/etc.), scripts, encoding, or alternate paths. If the user needs this information, ask them to provide it manually.',
     ].join('\n'),
     finding: {
       type: 'credential_file',
@@ -93,18 +94,121 @@ function buildBlockResult(
   };
 }
 
+/**
+ * Best-effort detection of sensitive paths embedded in inline interpreter code
+ * (e.g. `python3 -c "open(os.path.join(os.environ['HOME'], '.ssh', 'id_rsa'))"`).
+ *
+ * The token-based path check above only sees literal path arguments; an
+ * interpreter can construct the path programmatically so the literal `.ssh`
+ * never appears as a standalone path segment. This is a defense-in-depth layer,
+ * NOT a hard boundary — base64, dynamic string assembly, or fetching the path
+ * from elsewhere will still slip through. The authoritative control remains the
+ * tool-result content scanner (which inspects what was actually read). Markers
+ * here are chosen to be low false-positive inside interpreter code: `.env` is
+ * matched only as a filename (so `os.environ` / `process.env` do NOT trigger),
+ * and `.key` is omitted entirely (too common as a property name).
+ */
+// Boundaries: a "dotfile" marker counts only when it isn't part of a longer
+// identifier. LEAD excludes word chars, `.`, and `-` (so `os.environ` /
+// `process.env` / `config.env` do NOT match), but allows `/`, quotes, `=`, `;`,
+// etc. as separators. TRAIL excludes word chars and `-` (so `.sshfoo` /
+// `.environment` don't match) but treats `.`, `/`, `;`, space, quotes as ends.
+const LEAD = `(?:^|[^A-Za-z0-9_.\\-])`;
+const TRAIL = `(?=$|[^A-Za-z0-9_-])`;
+const SENSITIVE_TEXT_MARKERS: Array<{ rule: string; regex: RegExp; recommendedAction: 'prompt' | 'block' }> = [
+  { rule: '.ssh/**', regex: new RegExp(`${LEAD}\\.ssh${TRAIL}`), recommendedAction: 'block' },
+  { rule: 'id_rsa', regex: /\bid_rsa\b/, recommendedAction: 'block' },
+  { rule: 'id_ed25519', regex: /\bid_ed25519\b/, recommendedAction: 'block' },
+  { rule: '*.pem', regex: new RegExp(`\\.pem${TRAIL}`, 'i'), recommendedAction: 'block' },
+  { rule: '*.p12', regex: new RegExp(`\\.p12${TRAIL}`, 'i'), recommendedAction: 'block' },
+  { rule: '*.pfx', regex: new RegExp(`\\.pfx${TRAIL}`, 'i'), recommendedAction: 'block' },
+  { rule: '.aws/credentials', regex: new RegExp(`${LEAD}\\.aws${TRAIL}`), recommendedAction: 'prompt' },
+  { rule: '.gcp/**', regex: new RegExp(`${LEAD}\\.gcp${TRAIL}`), recommendedAction: 'prompt' },
+  { rule: '.azure/**', regex: new RegExp(`${LEAD}\\.azure${TRAIL}`), recommendedAction: 'prompt' },
+  { rule: '.kube/config', regex: new RegExp(`${LEAD}\\.kube${TRAIL}`), recommendedAction: 'prompt' },
+  { rule: 'kubeconfig', regex: /\bkubeconfig\b/i, recommendedAction: 'prompt' },
+  { rule: '.netrc', regex: new RegExp(`${LEAD}\\.netrc${TRAIL}`), recommendedAction: 'prompt' },
+  { rule: '.pypirc', regex: new RegExp(`${LEAD}\\.pypirc${TRAIL}`), recommendedAction: 'prompt' },
+  { rule: '.npmrc', regex: new RegExp(`${LEAD}\\.npmrc${TRAIL}`), recommendedAction: 'prompt' },
+  { rule: 'credentials.json', regex: /\bcredentials\.json\b/i, recommendedAction: 'prompt' },
+  { rule: 'service-account*.json', regex: /\bservice-account[\w-]*\.json\b/i, recommendedAction: 'prompt' },
+  { rule: '.env', regex: new RegExp(`${LEAD}\\.env(?:\\.[\\w-]+)?${TRAIL}`), recommendedAction: 'prompt' },
+];
+
+/** Matches an interpreter/shell invoked with inline code, where a path can be assembled at runtime. */
+const INLINE_INTERPRETER_REGEX = /\b(?:python3?|node|nodejs|deno|bun|ruby|perl|php|lua|osascript|gawk|awk|sh|bash|zsh|ksh|fish)\b/i;
+const INLINE_CODE_FLAG_REGEX = /(?:^|\s)-(?:c|e)\b|--eval\b|<<-?\s*['"]?[A-Za-z_]/;
+
+function scanInterpreterCommandForSensitiveMarkers(command: string): SensitivePathGuardResult | null {
+  if (!INLINE_INTERPRETER_REGEX.test(command) || !INLINE_CODE_FLAG_REGEX.test(command)) {
+    return null;
+  }
+  for (const marker of SENSITIVE_TEXT_MARKERS) {
+    if (marker.regex.test(command)) {
+      return buildBlockResult(command, marker.rule, marker.recommendedAction);
+    }
+  }
+  return null;
+}
+
+// File tools that take an explicit path/glob and can read a credential file's
+// contents into model context (Grep/Read), or open/modify one (Edit/Write/…).
+// All are gated so a credential file can't be slurped via `Grep --path .env`,
+// `Edit .env`, etc. — not just `Read`.
+const FILE_PATH_TOOLS = new Set([
+  'Read',
+  'Grep',
+  'Glob',
+  'Edit',
+  'MultiEdit',
+  'Write',
+  'NotebookEdit',
+]);
+
+/**
+ * Check a glob/pattern selector (e.g. Grep `glob` or Glob `pattern`) for
+ * credential-file targeting. A glob like `.env*`, `*.pem`, `**​/id_rsa` would
+ * otherwise restrict a search to credential files while the `path` argument
+ * stays innocuous (e.g. the repo root). We reduce the glob to its final segment,
+ * strip glob metacharacters, and run the basename rules on the result.
+ */
+function checkGlobSelector(glob: string): SensitivePathGuardResult {
+  const lastSegment = glob.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? glob;
+  const candidate = lastSegment.replace(/[*?{}[\]!]/g, '');
+  if (!candidate || candidate === '.') return { action: 'allow' };
+  for (const pattern of SENSITIVE_BASENAME_PATTERNS) {
+    if (pattern.regex.test(candidate)) {
+      return buildBlockResult(glob, pattern.rule, pattern.recommendedAction);
+    }
+  }
+  return { action: 'allow' };
+}
+
 export function guardSensitiveToolPath(
   toolName: string,
   input: Record<string, unknown>,
   workingDirectory: string,
 ): SensitivePathGuardResult {
-  if (toolName === 'Read') {
-    const path = typeof input.file_path === 'string'
-      ? input.file_path
-      : typeof input.path === 'string'
-        ? input.path
+  if (FILE_PATH_TOOLS.has(toolName)) {
+    const candidates = [input.file_path, input.path, input.notebook_path]
+      .filter((value): value is string => typeof value === 'string' && value.length > 0);
+    for (const path of candidates) {
+      const result = checkPath(path, workingDirectory);
+      if (result.action === 'block') return result;
+    }
+
+    // Grep/Glob can target credential files via a glob/pattern selector while
+    // `path` points at an innocuous directory. (Grep `pattern` is a content
+    // regex, not a file selector, so it is intentionally NOT checked here.)
+    const globSelector = toolName === 'Grep'
+      ? input.glob
+      : toolName === 'Glob'
+        ? input.pattern
         : undefined;
-    if (path) return checkPath(path, workingDirectory);
+    if (typeof globSelector === 'string' && globSelector.length > 0) {
+      const result = checkGlobSelector(globSelector);
+      if (result.action === 'block') return result;
+    }
   }
 
   if (toolName === 'Bash' && typeof input.command === 'string') {
@@ -119,6 +223,13 @@ export function guardSensitiveToolPath(
       if (result.action === 'block') {
         return result;
       }
+    }
+
+    // Best-effort fallback: catch sensitive paths assembled inside inline
+    // interpreter code, which the token scan above cannot see.
+    const interpreterResult = scanInterpreterCommandForSensitiveMarkers(input.command);
+    if (interpreterResult) {
+      return interpreterResult;
     }
   }
 
