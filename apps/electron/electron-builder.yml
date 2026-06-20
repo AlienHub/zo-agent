@@ -98,7 +98,12 @@ mac:
       arch:
         - arm64
         - x64
-  hardenedRuntime: true
+  # MUST be false for unsigned / ad-hoc builds. Hardened runtime is only valid for
+  # Developer-ID-signed + notarized apps; enabling it on an ad-hoc-signed app makes
+  # the signature claim sealed resources that aren't present, so macOS reports
+  # "code has no resources but signature indicates they must be present" and blocks
+  # launch (even "Open Anyway" fails). Re-enable (true) only when signing is added.
+  hardenedRuntime: false
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
@@ -117,7 +122,8 @@ mac:
   # so the dmg/zip build succeeds without signing secrets (users see a Gatekeeper
   # prompt on first launch). To ship SIGNED + NOTARIZED releases: add the
   # MAC_CSC_LINK / MAC_CSC_KEY_PASSWORD and APPLE_* CI secrets (see
-  # release-electron.yml), then remove `identity: null` and set `notarize: true`.
+  # release-electron.yml), then remove `identity: null`, set `notarize: true`,
+  # and set `hardenedRuntime: true` above.
   identity: null
   notarize: false
 
