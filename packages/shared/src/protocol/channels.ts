@@ -92,6 +92,17 @@ export const RPC_CHANNELS = {
   fs: {
     SEARCH: 'fs:search',
     LIST_DIRECTORY: 'fs:listDirectory',
+    // Working-directory tree (browse + manage). SCAN_TREE returns a recursive
+    // SessionFile[] tree with an ignore list + depth/entry caps. WATCH/UNWATCH/
+    // CHANGED mirror the per-client session file watcher for a working directory.
+    SCAN_TREE: 'fs:scanTree',
+    WATCH: 'fs:watch',
+    UNWATCH: 'fs:unwatch',
+    CHANGED: 'fs:changed',
+    RENAME: 'fs:rename',
+    // Delete to OS trash where available (Electron), else fs.rm. Runs on whichever
+    // server owns the workspace, so it is correct for remote workspaces too.
+    DELETE: 'fs:delete',
   },
   debug: {
     LOG: 'debug:log',

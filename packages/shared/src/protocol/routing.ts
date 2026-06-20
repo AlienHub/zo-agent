@@ -243,6 +243,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.sessions.COMMAND,
   RPC_CHANNELS.sessions.GET_PENDING_PLAN_EXECUTION,
   RPC_CHANNELS.sessions.GET_PERMISSION_MODE_STATE,
+  RPC_CHANNELS.sessions.GET_PERMISSION_ALLOWANCES,
   RPC_CHANNELS.sessions.EVENT,
   RPC_CHANNELS.sessions.GET_MODEL,
   RPC_CHANNELS.sessions.SET_MODEL,
@@ -279,6 +280,12 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   // fs — workspace filesystem
   RPC_CHANNELS.fs.SEARCH,
   RPC_CHANNELS.fs.LIST_DIRECTORY,
+  RPC_CHANNELS.fs.SCAN_TREE,
+  RPC_CHANNELS.fs.WATCH,
+  RPC_CHANNELS.fs.UNWATCH,
+  RPC_CHANNELS.fs.CHANGED,
+  RPC_CHANNELS.fs.RENAME,
+  RPC_CHANNELS.fs.DELETE,
 
   // credentials — remote server's credential state
   RPC_CHANNELS.credentials.HEALTH_CHECK,
@@ -323,6 +330,13 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.settings.TEST_LLM_CONNECTION_SETUP,
   RPC_CHANNELS.settings.GET_DEFAULT_THINKING_LEVEL,
   RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL,
+  // sensitive-path allow rules are workspace content: keyed by workspaceId and
+  // persisted in <workspaceRoot>/<dataDir>/redaction.json, and the guard that
+  // consumes them runs server-side with the agent. For a remote workspace the
+  // rules live on the remote server, so these must follow the workspace.
+  // (The global getSensitiveContextProtection toggle has no workspace and stays LOCAL_ONLY.)
+  RPC_CHANNELS.settings.GET_SENSITIVE_PATH_ALLOW_RULES,
+  RPC_CHANNELS.settings.REMOVE_SENSITIVE_PATH_ALLOW_RULE,
 
   // pi — provider config on workspace server
   RPC_CHANNELS.pi.GET_API_KEY_PROVIDERS,

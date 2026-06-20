@@ -188,6 +188,14 @@ export const CHANNEL_MAP = {
   // Server filesystem browsing (remote mode)
   listServerDirectory: invoke(RPC_CHANNELS.fs.LIST_DIRECTORY),
 
+  // Working-directory tree (browse + manage)
+  scanWorkingDirectory: invoke(RPC_CHANNELS.fs.SCAN_TREE),
+  watchWorkingDirectory: invoke(RPC_CHANNELS.fs.WATCH),
+  unwatchWorkingDirectory: invoke(RPC_CHANNELS.fs.UNWATCH),
+  onWorkingDirectoryChanged: listener(RPC_CHANNELS.fs.CHANGED),
+  renamePath: invoke(RPC_CHANNELS.fs.RENAME),
+  deletePath: invoke(RPC_CHANNELS.fs.DELETE),
+
   // Debug logging
   debugLog: invoke(RPC_CHANNELS.debug.LOG),
 

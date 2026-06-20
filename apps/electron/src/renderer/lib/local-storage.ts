@@ -14,6 +14,7 @@ export const KEYS = {
   sidebarVisible: 'sidebar-visible',
   sidebarWidth: 'sidebar-width',
   sessionListWidth: 'session-list-width',
+  filesPanelWidth: 'files-panel-width', // Width of the embedded working-dir files panel (px)
   sidebarMode: 'sidebar-mode',
   listFilter: 'list-filter',
   labelFilter: 'label-filter',
@@ -28,6 +29,9 @@ export const KEYS = {
 
   // Session files panel state
   sessionFilesExpandedFolders: 'session-files-expanded', // Expanded folders in session files tree (keyed by sessionId)
+
+  // Working-directory tree panel state
+  workingDirExpandedFolders: 'working-dir-expanded', // Expanded folders in working-dir tree (keyed by working directory path)
 
   // Theme
   theme: 'theme',

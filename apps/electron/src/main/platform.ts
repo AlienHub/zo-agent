@@ -29,6 +29,7 @@ export function createElectronPlatform(opts: ElectronPlatformOptions): PlatformS
     openExternal: (url) => shell.openExternal(url),
     openPath: (p) => shell.openPath(p).then(() => {}),
     showItemInFolder: (p) => shell.showItemInFolder(p),
+    trashItem: (p) => shell.trashItem(p),
     quit: () => app.quit(),
     systemDarkMode: () => nativeTheme.shouldUseDarkColors,
     imageProcessor: {

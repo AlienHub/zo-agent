@@ -52,6 +52,8 @@ export interface PlatformServices {
   openPath?(path: string): Promise<void>
   openExternal?(url: string): Promise<void>
   showItemInFolder?(path: string): void
+  /** Move a file/folder to the OS trash (recoverable). Undefined on headless. */
+  trashItem?(path: string): Promise<void>
 
   // -- App lifecycle (no-ops on headless) --
   quit?(): void

@@ -1,9 +1,9 @@
-import { readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises'
+import { readFile, writeFile, unlink, mkdir, readdir, stat, rename, rm } from 'fs/promises'
 import { isAbsolute, join, resolve, dirname, parse as parsePath } from 'path'
 import { homedir } from 'os'
 import { validatePathFormat } from '../../utils/path-validation'
 import { randomUUID } from 'crypto'
-import { RPC_CHANNELS, type FileAttachment, type DirectoryListingResult } from '@craft-agent/shared/protocol'
+import { RPC_CHANNELS, type FileAttachment, type DirectoryListingResult, type SessionFile } from '@craft-agent/shared/protocol'
 import type { StoredAttachment } from '@craft-agent/core/types'
 import { readFileAttachment, validateImageForClaudeAPI, IMAGE_LIMITS } from '@craft-agent/shared/utils'
 import { getSessionAttachmentsPath, validateSessionId } from '@craft-agent/shared/sessions'
@@ -13,7 +13,7 @@ import { sanitizeFilename, validateFilePath, getWorkspaceAllowedDirs } from '@cr
 import { MarkItDown } from 'markitdown-js'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
-import { requestClientOpenFileDialog } from '@craft-agent/server-core/transport'
+import { requestClientOpenFileDialog, pushTyped } from '@craft-agent/server-core/transport'
 
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.file.READ,
@@ -27,7 +27,109 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.file.GENERATE_THUMBNAIL,
   RPC_CHANNELS.fs.SEARCH,
   RPC_CHANNELS.fs.LIST_DIRECTORY,
+  RPC_CHANNELS.fs.SCAN_TREE,
+  RPC_CHANNELS.fs.WATCH,
+  RPC_CHANNELS.fs.UNWATCH,
+  RPC_CHANNELS.fs.RENAME,
+  RPC_CHANNELS.fs.DELETE,
 ] as const
+
+/**
+ * Directories never recursed into when scanning a working directory tree.
+ * Mirrors the SKIP_DIRS set used by fs:search so the file tree never pulls in
+ * node_modules / build output / VCS internals.
+ */
+const WORKING_DIR_SKIP_DIRS = new Set([
+  'node_modules', '.git', '.svn', '.hg', 'dist', 'build',
+  '.next', '.nuxt', '.cache', '__pycache__', 'vendor',
+  '.idea', '.vscode', 'coverage', '.nyc_output', '.turbo', 'out',
+])
+
+// Bounds that keep a single scan cheap even on large repos (with the skip list
+// already excluding the usual offenders).
+const SCAN_MAX_DEPTH = 8
+const SCAN_MAX_ENTRIES = 10_000
+
+interface ClientWorkingDirWatchState {
+  watcher: import('fs').FSWatcher
+  rootPath: string
+  debounceTimer: ReturnType<typeof setTimeout> | null
+}
+
+// Per-client working-directory watcher (one active root per client, like the
+// session file watcher). Keyed by clientId so concurrent windows are isolated.
+const clientWorkingDirWatches = new Map<string, ClientWorkingDirWatchState>()
+
+/**
+ * Clean up a client's working-directory watcher. Wired into the same
+ * disconnect hooks as cleanupSessionFileWatchForClient to prevent leaks.
+ */
+export function cleanupWorkingDirWatchForClient(clientId: string): void {
+  const state = clientWorkingDirWatches.get(clientId)
+  if (!state) return
+  if (state.debounceTimer) {
+    clearTimeout(state.debounceTimer)
+    state.debounceTimer = null
+  }
+  state.watcher.close()
+  clientWorkingDirWatches.delete(clientId)
+}
+
+/**
+ * Recursive working-directory scanner → SessionFile[] tree.
+ * Unlike the session scanner: applies WORKING_DIR_SKIP_DIRS, keeps non-ignored
+ * dotfiles (.github, .gitignore, .env.example), keeps empty directories, skips
+ * symlinks (avoids cycles), and is bounded by depth + a shared entry counter.
+ * Sizes are intentionally NOT stat-ed here to keep large scans fast.
+ */
+export async function scanWorkingDirectory(
+  dirPath: string,
+  depth: number,
+  counter: { n: number },
+): Promise<SessionFile[]> {
+  if (depth >= SCAN_MAX_DEPTH) return []
+
+  let raw: import('fs').Dirent[]
+  try {
+    raw = await readdir(dirPath, { withFileTypes: true })
+  } catch {
+    // Unreadable dir (permissions / race) — treat as empty
+    return []
+  }
+
+  const dirs: SessionFile[] = []
+  const files: SessionFile[] = []
+
+  for (const entry of raw) {
+    if (counter.n >= SCAN_MAX_ENTRIES) break
+    const name = entry.name
+    if (WORKING_DIR_SKIP_DIRS.has(name)) continue
+    // Skip symlinks to avoid traversal loops in v1
+    if (entry.isSymbolicLink()) continue
+
+    const fullPath = join(dirPath, name)
+    if (entry.isDirectory()) {
+      counter.n++
+      const children = await scanWorkingDirectory(fullPath, depth + 1, counter)
+      dirs.push({ name, path: fullPath, type: 'directory', children })
+    } else if (entry.isFile()) {
+      counter.n++
+      files.push({ name, path: fullPath, type: 'file' })
+    }
+  }
+
+  // Directories first, then files; each alphabetical (case-insensitive)
+  dirs.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  files.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  return [...dirs, ...files]
+}
+
+/** Expand a leading ~ to the server's home directory. */
+function expandHome(p: string): string {
+  if (p === '~') return homedir()
+  if (p.startsWith('~/')) return join(homedir(), p.slice(2))
+  return p
+}
 
 export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): void {
   // Read a file (with path validation to prevent traversal attacks)
@@ -593,5 +695,94 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
       totalEntries,
       entries,
     } satisfies DirectoryListingResult
+  })
+
+  // ========================================================================
+  // Working-directory tree (browse + manage)
+  // ========================================================================
+
+  // Recursively scan a working directory into a SessionFile[] tree.
+  // Browsing is read-only metadata, so (like LIST_DIRECTORY) this only does a
+  // path-format check — it is not restricted to the workspace allowed-dirs.
+  server.handle(RPC_CHANNELS.fs.SCAN_TREE, async (_ctx, rootPath: string): Promise<SessionFile[]> => {
+    const expanded = expandHome(rootPath)
+    const pathCheck = validatePathFormat(expanded)
+    if (!pathCheck.valid) throw new Error(pathCheck.reason!)
+    const resolved = resolve(expanded)
+    try {
+      return await scanWorkingDirectory(resolved, 0, { n: 0 })
+    } catch (error) {
+      deps.platform.logger.error('fs.scanTree error:', error instanceof Error ? error.message : error)
+      return []
+    }
+  })
+
+  // Start watching a working directory for changes (per client, mirrors the
+  // session file watcher). Pushes fs:changed with the watched root path.
+  server.handle(RPC_CHANNELS.fs.WATCH, async (ctx, rootPath: string) => {
+    const clientId = ctx.clientId
+    cleanupWorkingDirWatchForClient(clientId)
+
+    const expanded = expandHome(rootPath)
+    const pathCheck = validatePathFormat(expanded)
+    if (!pathCheck.valid) return
+    const resolved = resolve(expanded)
+
+    try {
+      const { watch } = await import('fs')
+      const state: ClientWorkingDirWatchState = {
+        watcher: null as unknown as import('fs').FSWatcher,
+        rootPath: resolved,
+        debounceTimer: null,
+      }
+
+      state.watcher = watch(resolved, { recursive: true }, (_eventType, filename) => {
+        // Ignore churn inside ignored top-level dirs (node_modules/.git/...)
+        if (filename) {
+          const top = String(filename).split(/[\\/]/)[0]
+          if (WORKING_DIR_SKIP_DIRS.has(top)) return
+        }
+        if (state.debounceTimer) clearTimeout(state.debounceTimer)
+        state.debounceTimer = setTimeout(() => {
+          pushTyped(server, RPC_CHANNELS.fs.CHANGED, { to: 'client', clientId }, state.rootPath)
+        }, 150)
+      })
+
+      clientWorkingDirWatches.set(clientId, state)
+    } catch (error) {
+      deps.platform.logger.error('fs.watch error:', error instanceof Error ? error.message : error)
+    }
+  })
+
+  // Stop watching the working directory for the calling client.
+  server.handle(RPC_CHANNELS.fs.UNWATCH, async (ctx) => {
+    cleanupWorkingDirWatchForClient(ctx.clientId)
+  })
+
+  // Rename a file/folder in place (new name is sanitized → rename only, no move).
+  server.handle(RPC_CHANNELS.fs.RENAME, async (ctx, oldPath: string, newName: string): Promise<{ path: string }> => {
+    const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
+    const allowed = getWorkspaceAllowedDirs(workspaceId)
+    const safeOld = await validateFilePath(oldPath, allowed)
+    const safeName = sanitizeFilename(newName)
+    const target = join(dirname(safeOld), safeName)
+    // Validate destination too (rejects renaming to a sensitive name)
+    await validateFilePath(target, allowed)
+    await rename(safeOld, target)
+    return { path: target }
+  })
+
+  // Delete a file/folder. Uses the OS trash (recoverable) when the platform
+  // provides it (Electron), else falls back to a permanent recursive remove.
+  // REMOTE_ELIGIBLE: runs on whichever server owns the workspace.
+  server.handle(RPC_CHANNELS.fs.DELETE, async (ctx, targetPath: string): Promise<{ trashed: boolean }> => {
+    const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
+    const safePath = await validateFilePath(targetPath, getWorkspaceAllowedDirs(workspaceId))
+    if (deps.platform.trashItem) {
+      await deps.platform.trashItem(safePath)
+      return { trashed: true }
+    }
+    await rm(safePath, { recursive: true, force: false })
+    return { trashed: false }
   })
 }

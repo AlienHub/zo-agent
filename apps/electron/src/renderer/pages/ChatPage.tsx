@@ -6,10 +6,16 @@
  */
 
 import * as React from 'react'
+import { motion, AnimatePresence } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { AlertCircle, Globe, Copy, RefreshCw, Link2Off, Info } from 'lucide-react'
+import { AlertCircle, Globe, Copy, RefreshCw, Link2Off, Info, FolderTree } from 'lucide-react'
 import { ChatDisplay, type ChatDisplayHandle } from '@/components/app-shell/ChatDisplay'
+import { WorkingDirectoryPanel } from '@/components/app-shell/WorkingDirectoryPanel'
+import { cn } from '@/lib/utils'
+import * as storage from '@/lib/local-storage'
+import { useResizeGradient } from '@/hooks/useResizeGradient'
+import { PANEL_SASH_HIT_WIDTH, PANEL_SASH_LINE_WIDTH } from '@/components/app-shell/panel-constants'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { SessionMenu } from '@/components/app-shell/SessionMenu'
 import { CompactSessionMenu } from '@/components/app-shell/CompactSessionMenu'
@@ -27,13 +33,18 @@ import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/
 import { normalizeLocalFileTarget } from '@/lib/file-link-target'
 import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
 import { getSessionTitle } from '@/utils/session'
-import { useNavigationState, isSessionsNavigation } from '@/contexts/NavigationContext'
+import { useNavigationState, useNavigation, isSessionsNavigation } from '@/contexts/NavigationContext'
 // Model resolution: connection.defaultModel (no hardcoded defaults)
 import { resolveEffectiveConnectionSlug, isSessionConnectionUnavailable } from '@config/llm-connections'
 
 export interface ChatPageProps {
   sessionId: string
 }
+
+// Embedded working-dir files panel sizing (resizable, persisted).
+const FILES_PANEL_MIN_WIDTH = 200
+const FILES_PANEL_MAX_WIDTH = 480
+const FILES_PANEL_DEFAULT_WIDTH = 260
 
 const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   const { t } = useTranslation()
@@ -82,6 +93,41 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     isFocusedPanel,
   } = useAppShellContext()
   const navigationState = useNavigationState()
+  const { toggleRightSidebar } = useNavigation()
+
+  // Embedded files panel: drag the left edge to resize; width is persisted.
+  // Reuses the app's shared resize sash (useResizeGradient) for the visual handle.
+  const [filesPanelWidth, setFilesPanelWidth] = React.useState(() =>
+    Math.min(FILES_PANEL_MAX_WIDTH, Math.max(FILES_PANEL_MIN_WIDTH,
+      storage.get(storage.KEYS.filesPanelWidth, FILES_PANEL_DEFAULT_WIDTH)))
+  )
+  const filesSash = useResizeGradient()
+  React.useEffect(() => {
+    storage.set(storage.KEYS.filesPanelWidth, filesPanelWidth)
+  }, [filesPanelWidth])
+  const startFilesResize = React.useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    filesSash.handlers.onMouseDown() // drives the gradient indicator
+    const startX = e.clientX
+    const startW = filesPanelWidth
+    const prevCursor = document.body.style.cursor
+    const prevSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    const onMove = (ev: MouseEvent) => {
+      // Panel sits on the right edge; dragging its left handle leftward widens it.
+      const next = Math.min(FILES_PANEL_MAX_WIDTH, Math.max(FILES_PANEL_MIN_WIDTH, startW + (startX - ev.clientX)))
+      setFilesPanelWidth(next)
+    }
+    const onUp = () => {
+      document.body.style.cursor = prevCursor
+      document.body.style.userSelect = prevSelect
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [filesPanelWidth, filesSash.handlers])
 
   // Use the unified session options hook for clean access
   const {
@@ -621,6 +667,63 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
   const headerActions = isCompactMode ? compactInfoButton : shareButton
 
+  // Files side panel (working-directory tree embedded beside the conversation).
+  // Falls back to the workspace root when the session has no explicit cwd.
+  const filesRootDir = workingDirectory || sessionMeta?.workingDirectory || activeWorkspace?.rootPath
+  const isFilesSidebarOpen = navigationState.rightSidebar?.type === 'files'
+  const filesSidebarButton = filesRootDir ? (
+    <button
+      type="button"
+      onClick={() => toggleRightSidebar({ type: 'files' })}
+      className={cn(
+        'flex items-center justify-center h-7 w-7 rounded-md transition-colors',
+        isFilesSidebarOpen
+          ? 'text-foreground bg-sidebar-hover'
+          : 'text-muted-foreground hover:text-foreground hover:bg-sidebar-hover'
+      )}
+      title={t('sidebar.files')}
+      aria-label={t('sidebar.files')}
+      aria-pressed={isFilesSidebarOpen}
+    >
+      <FolderTree className="h-4 w-4" />
+    </button>
+  ) : null
+  // Animated mount/unmount: the container slides its width 0↔filesPanelWidth and
+  // fades, while the inner fixed-width panel stays put (overflow-hidden clips it
+  // during the slide). Width changes are instant while dragging the resize handle.
+  const filesSidePanel = (
+    <AnimatePresence initial={false}>
+      {isFilesSidebarOpen && filesRootDir && (
+        <motion.div
+          key="files-side-panel"
+          initial={{ width: 0, opacity: 0 }}
+          animate={{ width: filesPanelWidth, opacity: 1 }}
+          exit={{ width: 0, opacity: 0 }}
+          transition={filesSash.isDragging ? { duration: 0 } : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+          className="shrink-0 min-h-0 flex relative overflow-hidden"
+        >
+          {/* Resize sash on the left edge — reuses the app's shared gradient handle */}
+          <div
+            ref={filesSash.ref}
+            onMouseDown={startFilesResize}
+            onMouseMove={filesSash.handlers.onMouseMove}
+            onMouseLeave={filesSash.handlers.onMouseLeave}
+            className="absolute left-0 top-0 bottom-0 z-20 flex justify-center cursor-col-resize"
+            style={{ width: PANEL_SASH_HIT_WIDTH }}
+          >
+            <div
+              className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 pointer-events-none"
+              style={{ ...filesSash.gradientStyle, width: PANEL_SASH_LINE_WIDTH }}
+            />
+          </div>
+          <div className="h-full min-h-0 flex flex-col" style={{ width: filesPanelWidth }}>
+            <WorkingDirectoryPanel workingDirectory={filesRootDir} onOpenFile={handleOpenFile} />
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+
   // Build title menu content for chat sessions using shared SessionMenu.
   // Desktop uses Radix DropdownMenu via PanelHeader; compact mode uses a
   // vaul Drawer (CompactSessionMenu) so submenus aren't clipped by the
@@ -716,8 +819,9 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       return (
         <>
           <div className="h-full flex flex-col">
-            <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
-            <div className="flex-1 flex flex-col min-h-0">
+            <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={filesSidebarButton ?? rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
+            <div className="flex-1 flex min-h-0">
+              <div className="flex-1 flex flex-col min-h-0">
               <ChatDisplay
                 ref={chatDisplayRef}
                 session={skeletonSession}
@@ -759,6 +863,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
                 compactMode={!!isCompactMode}
                 enableCompactModelPicker={!!isCompactMode}
               />
+              </div>
+              {filesSidePanel}
             </div>
           </div>
           <RenameDialog
@@ -789,8 +895,9 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   return (
     <>
       <div className="h-full flex flex-col">
-        <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
-        <div className="flex-1 flex flex-col min-h-0">
+        <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={filesSidebarButton ?? rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
+        <div className="flex-1 flex min-h-0">
+          <div className="flex-1 flex flex-col min-h-0">
           <ChatDisplay
             ref={chatDisplayRef}
             session={session}
@@ -839,6 +946,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
             compactMode={!!isCompactMode}
             enableCompactModelPicker={!!isCompactMode}
           />
+          </div>
+          {filesSidePanel}
         </div>
       </div>
       <RenameDialog

@@ -323,6 +323,21 @@ export interface ElectronAPI {
 
   // Server filesystem browsing (remote mode)
   listServerDirectory(dirPath: string): Promise<DirectoryListingResult>
+
+  // Working-directory tree (browse + manage)
+  /** Recursively scan a working directory into a file tree (node_modules/.git ignored). */
+  scanWorkingDirectory(rootPath: string): Promise<SessionFile[]>
+  /** Start watching a working directory for changes (per client). */
+  watchWorkingDirectory(rootPath: string): Promise<void>
+  /** Stop watching the working directory for the calling client. */
+  unwatchWorkingDirectory(): Promise<void>
+  /** Subscribe to working-directory change notifications (payload is the watched root). */
+  onWorkingDirectoryChanged(callback: (rootPath: string) => void): () => void
+  /** Rename a file/folder in place (name is sanitized → no move). */
+  renamePath(oldPath: string, newName: string): Promise<{ path: string }>
+  /** Delete a file/folder (OS trash where available, else permanent). */
+  deletePath(targetPath: string): Promise<{ trashed: boolean }>
+
   // Debug: send renderer logs to main process log file
   debugLog(...args: unknown[]): void
 
