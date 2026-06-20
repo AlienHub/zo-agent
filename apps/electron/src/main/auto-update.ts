@@ -6,17 +6,21 @@
  * using electron-builder's GitHub provider (YAML manifests + binaries).
  *
  * Platform behavior:
- * - macOS: Downloads zip, extracts and swaps app bundle atomically
- * - Windows: Downloads NSIS installer, runs silently on quit
- * - Linux: Downloads AppImage, replaces current file
+ * - macOS (UNSIGNED builds): electron-updater downloads + sha512-verifies the
+ *   .zip, but Squirrel.Mac's quitAndInstall refuses to apply it without an Apple
+ *   Developer ID signature. So for unsigned apps we do a Tauri-style self-update:
+ *   a detached helper extracts the already-verified .zip and swaps the .app
+ *   bundle, then relaunches. Developer-ID-signed apps fall back to quitAndInstall.
+ * - Windows: Downloads NSIS installer, runs silently on quit (quitAndInstall).
+ * - Linux: Downloads AppImage, replaces current file (quitAndInstall).
  *
  * All platforms support download-progress events (electron-updater v6.8.0+).
- * quitAndInstall() handles restart natively — no external scripts.
  */
 
 import { autoUpdater } from 'electron-updater'
 import { app, BrowserWindow } from 'electron'
-import { platform } from 'os'
+import { platform, tmpdir } from 'os'
+import { spawn, spawnSync } from 'child_process'
 import * as path from 'path'
 import * as fs from 'fs'
 import { mainLog } from './logger'
@@ -63,6 +67,10 @@ let updateInfo: UpdateInfo = {
 }
 
 let eventSink: EventSink | null = null
+
+// Path to the downloaded + sha512-verified update artifact (captured from the
+// electron-updater `update-downloaded` event). Used by the macOS custom swap.
+let downloadedFilePath: string | null = null
 
 // Flag to indicate update is in progress — used to prevent force exit during quitAndInstall
 let __isUpdating = false
@@ -127,8 +135,10 @@ function broadcastDownloadProgress(progress: number): void {
 // Auto-download updates in the background after detection
 autoUpdater.autoDownload = true
 
-// Install on app quit (if update is downloaded but user hasn't clicked "Restart")
-autoUpdater.autoInstallOnAppQuit = true
+// Install on app quit (if update is downloaded but user hasn't clicked "Restart").
+// Disabled on macOS: Squirrel.Mac can't apply unsigned updates, and our custom
+// mac swap (installUpdateMacUnsigned) is only invoked explicitly via installUpdate().
+autoUpdater.autoInstallOnAppQuit = !IS_MAC
 
 // Use the logger for electron-updater internal logging
 autoUpdater.logger = {
@@ -207,6 +217,13 @@ autoUpdater.on('download-progress', (progress) => {
 
 autoUpdater.on('update-downloaded', async (info) => {
   mainLog.info(`[auto-update] Update downloaded: v${info.version}`)
+
+  // electron-updater exposes the verified artifact path on the event.
+  const dl = (info as { downloadedFile?: string }).downloadedFile
+  if (dl) {
+    downloadedFilePath = dl
+    mainLog.info(`[auto-update] downloadedFile: ${dl}`)
+  }
 
   updateInfo = {
     ...updateInfo,
@@ -408,6 +425,128 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
   return getUpdateInfo()
 }
 
+// ─── macOS unsigned self-update (Tauri-style bundle swap) ─────────────────────
+
+/** Resolve the installed `.app` bundle path from the running executable. */
+function getInstalledAppBundlePath(): string | null {
+  const marker = '.app/Contents/'
+  const idx = process.execPath.indexOf(marker)
+  if (idx === -1) return null
+  return process.execPath.slice(0, idx + 4) // include ".app"
+}
+
+/** Locate the downloaded + sha512-verified update .zip (event path, then cache). */
+function locateDownloadedMacZip(): string | null {
+  if (downloadedFilePath && downloadedFilePath.endsWith('.zip') && fs.existsSync(downloadedFilePath)) {
+    return downloadedFilePath
+  }
+  try {
+    const cacheDir = getUpdateCacheDir()
+    if (!fs.existsSync(cacheDir)) return null
+    const infoPath = path.join(cacheDir, 'update-info.json')
+    if (fs.existsSync(infoPath)) {
+      const info = readJsonFileSync(infoPath) as Record<string, unknown> | null
+      const fileName = (info?.fileName || info?.path) as string | undefined
+      if (fileName && fileName.endsWith('.zip')) {
+        const p = path.join(cacheDir, fileName)
+        if (fs.existsSync(p)) return p
+      }
+    }
+    const zip = fs.readdirSync(cacheDir).find(f => f.endsWith('.zip'))
+    return zip ? path.join(cacheDir, zip) : null
+  } catch (error) {
+    mainLog.warn('[auto-update] locateDownloadedMacZip failed:', error)
+    return null
+  }
+}
+
+/**
+ * Whether the running app is signed with a Developer ID Application certificate.
+ * Signed apps can use Squirrel.Mac (quitAndInstall); unsigned/ad-hoc apps cannot
+ * and must use the custom bundle swap.
+ */
+function isAppDeveloperIdSigned(): boolean {
+  try {
+    const bundle = getInstalledAppBundlePath()
+    if (!bundle) return false
+    const res = spawnSync('/usr/bin/codesign', ['-dvv', bundle], { encoding: 'utf8' })
+    return /Authority=Developer ID Application/.test(`${res.stdout ?? ''}${res.stderr ?? ''}`)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Self-update for unsigned macOS builds. electron-updater has already downloaded
+ * and sha512-verified the .zip; we extract it and swap the .app bundle from a
+ * detached helper (the app can't replace itself while running), then relaunch.
+ * Throws if the artifact or bundle can't be located (caller restores error state).
+ */
+async function installUpdateMacUnsigned(): Promise<void> {
+  const zipPath = locateDownloadedMacZip()
+  if (!zipPath) throw new Error('Verified update .zip not found in cache')
+  const appBundle = getInstalledAppBundlePath()
+  if (!appBundle) throw new Error('Could not resolve the installed .app bundle path')
+
+  const work = fs.mkdtempSync(path.join(tmpdir(), 'zo-update-'))
+  const scriptPath = path.join(work, 'apply-update.sh')
+  const logPath = path.join(tmpdir(), 'zo-update-helper.log')
+
+  // All inputs are passed via env (NOT string-interpolated) so paths containing
+  // spaces or special characters can't break or inject into the script.
+  const script = [
+    '#!/bin/bash',
+    'set -uo pipefail',
+    'exec >> "$ZO_LOG" 2>&1',
+    'echo "[zo-update] $(date) start pid=$ZO_PID bundle=$ZO_BUNDLE zip=$ZO_ZIP"',
+    '# 1. Wait for the running app to exit (up to ~60s), breaking as soon as it dies.',
+    'for _ in $(seq 1 300); do kill -0 "$ZO_PID" 2>/dev/null || break; sleep 0.2; done',
+    'sleep 0.5',
+    '# 2. Extract the verified zip (ditto preserves macOS bundle metadata).',
+    'EXTRACT="$ZO_WORK/extract"; mkdir -p "$EXTRACT"',
+    'if ! ditto -x -k "$ZO_ZIP" "$EXTRACT"; then echo "[zo-update] ERROR extract"; exit 1; fi',
+    'NEW_APP="$(/usr/bin/find "$EXTRACT" -maxdepth 1 -name "*.app" -print -quit)"',
+    'if [ -z "$NEW_APP" ] || [ ! -d "$NEW_APP" ]; then echo "[zo-update] ERROR no .app in zip"; exit 1; fi',
+    '# 3. Swap with backup/restore safety.',
+    'BACKUP="$ZO_BUNDLE.old-$$"; rm -rf "$BACKUP"',
+    'if ! mv "$ZO_BUNDLE" "$BACKUP"; then echo "[zo-update] ERROR move-old"; exit 1; fi',
+    'if ! ditto "$NEW_APP" "$ZO_BUNDLE"; then',
+    '  echo "[zo-update] ERROR install, restoring backup"',
+    '  rm -rf "$ZO_BUNDLE"; mv "$BACKUP" "$ZO_BUNDLE"; open "$ZO_BUNDLE"; exit 1',
+    'fi',
+    'rm -rf "$BACKUP"',
+    '# 4. Clear quarantine and relaunch.',
+    'xattr -dr com.apple.quarantine "$ZO_BUNDLE" 2>/dev/null || true',
+    'echo "[zo-update] success, relaunching"',
+    'open "$ZO_BUNDLE"',
+    'rm -rf "$ZO_WORK" 2>/dev/null || true',
+    '',
+  ].join('\n')
+
+  fs.writeFileSync(scriptPath, script, { mode: 0o755 })
+  mainLog.info(`[auto-update] mac self-update: helper ${scriptPath} (log ${logPath})`)
+
+  const child = spawn('/bin/bash', [scriptPath], {
+    detached: true,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      ZO_PID: String(process.pid),
+      ZO_BUNDLE: appBundle,
+      ZO_ZIP: zipPath,
+      ZO_WORK: work,
+      ZO_LOG: logPath,
+    },
+  })
+  child.unref()
+
+  // Give the detached helper a moment to start, then quit so it can swap the bundle.
+  setTimeout(() => {
+    mainLog.info('[auto-update] quitting for mac self-update swap')
+    app.quit()
+  }, 300)
+}
+
 /**
  * Install the downloaded update and restart the app.
  * Calls electron-updater's quitAndInstall which handles:
@@ -461,12 +600,18 @@ export async function installUpdate(): Promise<void> {
   }
 
   try {
-    // isSilent=false shows the installer UI on Windows if needed (fallback)
-    // isForceRunAfter=true ensures the app relaunches after install
-    autoUpdater.quitAndInstall(false, true)
+    if (IS_MAC && !isAppDeveloperIdSigned()) {
+      // Unsigned macOS build: Squirrel.Mac would refuse to apply the update, so
+      // swap the bundle ourselves from the already-verified .zip.
+      await installUpdateMacUnsigned()
+    } else {
+      // isSilent=false shows the installer UI on Windows if needed (fallback)
+      // isForceRunAfter=true ensures the app relaunches after install
+      autoUpdater.quitAndInstall(false, true)
+    }
   } catch (error) {
     __isUpdating = false
-    mainLog.error('[auto-update] quitAndInstall failed:', error)
+    mainLog.error('[auto-update] install failed:', error)
     updateInfo = { ...updateInfo, downloadState: 'error' }
     broadcastUpdateInfo()
     throw error
