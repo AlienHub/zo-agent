@@ -153,20 +153,31 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     window.addEventListener('mouseup', onUp)
   }, [filesPanelWidth, filesSash.handlers])
 
-  // Adaptive mode: measure the content row so the files tree can switch between
-  // inline (side-by-side) and a floating popover when the panel gets narrow.
+  // Adaptive mode: measure the owning panel slot so the files tree can switch
+  // between inline (side-by-side) and a floating popover when the panel gets
+  // narrow. The content row can be inflated by long unwrapped chat content and
+  // clipped by the panel, so observing it would not reliably track panel resize.
   const [filesContentWidth, setFilesContentWidth] = React.useState(0)
-  const filesContentRoRef = React.useRef<ResizeObserver | null>(null)
-  const filesContentRef = React.useCallback((el: HTMLDivElement | null) => {
-    filesContentRoRef.current?.disconnect()
-    if (el) {
-      const ro = new ResizeObserver((entries) => setFilesContentWidth(entries[0]?.contentRect.width ?? 0))
-      ro.observe(el)
-      filesContentRoRef.current = ro
-      setFilesContentWidth(el.clientWidth)
-    }
-  }, [])
-  React.useEffect(() => () => filesContentRoRef.current?.disconnect(), [])
+  // Capture the content-row element into state via a stable callback ref, then
+  // observe from an effect keyed on that element. Observing inside the callback
+  // ref directly proved unreliable: a stable callback ref is NOT re-invoked on
+  // Fast Refresh or skeleton->real branch swaps (the DOM node is preserved), so
+  // the ResizeObserver got orphaned and never fired after mount. Keying the
+  // effect on the element re-establishes the observer whenever it changes.
+  const [filesContentEl, setFilesContentEl] = React.useState<HTMLDivElement | null>(null)
+  const filesContentRef = React.useCallback((el: HTMLDivElement | null) => setFilesContentEl(el), [])
+  React.useEffect(() => {
+    if (!filesContentEl) return
+    // Measure the owning panel slot (overflow-hidden + flex-sized => true panel
+    // width), not the content row, which can be inflated by long chat content
+    // and then clipped, so it would not track panel resize.
+    const target = filesContentEl.closest<HTMLElement>('[data-panel-role="content"]') ?? filesContentEl
+    const measure = () => setFilesContentWidth(target.getBoundingClientRect().width)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(target)
+    return () => ro.disconnect()
+  }, [filesContentEl])
 
   // Popover mode auto-dismiss on mouse-out (grace delay bridges the button↔popover gap).
   const popoverCloseTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -902,10 +913,10 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
       return (
         <>
-          <div className="h-full flex flex-col">
+          <div className="h-full flex flex-col min-w-0">
             <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActionsWithFiles} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
             <div ref={filesContentRef} className="flex-1 flex min-h-0 min-w-0 relative">
-              <div className="flex-1 flex flex-col min-h-0 min-w-0">
+              <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
               <ChatDisplay
                 ref={chatDisplayRef}
                 session={skeletonSession}
@@ -967,7 +978,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
     // Session truly doesn't exist
     return (
-      <div className="h-full flex flex-col">
+      <div className="h-full flex flex-col min-w-0">
         <PanelHeader  title={t('chat.session')} leadingAction={leadingAction} rightSidebarButton={rightSidebarButton} />
         <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground">
           <AlertCircle className="h-10 w-10" />
@@ -979,10 +990,10 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
   return (
     <>
-      <div className="h-full flex flex-col">
+      <div className="h-full flex flex-col min-w-0">
         <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActionsWithFiles} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
         <div ref={filesContentRef} className="flex-1 flex min-h-0 min-w-0 relative">
-          <div className="flex-1 flex flex-col min-h-0 min-w-0">
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
           <ChatDisplay
             ref={chatDisplayRef}
             session={session}
