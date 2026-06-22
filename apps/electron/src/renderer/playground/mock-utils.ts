@@ -256,6 +256,49 @@ export const mockElectronAPI = {
     }
   },
 
+  // Working-directory files panel (WorkingDirectoryPanel). Returns a mock
+  // workspace tree so the real component renders in the playground.
+  scanWorkingDirectory: async (rootPath: string) => {
+    console.log('[Playground] scanWorkingDirectory called:', rootPath)
+    const dir = (name: string, path: string, children: unknown[] = []) => ({ name, path, type: 'directory' as const, children })
+    const file = (name: string, path: string, size: number) => ({ name, path, type: 'file' as const, size })
+    return [
+      dir('.zo', '/mock/.zo', [
+        dir('labels', '/mock/.zo/labels', [file('config.json', '/mock/.zo/labels/config.json', 128)]),
+        dir('sessions', '/mock/.zo/sessions', []),
+        dir('skills', '/mock/.zo/skills', []),
+        dir('sources', '/mock/.zo/sources', []),
+        dir('statuses', '/mock/.zo/statuses', []),
+        file('config.json', '/mock/.zo/config.json', 256),
+        file('events.jsonl', '/mock/.zo/events.jsonl', 1024),
+        file('views.json', '/mock/.zo/views.json', 512),
+      ]),
+      file('test-write.md', '/mock/test-write.md', 268),
+    ]
+  },
+  watchWorkingDirectory: (rootPath: string) => {
+    console.log('[Playground] watchWorkingDirectory called:', rootPath)
+  },
+  unwatchWorkingDirectory: () => {
+    console.log('[Playground] unwatchWorkingDirectory called')
+  },
+  onWorkingDirectoryChanged: (callback: (rootPath: string) => void) => {
+    void callback
+    return () => {}
+  },
+  renamePath: async (oldPath: string, newName: string) => {
+    console.log('[Playground] renamePath called:', oldPath, newName)
+    return { path: oldPath }
+  },
+  deletePath: async (targetPath: string) => {
+    console.log('[Playground] deletePath called:', targetPath)
+    return { trashed: true }
+  },
+  onReconnected: (callback: () => void) => {
+    void callback
+    return () => {}
+  },
+
   browserPane: {
     focus: async (instanceId: string) => {
       console.log('[Playground] browserPane.focus called:', instanceId)
@@ -677,6 +720,14 @@ export function ensureMockElectronAPI() {
   if (!window.electronAPI) {
     ;(window as any).electronAPI = mockElectronAPI
     console.log('[Playground] Injected mock electronAPI')
+  } else {
+    // HMR / repeat-import: backfill any newly-added mock methods onto the
+    // existing object so new mocks land without a full page reload. Only adds
+    // missing keys — never overwrites a real electronAPI method.
+    const api = (window as any).electronAPI
+    for (const key of Object.keys(mockElectronAPI)) {
+      if (!(key in api)) api[key] = (mockElectronAPI as any)[key]
+    }
   }
   if (!(window as any).__playgroundMessaging) {
     ;(window as any).__playgroundMessaging = playgroundMessagingHandle
