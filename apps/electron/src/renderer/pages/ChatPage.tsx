@@ -778,7 +778,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
             />
           </div>
           <div className="h-full min-h-0 flex flex-col" style={{ width: filesPanelWidth }}>
-            <WorkingDirectoryPanel workingDirectory={filesRootDir} onOpenFile={handleOpenFile} onClose={toggleFiles} />
+            {/* !pb-4 aligns the card's bottom with the composer's bottom inset (ChatInputZone pb-4) */}
+            <WorkingDirectoryPanel workingDirectory={filesRootDir} onOpenFile={handleOpenFile} onClose={toggleFiles} className="!pb-4" />
           </div>
         </motion.div>
       )}
@@ -798,7 +799,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.96, y: -4 }}
           transition={{ duration: 0.15, ease: 'easeOut' }}
-          className="absolute z-30 top-2 right-2 bottom-2 [filter:drop-shadow(0_12px_32px_rgba(0,0,0,0.30))]"
+          className="absolute z-30 top-2 right-2 bottom-4 [filter:drop-shadow(0_12px_32px_rgba(0,0,0,0.30))]"
           style={{ width: filesPopoverWidth, transformOrigin: 'top right' }}
         >
           <WorkingDirectoryPanel workingDirectory={filesRootDir} onOpenFile={handleOpenFile} onClose={toggleFiles} className="!p-0" />
