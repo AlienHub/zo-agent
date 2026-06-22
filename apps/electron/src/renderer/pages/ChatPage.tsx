@@ -904,8 +904,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         <>
           <div className="h-full flex flex-col">
             <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActionsWithFiles} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
-            <div ref={filesContentRef} className="flex-1 flex min-h-0 relative">
-              <div className="flex-1 flex flex-col min-h-0">
+            <div ref={filesContentRef} className="flex-1 flex min-h-0 min-w-0 relative">
+              <div className="flex-1 flex flex-col min-h-0 min-w-0">
               <ChatDisplay
                 ref={chatDisplayRef}
                 session={skeletonSession}
@@ -981,8 +981,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     <>
       <div className="h-full flex flex-col">
         <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActionsWithFiles} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
-        <div ref={filesContentRef} className="flex-1 flex min-h-0 relative">
-          <div className="flex-1 flex flex-col min-h-0">
+        <div ref={filesContentRef} className="flex-1 flex min-h-0 min-w-0 relative">
+          <div className="flex-1 flex flex-col min-h-0 min-w-0">
           <ChatDisplay
             ref={chatDisplayRef}
             session={session}
