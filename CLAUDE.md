@@ -23,14 +23,22 @@ Pushing `main` only runs validation (`validate.yml`).
      -print0 | xargs -0 perl -pi -e 's/"version": "OLD"/"version": "NEW"/'
    bun run scripts/verify-release-version.ts vNEW   # must pass before tagging
    ```
-2. **Ship an auto-generated changelog from git history.** The `release-notes`
-   job in `release-electron.yml` overwrites the GitHub Release body with
-   `git log --no-merges` between the previous tag and the new tag. Keep commit
-   subjects release-note quality — they ARE the changelog. (Do not hand-write
-   release notes; the job regenerates them.)
+2. **Ship a curated changelog.** The `release-notes` job in
+   `release-electron.yml` sets the GitHub Release body from, in priority order:
+   1. **A hand-authored file at `.github/release-notes/<tag>.md`** (preferred).
+      Write these in the upstream house style: a themed `# vX.Y.Z — <title>`
+      heading, then `## Features` / `## Improvements` / `## Bug Fixes` /
+      `## Breaking Changes` sections, each bullet a **bold lead-in** + prose +
+      the commit hash in backticks, and `None.` for empty sections. Curate —
+      fold a feature's intra-release fixes into its bullet, omit pure-internal
+      churn (playground demos, lockfile bumps).
+   2. **Otherwise, an auto-generated `git log --no-merges` changelog** between
+      the previous tag and the new tag (fallback). For releases that fall back,
+      keep commit subjects release-note quality — they ARE the changelog.
 
-**Release steps:** commit work to `main` → bump all versions (`Release X.Y.Z`
-commit) → `git tag -a vX.Y.Z -m "Release X.Y.Z"` → `git push origin main` →
+**Release steps:** commit work to `main` → write
+`.github/release-notes/vX.Y.Z.md` + bump all versions (`Release X.Y.Z` commit)
+→ `git tag -a vX.Y.Z -m "Release X.Y.Z"` → `git push origin main` →
 `git push origin vX.Y.Z`. Watch the run on the Actions tab.
 
 ### macOS builds are UNSIGNED

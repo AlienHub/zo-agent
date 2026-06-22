@@ -81,9 +81,14 @@ jobs:
           APPLE_API_KEY_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_API_KEY_ID || '' }}
           APPLE_API_ISSUER: ${{ matrix.platform == 'mac' && secrets.APPLE_API_ISSUER || '' }}
 
-  # Auto-generate the GitHub Release changelog from git history. The build jobs
-  # create the release (electron-builder `--publish always`); this job overwrites
-  # its body with a commit-derived changelog since the previous tag.
+  # Set the GitHub Release changelog. The build jobs create the release
+  # (electron-builder `--publish always`); this job overwrites its body.
+  #
+  # Notes are sourced in priority order:
+  #   1. A hand-authored file at `.github/release-notes/<tag>.md` (preferred —
+  #      lets us ship curated, categorized notes like upstream).
+  #   2. Otherwise, an auto-generated changelog from `git log` since the
+  #      previous tag (fallback so a release never ships with an empty body).
   release-notes:
     name: release-notes
     needs: build
@@ -95,28 +100,35 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Generate changelog from commits
+      - name: Resolve release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
-          if [ -n "$PREV" ]; then
-            RANGE="${PREV}..${TAG}"
-            HEADER="Changes since ${PREV}"
+          NOTES_FILE=".github/release-notes/${TAG}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            echo "Using hand-authored release notes: ${NOTES_FILE}"
+            cp "$NOTES_FILE" RELEASE_NOTES.md
           else
-            RANGE="$TAG"
-            HEADER="Changes"
+            echo "No ${NOTES_FILE}; generating changelog from commits."
+            PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+            if [ -n "$PREV" ]; then
+              RANGE="${PREV}..${TAG}"
+              HEADER="Changes since ${PREV}"
+            else
+              RANGE="$TAG"
+              HEADER="Changes"
+            fi
+            {
+              echo "## ${HEADER}"
+              echo
+              git log --no-merges --pretty=format:'- %s (%h)' "$RANGE"
+              echo
+              echo
+              echo "_Full history: ${PREV:+https://github.com/${{ github.repository }}/compare/${PREV}...${TAG}}_"
+            } > RELEASE_NOTES.md
           fi
-          {
-            echo "## ${HEADER}"
-            echo
-            git log --no-merges --pretty=format:'- %s (%h)' "$RANGE"
-            echo
-            echo
-            echo "_Full history: ${PREV:+https://github.com/${{ github.repository }}/compare/${PREV}...${TAG}}_"
-          } > RELEASE_NOTES.md
-          echo "----- generated release notes -----"
+          echo "----- release notes -----"
           cat RELEASE_NOTES.md
           gh release edit "$TAG" --repo "${{ github.repository }}" --notes-file RELEASE_NOTES.md
