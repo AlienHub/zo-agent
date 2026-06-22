@@ -44,6 +44,10 @@ export interface ChatPageProps {
 const FILES_PANEL_MIN_WIDTH = 200
 const FILES_PANEL_MAX_WIDTH = 480
 const FILES_PANEL_DEFAULT_WIDTH = 260
+// Below (minChat + filesWidth) the inline split would crush the chat, so the
+// files tree opens as a floating popover over the chat instead.
+const FILES_PANEL_MIN_CHAT_WIDTH = 360
+const FILES_POPOVER_DISMISS_MS = 200
 
 const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   const { t } = useTranslation()
@@ -148,6 +152,35 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }, [filesPanelWidth, filesSash.handlers])
+
+  // Adaptive mode: measure the content row so the files tree can switch between
+  // inline (side-by-side) and a floating popover when the panel gets narrow.
+  const [filesContentWidth, setFilesContentWidth] = React.useState(0)
+  const filesContentRoRef = React.useRef<ResizeObserver | null>(null)
+  const filesContentRef = React.useCallback((el: HTMLDivElement | null) => {
+    filesContentRoRef.current?.disconnect()
+    if (el) {
+      const ro = new ResizeObserver((entries) => setFilesContentWidth(entries[0]?.contentRect.width ?? 0))
+      ro.observe(el)
+      filesContentRoRef.current = ro
+      setFilesContentWidth(el.clientWidth)
+    }
+  }, [])
+  React.useEffect(() => () => filesContentRoRef.current?.disconnect(), [])
+
+  // Popover mode auto-dismiss on mouse-out (grace delay bridges the button↔popover gap).
+  const popoverCloseTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cancelPopoverClose = React.useCallback(() => {
+    if (popoverCloseTimerRef.current) { clearTimeout(popoverCloseTimerRef.current); popoverCloseTimerRef.current = null }
+  }, [])
+  const schedulePopoverClose = React.useCallback(() => {
+    cancelPopoverClose()
+    popoverCloseTimerRef.current = setTimeout(() => {
+      setFilesOpen(false)
+      storage.set(storage.KEYS.filesPanelOpen, false, sessionId)
+    }, FILES_POPOVER_DISMISS_MS)
+  }, [cancelPopoverClose, sessionId])
+  React.useEffect(() => () => cancelPopoverClose(), [cancelPopoverClose])
 
   // Use the unified session options hook for clean access
   const {
@@ -691,9 +724,13 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   // Falls back to the workspace root when the session has no explicit cwd.
   const filesRootDir = workingDirectory || sessionMeta?.workingDirectory || activeWorkspace?.rootPath
   const isFilesSidebarOpen = filesOpen && !!filesRootDir
+  // Adaptive: inline while the chat can stay ≥ minChatWidth; otherwise a floating popover.
+  const filesMode: 'inline' | 'popover' =
+    filesContentWidth > 0 && filesContentWidth < FILES_PANEL_MIN_CHAT_WIDTH + filesPanelWidth ? 'popover' : 'inline'
   // Files toggle — same PanelHeaderCenterButton as the share/info actions, with the
   // shared text-accent active treatment. Lives in the `actions` slot so it never
-  // displaces the panel's close (✕) button in `rightSidebarButton`.
+  // displaces the panel's close (✕) button in `rightSidebarButton`. In popover mode
+  // the button joins the popover's hover group so mouse-out dismisses it.
   const filesSidebarButton = filesRootDir ? (
     <PanelHeaderCenterButton
       icon={<FolderTree className="h-4 w-4" />}
@@ -702,6 +739,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       aria-pressed={isFilesSidebarOpen}
       onClick={toggleFiles}
       className={isFilesSidebarOpen ? 'text-accent opacity-100' : undefined}
+      {...(filesMode === 'popover' ? { onMouseEnter: cancelPopoverClose, onMouseLeave: schedulePopoverClose } : {})}
     />
   ) : null
   // Combined header actions (share/info + files toggle) for the actions slot.
@@ -716,7 +754,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   // during the slide). Width changes are instant while dragging the resize handle.
   const filesSidePanel = (
     <AnimatePresence initial={false}>
-      {isFilesSidebarOpen && filesRootDir && (
+      {isFilesSidebarOpen && filesRootDir && filesMode === 'inline' && (
         <motion.div
           key="files-side-panel"
           initial={{ width: 0, opacity: 0 }}
@@ -742,6 +780,28 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
           <div className="h-full min-h-0 flex flex-col" style={{ width: filesPanelWidth }}>
             <WorkingDirectoryPanel workingDirectory={filesRootDir} onOpenFile={handleOpenFile} onClose={toggleFiles} />
           </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+  // Narrow panels: the same tree as a floating popover over the chat (chat keeps
+  // full width). Fades + scales from the button; mouse-out dismisses it.
+  const filesPopoverWidth = Math.max(FILES_PANEL_MIN_WIDTH, Math.min(filesPanelWidth, filesContentWidth - 24))
+  const filesPopover = (
+    <AnimatePresence>
+      {isFilesSidebarOpen && filesRootDir && filesMode === 'popover' && (
+        <motion.div
+          key="files-popover"
+          onMouseEnter={cancelPopoverClose}
+          onMouseLeave={schedulePopoverClose}
+          initial={{ opacity: 0, scale: 0.96, y: -4 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.96, y: -4 }}
+          transition={{ duration: 0.15, ease: 'easeOut' }}
+          className="absolute z-30 top-2 right-2 bottom-2 [filter:drop-shadow(0_12px_32px_rgba(0,0,0,0.30))]"
+          style={{ width: filesPopoverWidth, transformOrigin: 'top right' }}
+        >
+          <WorkingDirectoryPanel workingDirectory={filesRootDir} onOpenFile={handleOpenFile} onClose={toggleFiles} className="!p-0" />
         </motion.div>
       )}
     </AnimatePresence>
@@ -843,7 +903,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         <>
           <div className="h-full flex flex-col">
             <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActionsWithFiles} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
-            <div className="flex-1 flex min-h-0">
+            <div ref={filesContentRef} className="flex-1 flex min-h-0 relative">
               <div className="flex-1 flex flex-col min-h-0">
               <ChatDisplay
                 ref={chatDisplayRef}
@@ -888,6 +948,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
               />
               </div>
               {filesSidePanel}
+              {filesPopover}
             </div>
           </div>
           <RenameDialog
@@ -919,7 +980,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     <>
       <div className="h-full flex flex-col">
         <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActionsWithFiles} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
-        <div className="flex-1 flex min-h-0">
+        <div ref={filesContentRef} className="flex-1 flex min-h-0 relative">
           <div className="flex-1 flex flex-col min-h-0">
           <ChatDisplay
             ref={chatDisplayRef}
@@ -971,6 +1032,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
           />
           </div>
           {filesSidePanel}
+          {filesPopover}
         </div>
       </div>
       <RenameDialog
