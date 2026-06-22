@@ -16,6 +16,18 @@ import { ContentFrame } from './ContentFrame'
  * Handles nested patterns like {"result": "{\"nested\": \"value\"}"}
  * so they display as expandable tree nodes instead of plain strings.
  */
+/**
+ * Size threshold (bytes of raw JSON text) for large-file protection.
+ *
+ * @uiw/react-json-view is NOT virtualized: a fully-expanded large tree creates
+ * tens of thousands of DOM nodes synchronously and freezes the main thread.
+ * Above this threshold we (1) skip the full-tree `deepParseJson` rebuild and
+ * (2) collapse the tree to its top level so initial DOM stays bounded — the
+ * user can drill in node-by-node. App.tsx routes truly huge files (see
+ * JSON_TREE_MAX_BYTES) to the plain code viewer before they ever reach here.
+ */
+const JSON_LARGE_BYTES = 256 * 1024
+
 function deepParseJson(value: unknown): unknown {
   // Handle null/undefined
   if (value === null || value === undefined) return value
@@ -75,6 +87,12 @@ export interface JSONPreviewOverlayProps {
   theme?: 'light' | 'dark'
   /** Optional error message */
   error?: string
+  /**
+   * Byte length of the raw JSON text, used for large-file protection.
+   * When omitted (e.g. playground/embedded callers with small data), the
+   * viewer keeps its full expand-all behavior.
+   */
+  contentBytes?: number
   /** Render inline without dialog (for playground) */
   embedded?: boolean
   /** Hide embedded header chrome and let parent provide page-level controls */
@@ -107,6 +125,7 @@ export function JSONPreviewOverlay({
   error,
   embedded,
   hideHeader,
+  contentBytes,
 }: JSONPreviewOverlayProps) {
   const { t } = useTranslation()
   // Select theme based on mode
@@ -114,15 +133,23 @@ export function JSONPreviewOverlay({
     return theme === 'dark' ? craftAgentDarkTheme : craftAgentLightTheme
   }, [theme])
 
+  // Large files get the non-virtualized tree's two protections (see JSON_LARGE_BYTES).
+  const isLarge = contentBytes != null && contentBytes > JSON_LARGE_BYTES
+
   // Recursively parse any stringified JSON within the data for better display.
   // Guard: @uiw/react-json-view crashes on null/undefined/primitive values — wrap them
   // in an object so the viewer can render them safely.
+  // For large files we skip deepParseJson: it rebuilds the entire tree (O(n) alloc +
+  // a JSON.parse attempt per string), pure overhead at scale.
   const processedData = useMemo(() => {
-    const parsed = deepParseJson(data)
+    const parsed = isLarge ? data : deepParseJson(data)
     if (parsed === null || parsed === undefined) return { '(empty)': null }
     if (typeof parsed !== 'object') return { '(root)': parsed }
     return parsed as object
-  }, [data])
+  }, [data, isLarge])
+
+  // Collapse large trees to the top level so initial DOM stays bounded.
+  const collapsed: boolean | number = isLarge ? 1 : false
 
   return (
     <PreviewOverlay
@@ -147,7 +174,7 @@ export function JSONPreviewOverlay({
             <JsonView
               value={processedData}
               style={jsonTheme}
-              collapsed={false}
+              collapsed={collapsed}
               enableClipboard={true}
               displayDataTypes={false}
               shortenTextAfterLength={100}

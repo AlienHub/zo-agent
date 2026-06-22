@@ -60,6 +60,14 @@ function getLanguageFromPath(filePath: string, explicit?: string): string {
 }
 
 /**
+ * Above this size, disable Shiki highlighting and the per-line gutter.
+ * Both are O(lines): Shiki tokenizes the entire file and the gutter renders one
+ * <div> per line, so a large file blocks the main thread. A single <pre> text
+ * node renders cheaply at any size. This component is not virtualized.
+ */
+const LARGE_CODE_BYTES = 256 * 1024
+
+/**
  * ShikiCodeViewer - Syntax highlighted code viewer with line numbers
  */
 export function ShikiCodeViewer({
@@ -83,12 +91,26 @@ export function ShikiCodeViewer({
     return LANGUAGE_ALIASES[lowered] || lowered
   }, [language, filePath])
 
-  // Split code into lines for line numbers
-  const lines = useMemo(() => code.split('\n'), [code])
+  // Large files render as a single <pre> (no Shiki, no per-line gutter).
+  const isLarge = code.length > LARGE_CODE_BYTES
+
+  // Split code into lines for the gutter (skipped for large files).
+  const lines = useMemo(() => (isLarge ? [] : code.split('\n')), [code, isLarge])
 
   // Highlight code with Shiki
   useEffect(() => {
     let cancelled = false
+
+    // Large files: skip Shiki entirely — the plain <pre> path renders below.
+    if (isLarge) {
+      setHighlighted(null)
+      setIsLoading(false)
+      if (!hasCalledReady.current && onReady) {
+        hasCalledReady.current = true
+        requestAnimationFrame(() => onReady())
+      }
+      return
+    }
 
     async function highlight() {
       // Use provided shikiTheme or fall back to github theme based on mode
@@ -130,12 +152,30 @@ export function ShikiCodeViewer({
     return () => {
       cancelled = true
     }
-  }, [code, resolvedLang, theme, shikiTheme, onReady])
+  }, [code, resolvedLang, theme, shikiTheme, onReady, isLarge])
 
   // Use CSS variables so custom themes are respected
   const backgroundColor = 'var(--background)'
   const lineNumberColor = theme === 'dark' ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'
   const borderColor = theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)'
+
+  // Large files: single <pre> text node, no gutter, no highlighting — the only
+  // path that stays responsive without virtualization.
+  if (isLarge) {
+    return (
+      <div
+        className={cn('h-full w-full overflow-auto', className)}
+        style={{ backgroundColor }}
+      >
+        <div className="px-4 pt-3 text-[11px]" style={{ color: lineNumberColor }}>
+          Large file — syntax highlighting and line numbers disabled for performance
+        </div>
+        <pre className="font-mono text-[13px] leading-[1.6] whitespace-pre p-4">
+          <code>{code}</code>
+        </pre>
+      </div>
+    )
+  }
 
   return (
     <div

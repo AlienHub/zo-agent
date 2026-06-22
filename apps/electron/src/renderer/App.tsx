@@ -2168,6 +2168,25 @@ function FilePreviewRenderer({
     }
 
     case 'json': {
+      // Above this size, skip the interactive tree entirely. @uiw/react-json-view
+      // is not virtualized, so building a tree from multi-MB JSON freezes the UI.
+      // Fall back to the read-only code viewer, which itself degrades to plain text
+      // for large files (see ShikiCodeViewer).
+      const JSON_TREE_MAX_BYTES = 2 * 1024 * 1024
+      if ((state.content?.length ?? 0) > JSON_TREE_MAX_BYTES) {
+        return (
+          <CodePreviewOverlay
+            isOpen
+            onClose={onClose}
+            filePath={state.filePath}
+            content={state.content ?? ''}
+            language="json"
+            mode="read"
+            theme={theme}
+            error={state.error}
+          />
+        )
+      }
       // JSONPreviewOverlay expects parsed data, not a raw string.
       // @uiw/react-json-view crashes on null value, so guard against it.
       let parsedData: unknown = null
@@ -2212,6 +2231,7 @@ function FilePreviewRenderer({
           data={parsedData}
           theme={theme}
           error={state.error}
+          contentBytes={state.content?.length ?? 0}
         />
       )
     }
