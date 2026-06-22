@@ -85,8 +85,10 @@ jobs:
   # (electron-builder `--publish always`); this job overwrites its body.
   #
   # Notes are sourced in priority order:
-  #   1. A hand-authored file at `.github/release-notes/<tag>.md` (preferred —
-  #      lets us ship curated, categorized notes like upstream).
+  #   1. The curated, bundled note at `apps/electron/resources/release-notes/
+  #      <version>.md` (preferred). This is the SAME file the app ships for its
+  #      in-product "What's New", so the GitHub Release and the in-app changelog
+  #      stay in sync from a single source.
   #   2. Otherwise, an auto-generated changelog from `git log` since the
   #      previous tag (fallback so a release never ships with an empty body).
   release-notes:
@@ -106,9 +108,9 @@ jobs:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          NOTES_FILE=".github/release-notes/${TAG}.md"
+          NOTES_FILE="apps/electron/resources/release-notes/${TAG#v}.md"
           if [ -f "$NOTES_FILE" ]; then
-            echo "Using hand-authored release notes: ${NOTES_FILE}"
+            echo "Using bundled release notes: ${NOTES_FILE}"
             cp "$NOTES_FILE" RELEASE_NOTES.md
           else
             echo "No ${NOTES_FILE}; generating changelog from commits."

@@ -25,21 +25,29 @@ Pushing `main` only runs validation (`validate.yml`).
    ```
 2. **Ship a curated changelog.** The `release-notes` job in
    `release-electron.yml` sets the GitHub Release body from, in priority order:
-   1. **A hand-authored file at `.github/release-notes/<tag>.md`** (preferred).
-      Write these in the upstream house style: a themed `# vX.Y.Z — <title>`
-      heading, then `## Features` / `## Improvements` / `## Bug Fixes` /
-      `## Breaking Changes` sections, each bullet a **bold lead-in** + prose +
-      the commit hash in backticks, and `None.` for empty sections. Curate —
-      fold a feature's intra-release fixes into its bullet, omit pure-internal
-      churn (playground demos, lockfile bumps).
+   1. **The bundled note at `apps/electron/resources/release-notes/<version>.md`**
+      (preferred — `<version>` is the tag without the leading `v`). This is the
+      SAME file the app ships for its in-product "What's New", so the GitHub
+      Release and the in-app changelog come from a single source. Write it in
+      the house style: a `# vX.Y.Z - <title>` heading, then `## Features` /
+      `## Improvements` / `## Bug Fixes` / `## Breaking Changes` sections, each
+      bullet a **bold lead-in** + prose, and `None.` for empty sections. Curate
+      — fold a feature's intra-release fixes into its bullet, omit pure-internal
+      churn (playground demos, lockfile bumps). These files are this fork's own
+      releases only — do NOT re-add upstream's versioned notes.
    2. **Otherwise, an auto-generated `git log --no-merges` changelog** between
       the previous tag and the new tag (fallback). For releases that fall back,
       keep commit subjects release-note quality — they ARE the changelog.
 
+   In-app "What's New" reads the same directory: only `X.Y.Z.md` files are shown
+   (newest 10 by semver). `next.md` is an unreleased-notes accumulator and is
+   intentionally excluded from display (see `packages/shared/src/release-notes`).
+
 **Release steps:** commit work to `main` → write
-`.github/release-notes/vX.Y.Z.md` + bump all versions (`Release X.Y.Z` commit)
-→ `git tag -a vX.Y.Z -m "Release X.Y.Z"` → `git push origin main` →
-`git push origin vX.Y.Z`. Watch the run on the Actions tab.
+`apps/electron/resources/release-notes/X.Y.Z.md` + bump all versions
+(`Release X.Y.Z` commit) → `git tag -a vX.Y.Z -m "Release X.Y.Z"` →
+`git push origin main` → `git push origin vX.Y.Z`. Watch the run on the
+Actions tab.
 
 ### macOS builds are UNSIGNED
 

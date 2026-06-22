@@ -18,6 +18,14 @@ const RELEASE_NOTES_DIR = join(CONFIG_DIR, 'release-notes');
 
 let releaseNotesInitialized = false;
 
+/**
+ * Only `X.Y.Z.md` files are real, displayable release notes. This excludes the
+ * `next.md` accumulator (and any other stray file) so it never surfaces in the
+ * UI as a bogus "vnext" entry — `parseVersion('next')` yields NaN, which sorts
+ * unpredictably and could otherwise become the "latest" version.
+ */
+const VERSIONED_NOTE_RE = /^\d+\.\d+\.\d+\.md$/;
+
 function getAssetsDir(): string {
   return getBundledAssetsDir('release-notes')
     ?? join(process.cwd(), 'resources', 'release-notes');
@@ -41,7 +49,7 @@ function loadBundledReleaseNotes(): Record<string, string> {
 
   let files: string[];
   try {
-    files = existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith('.md')) : [];
+    files = existsSync(dir) ? readdirSync(dir).filter(f => VERSIONED_NOTE_RE.test(f)) : [];
   } catch {
     console.warn(`[release-notes] Could not read release notes dir: ${dir}`);
     return notes;
