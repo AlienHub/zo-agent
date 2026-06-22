@@ -12,7 +12,6 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { AlertCircle, Globe, Copy, RefreshCw, Link2Off, Info, FolderTree } from 'lucide-react'
 import { ChatDisplay, type ChatDisplayHandle } from '@/components/app-shell/ChatDisplay'
 import { WorkingDirectoryPanel } from '@/components/app-shell/WorkingDirectoryPanel'
-import { cn } from '@/lib/utils'
 import * as storage from '@/lib/local-storage'
 import { useResizeGradient } from '@/hooks/useResizeGradient'
 import { PANEL_SASH_HIT_WIDTH, PANEL_SASH_LINE_WIDTH } from '@/components/app-shell/panel-constants'
@@ -33,7 +32,7 @@ import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/
 import { normalizeLocalFileTarget } from '@/lib/file-link-target'
 import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
 import { getSessionTitle } from '@/utils/session'
-import { useNavigationState, useNavigation, isSessionsNavigation } from '@/contexts/NavigationContext'
+import { useNavigationState, isSessionsNavigation } from '@/contexts/NavigationContext'
 // Model resolution: connection.defaultModel (no hardcoded defaults)
 import { resolveEffectiveConnectionSlug, isSessionConnectionUnavailable } from '@config/llm-connections'
 
@@ -93,7 +92,28 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     isFocusedPanel,
   } = useAppShellContext()
   const navigationState = useNavigationState()
-  const { toggleRightSidebar } = useNavigation()
+
+  // Files panel open/closed — LOCAL to this panel instance so it works correctly
+  // when multiple chat panels are open side by side (the global rightSidebar is a
+  // single value tied to the focused panel and can't be per-panel). Persisted per
+  // session so reopening a chat restores its state.
+  const [filesOpen, setFilesOpen] = React.useState(() =>
+    storage.get(storage.KEYS.filesPanelOpen, false, sessionId)
+  )
+  const filesOpenSessionRef = React.useRef(sessionId)
+  React.useEffect(() => {
+    if (filesOpenSessionRef.current !== sessionId) {
+      filesOpenSessionRef.current = sessionId
+      setFilesOpen(storage.get(storage.KEYS.filesPanelOpen, false, sessionId))
+    }
+  }, [sessionId])
+  const toggleFiles = React.useCallback(() => {
+    setFilesOpen((prev) => {
+      const next = !prev
+      storage.set(storage.KEYS.filesPanelOpen, next, sessionId)
+      return next
+    })
+  }, [sessionId])
 
   // Embedded files panel: drag the left edge to resize; width is persisted.
   // Reuses the app's shared resize sash (useResizeGradient) for the visual handle.
@@ -670,24 +690,27 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   // Files side panel (working-directory tree embedded beside the conversation).
   // Falls back to the workspace root when the session has no explicit cwd.
   const filesRootDir = workingDirectory || sessionMeta?.workingDirectory || activeWorkspace?.rootPath
-  const isFilesSidebarOpen = navigationState.rightSidebar?.type === 'files'
+  const isFilesSidebarOpen = filesOpen && !!filesRootDir
+  // Files toggle — same PanelHeaderCenterButton as the share/info actions, with the
+  // shared text-accent active treatment. Lives in the `actions` slot so it never
+  // displaces the panel's close (✕) button in `rightSidebarButton`.
   const filesSidebarButton = filesRootDir ? (
-    <button
-      type="button"
-      onClick={() => toggleRightSidebar({ type: 'files' })}
-      className={cn(
-        'flex items-center justify-center h-7 w-7 rounded-md transition-colors',
-        isFilesSidebarOpen
-          ? 'text-foreground bg-sidebar-hover'
-          : 'text-muted-foreground hover:text-foreground hover:bg-sidebar-hover'
-      )}
-      title={t('sidebar.files')}
+    <PanelHeaderCenterButton
+      icon={<FolderTree className="h-4 w-4" />}
+      tooltip={t('sidebar.files')}
       aria-label={t('sidebar.files')}
       aria-pressed={isFilesSidebarOpen}
-    >
-      <FolderTree className="h-4 w-4" />
-    </button>
+      onClick={toggleFiles}
+      className={isFilesSidebarOpen ? 'text-accent opacity-100' : undefined}
+    />
   ) : null
+  // Combined header actions (share/info + files toggle) for the actions slot.
+  const headerActionsWithFiles = (
+    <div className="flex items-center gap-1">
+      {headerActions}
+      {filesSidebarButton}
+    </div>
+  )
   // Animated mount/unmount: the container slides its width 0↔filesPanelWidth and
   // fades, while the inner fixed-width panel stays put (overflow-hidden clips it
   // during the slide). Width changes are instant while dragging the resize handle.
@@ -717,7 +740,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
             />
           </div>
           <div className="h-full min-h-0 flex flex-col" style={{ width: filesPanelWidth }}>
-            <WorkingDirectoryPanel workingDirectory={filesRootDir} onOpenFile={handleOpenFile} />
+            <WorkingDirectoryPanel workingDirectory={filesRootDir} onOpenFile={handleOpenFile} onClose={toggleFiles} />
           </div>
         </motion.div>
       )}
@@ -819,7 +842,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       return (
         <>
           <div className="h-full flex flex-col">
-            <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={filesSidebarButton ?? rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
+            <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActionsWithFiles} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
             <div className="flex-1 flex min-h-0">
               <div className="flex-1 flex flex-col min-h-0">
               <ChatDisplay
@@ -895,7 +918,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   return (
     <>
       <div className="h-full flex flex-col">
-        <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={filesSidebarButton ?? rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
+        <PanelHeader  title={displayTitle} titleMenu={titleMenu} compactTitleMenu={compactTitleMenu} leadingAction={leadingAction} actions={headerActionsWithFiles} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
         <div className="flex-1 flex min-h-0">
           <div className="flex-1 flex flex-col min-h-0">
           <ChatDisplay

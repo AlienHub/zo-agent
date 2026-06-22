@@ -16,7 +16,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { AnimatePresence, motion, type Variants } from 'motion/react'
 import {
   File, Folder, FolderOpen, FileText, Image, FileCode, ChevronRight,
-  RefreshCw, Pencil, Trash2,
+  RefreshCw, Pencil, Trash2, X,
 } from 'lucide-react'
 import {
   ContextMenu,
@@ -277,10 +277,12 @@ export interface WorkingDirectoryPanelProps {
    * preview from context for standalone use.
    */
   onOpenFile?: (path: string) => void
+  /** Close the panel. When provided, a close (✕) button is shown in the header. */
+  onClose?: () => void
   className?: string
 }
 
-export function WorkingDirectoryPanel({ workingDirectory, onOpenFile: onOpenFileProp, className }: WorkingDirectoryPanelProps) {
+export function WorkingDirectoryPanel({ workingDirectory, onOpenFile: onOpenFileProp, onClose, className }: WorkingDirectoryPanelProps) {
   const { t } = useTranslation()
   const { onOpenFile: ctxOpenFile } = useAppShellContext()
   const onOpenFile = onOpenFileProp ?? ctxOpenFile
@@ -453,6 +455,16 @@ export function WorkingDirectoryPanel({ workingDirectory, onOpenFile: onOpenFile
             >
               <FolderOpen className="h-3.5 w-3.5" />
             </button>
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="p-1 rounded-[5px] text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-colors"
+                title={t('common.close')}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         </div>
 

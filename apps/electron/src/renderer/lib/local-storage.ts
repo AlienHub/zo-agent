@@ -15,6 +15,7 @@ export const KEYS = {
   sidebarWidth: 'sidebar-width',
   sessionListWidth: 'session-list-width',
   filesPanelWidth: 'files-panel-width', // Width of the embedded working-dir files panel (px)
+  filesPanelOpen: 'files-panel-open', // Whether the working-dir files panel is open (keyed by sessionId)
   sidebarMode: 'sidebar-mode',
   listFilter: 'list-filter',
   labelFilter: 'label-filter',
