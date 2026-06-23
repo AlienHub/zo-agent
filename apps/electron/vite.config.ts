@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'path'
 
+const excalidrawDevAssetPath = `/@fs${resolve(__dirname, '../../node_modules/@excalidraw/excalidraw/dist/prod').replace(/\\/g, '/')}/`
+
 // NOTE: Source map upload to Sentry is intentionally disabled.
 // To re-enable, uncomment the sentryVitePlugin below and add SENTRY_AUTH_TOKEN,
 // SENTRY_ORG, SENTRY_PROJECT to CI secrets. See CLAUDE.md "Sentry Error Tracking" section.
@@ -10,6 +12,17 @@ import { resolve } from 'path'
 
 export default defineConfig({
   plugins: [
+    {
+      name: 'craft-excalidraw-playground-assets',
+      apply: 'serve',
+      transformIndexHtml(html) {
+        if (!html.includes('./playground.tsx')) return html
+        return html.replace(
+          '</head>',
+          `  <script>window.EXCALIDRAW_ASSET_PATH = ${JSON.stringify(excalidrawDevAssetPath)};</script>\n</head>`
+        )
+      },
+    },
     react({
       babel: {
         plugins: [
@@ -59,8 +72,12 @@ export default defineConfig({
     },
     dedupe: ['react', 'react-dom']
   },
+  define: {
+    'process.env.IS_PREACT': JSON.stringify('false'),
+    '__EXCALIDRAW_DEV_ASSET_PATH__': JSON.stringify(excalidrawDevAssetPath),
+  },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'jotai', 'pdfjs-dist'],
+    include: ['react', 'react-dom', 'jotai', 'pdfjs-dist', '@excalidraw/excalidraw'],
     exclude: ['@craft-agent/ui'],
     esbuildOptions: {
       supported: { 'top-level-await': true },

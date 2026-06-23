@@ -1,0 +1,166 @@
+.zo-canvas-lab {
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle, oklch(from var(--foreground) l c h / 0.1) 0.75px, transparent 1.25px) 0 0 / 16px 16px,
+    var(--foreground-3);
+  box-shadow: var(--shadow-minimal);
+}
+
+.zo-canvas-lab--elevated {
+  background:
+    radial-gradient(circle, oklch(from var(--foreground) l c h / 0.09) 0.75px, transparent 1.25px) 0 0 / 16px 16px,
+    var(--background);
+}
+
+.zo-canvas-lab--contrast {
+  background:
+    radial-gradient(circle, oklch(from var(--foreground) l c h / 0.12) 0.75px, transparent 1.25px) 0 0 / 16px 16px,
+    var(--foreground-5);
+}
+
+html:not(.dark) .zo-canvas-lab {
+  background:
+    radial-gradient(circle, oklch(from var(--foreground) l c h / 0.08) 0.75px, transparent 1.25px) 0 0 / 16px 16px,
+    var(--foreground-1\.5);
+}
+
+html:not(.dark) .zo-canvas-lab--elevated {
+  background:
+    radial-gradient(circle, oklch(from var(--foreground) l c h / 0.07) 0.75px, transparent 1.25px) 0 0 / 16px 16px,
+    var(--background);
+}
+
+html:not(.dark) .zo-canvas-lab--contrast {
+  background:
+    radial-gradient(circle, oklch(from var(--foreground) l c h / 0.09) 0.75px, transparent 1.25px) 0 0 / 16px 16px,
+    var(--foreground-3);
+}
+
+.zo-canvas-group {
+  fill: oklch(from var(--background) l c h / 0.52);
+  stroke: oklch(from var(--foreground) l c h / 0.12);
+  stroke-dasharray: 7 9;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.zo-canvas-caption {
+  fill: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.zo-canvas-node rect {
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 1px 1px oklch(from var(--foreground) l c h / 0.05));
+}
+
+.zo-canvas-node text {
+  fill: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 560;
+}
+
+.zo-canvas-node--neutral rect {
+  fill: color-mix(in oklch, var(--background) 82%, var(--foreground) 18%);
+  stroke: oklch(from var(--foreground) l c h / 0.18);
+}
+
+.zo-canvas-node--accent rect {
+  fill: color-mix(in oklch, var(--accent) 13%, var(--background));
+  stroke: color-mix(in oklch, var(--accent) 62%, var(--foreground));
+}
+
+.zo-canvas-node--success rect {
+  fill: color-mix(in oklch, var(--success) 14%, var(--background));
+  stroke: color-mix(in oklch, var(--success) 62%, var(--foreground));
+}
+
+.zo-canvas-node--warning rect {
+  fill: color-mix(in oklch, var(--info) 17%, var(--background));
+  stroke: color-mix(in oklch, var(--info) 66%, var(--foreground));
+}
+
+.zo-canvas-node--purple rect {
+  fill: color-mix(in oklch, var(--accent) 16%, var(--background));
+  stroke: color-mix(in oklch, var(--accent) 72%, var(--foreground));
+}
+
+.zo-canvas-port {
+  fill: var(--background);
+  stroke: oklch(from var(--foreground) l c h / 0.28);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.zo-canvas-edge-path {
+  fill: none;
+  stroke: oklch(from var(--foreground) l c h / 0.42);
+  stroke-width: 1.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.zo-canvas-edge-path--dashed {
+  stroke-dasharray: 5 6;
+}
+
+.zo-canvas-edge-label {
+  fill: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.zo-canvas-edge--accent .zo-canvas-edge-path,
+.zo-canvas-arrowhead-accent {
+  stroke: color-mix(in oklch, var(--accent) 72%, var(--foreground));
+  fill: color-mix(in oklch, var(--accent) 72%, var(--foreground));
+}
+
+.zo-canvas-edge--success .zo-canvas-edge-path {
+  stroke: color-mix(in oklch, var(--success) 70%, var(--foreground));
+}
+
+.zo-canvas-edge--warning .zo-canvas-edge-path {
+  stroke: color-mix(in oklch, var(--info) 72%, var(--foreground));
+}
+
+.zo-canvas-edge--purple .zo-canvas-edge-path {
+  stroke: color-mix(in oklch, var(--accent) 68%, var(--foreground));
+}
+
+.zo-canvas-edge--success .zo-canvas-edge-label,
+.zo-canvas-edge--warning .zo-canvas-edge-label,
+.zo-canvas-edge--purple .zo-canvas-edge-label,
+.zo-canvas-edge--accent .zo-canvas-edge-label {
+  fill: currentColor;
+}
+
+.zo-canvas-edge--accent {
+  color: color-mix(in oklch, var(--accent) 72%, var(--foreground));
+}
+
+.zo-canvas-edge--success {
+  color: color-mix(in oklch, var(--success) 72%, var(--foreground));
+}
+
+.zo-canvas-edge--warning {
+  color: color-mix(in oklch, var(--info) 72%, var(--foreground));
+}
+
+.zo-canvas-edge--purple {
+  color: color-mix(in oklch, var(--accent) 68%, var(--foreground));
+}
+
+.zo-canvas-arrowhead {
+  fill: oklch(from var(--foreground) l c h / 0.42);
+  stroke: none;
+}

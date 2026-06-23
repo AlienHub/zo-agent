@@ -14,6 +14,7 @@ import { MarkdownDatatableBlock } from './MarkdownDatatableBlock'
 import { MarkdownSpreadsheetBlock } from './MarkdownSpreadsheetBlock'
 import { MarkdownHtmlBlock } from './MarkdownHtmlBlock'
 import { MarkdownImageBlock } from './MarkdownImageBlock'
+import { MarkdownExcalidrawBlock } from './MarkdownExcalidrawBlock'
 import { MarkdownLatexBlock } from './MarkdownLatexBlock'
 import { MarkdownPdfBlock } from './MarkdownPdfBlock'
 import { MarkdownDocBlock } from './MarkdownDocBlock'
@@ -37,6 +38,7 @@ export type DisablablePreviewBlock =
   | 'html-preview'
   | 'pdf-preview'
   | 'image-preview'
+  | 'excalidraw'
 
 /**
  * Render modes for markdown content:
@@ -305,6 +307,10 @@ function createComponents(
           if (match?.[1] === 'image-preview' && isPreviewEnabled('image-preview')) {
             return wrapBlock('image-preview', code, <MarkdownImageBlock code={code} className="my-2" />, props.node?.position)
           }
+          // Excalidraw blocks → inline canvas artifact
+          if (match?.[1] === 'excalidraw' && isPreviewEnabled('excalidraw')) {
+            return wrapBlock('excalidraw', code, <MarkdownExcalidrawBlock code={code} className="my-2" />, props.node?.position)
+          }
           // Markdown preview blocks → inline rendered .md file
           if (match?.[1] === 'markdown-preview' && isPreviewEnabled('markdown-preview')) {
             return wrapBlock(
@@ -442,6 +448,10 @@ function createComponents(
         // Image preview blocks → inline image with expand to full viewer
         if (match?.[1] === 'image-preview' && isPreviewEnabled('image-preview')) {
           return wrapBlock('image-preview', code, <MarkdownImageBlock code={code} className="my-2" />, props.node?.position)
+        }
+        // Excalidraw blocks → inline canvas artifact
+        if (match?.[1] === 'excalidraw' && isPreviewEnabled('excalidraw')) {
+          return wrapBlock('excalidraw', code, <MarkdownExcalidrawBlock code={code} className="my-2" />, props.node?.position)
         }
         // Markdown preview blocks → inline rendered .md file
         if (match?.[1] === 'markdown-preview' && isPreviewEnabled('markdown-preview')) {

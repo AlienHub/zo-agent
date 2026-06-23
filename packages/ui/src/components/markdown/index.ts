@@ -10,6 +10,7 @@ export { CollapsibleMarkdownProvider, useCollapsibleMarkdown } from './Collapsib
 export { MarkdownDatatableBlock, type MarkdownDatatableBlockProps } from './MarkdownDatatableBlock'
 export { MarkdownSpreadsheetBlock, type MarkdownSpreadsheetBlockProps } from './MarkdownSpreadsheetBlock'
 export { MarkdownImageBlock, type MarkdownImageBlockProps } from './MarkdownImageBlock'
+export { MarkdownExcalidrawBlock, type MarkdownExcalidrawBlockProps } from './MarkdownExcalidrawBlock'
 export { MarkdownDocBlock, type MarkdownDocBlockProps } from './MarkdownDocBlock'
 export {
   parseMarkdownPreviewSpec,

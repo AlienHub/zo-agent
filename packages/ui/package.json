@@ -21,6 +21,7 @@
   "dependencies": {
     "@craft-agent/core": "workspace:*",
     "@craft-agent/shared": "workspace:*",
+    "@excalidraw/excalidraw": "0.18.1",
     "@paper-design/shaders-react": "^0.0.69",
     "beautiful-mermaid": "*",
     "@types/mdast": "^4.0.0",
