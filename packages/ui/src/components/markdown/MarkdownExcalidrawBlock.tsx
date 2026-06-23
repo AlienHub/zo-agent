@@ -21,14 +21,18 @@
  */
 
 import * as React from 'react'
-import { Maximize2 } from 'lucide-react'
-import { Excalidraw } from '@excalidraw/excalidraw'
-import '@excalidraw/excalidraw/index.css'
-import './MarkdownExcalidrawBlock.css'
+import { Maximize2, PencilLine, Eye } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { CodeBlock } from './CodeBlock'
 import { FullscreenOverlayBase } from '../overlay/FullscreenOverlayBase'
-import type { AppState, BinaryFiles, UIOptions } from '@excalidraw/excalidraw/types'
+import {
+  EditableExcalidrawCanvas,
+  ExcalidrawCanvas,
+  hashExcalidrawSceneKey,
+  useDocumentDarkMode,
+  type CanvasScene,
+} from '../excalidraw'
+import type { AppState, BinaryFiles } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 
 interface ExcalidrawSceneData {
@@ -55,16 +59,6 @@ export interface MarkdownExcalidrawBlockProps {
   className?: string
 }
 
-interface ExcalidrawCanvasSurfaceProps {
-  scene: ExcalidrawSceneData
-  appState: Partial<AppState>
-  canvasTheme: 'light' | 'dark'
-  readonly: boolean
-  isDarkMode: boolean
-  className?: string
-  style?: React.CSSProperties
-}
-
 class ExcalidrawBlockErrorBoundary extends React.Component<
   { children: React.ReactNode; fallback: React.ReactNode },
   { hasError: boolean }
@@ -78,21 +72,6 @@ class ExcalidrawBlockErrorBoundary extends React.Component<
     if (this.state.hasError) return this.props.fallback
     return this.props.children
   }
-}
-
-const excalidrawCanvasUiOptions: Partial<UIOptions> = {
-  canvasActions: {
-    changeViewBackgroundColor: false,
-    clearCanvas: false,
-    export: false,
-    loadScene: false,
-    saveAsImage: false,
-    saveToActiveFile: false,
-    toggleTheme: false,
-  },
-  tools: {
-    image: false,
-  },
 }
 
 function parseSpec(code: string): ExcalidrawPreviewSpec | null {
@@ -110,89 +89,16 @@ function clampHeight(value: unknown, fallback: number) {
   return Math.min(Math.max(typeof value === 'number' ? value : fallback, 220), 720)
 }
 
-function hashString(value: string) {
-  let hash = 0
-  for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0
-  }
-  return hash.toString(36)
-}
-
-function useDocumentDarkMode() {
-  const [isDarkMode, setIsDarkMode] = React.useState(() => (
-    typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-  ))
-
-  React.useEffect(() => {
-    if (typeof document === 'undefined') return
-
-    const update = () => {
-      setIsDarkMode(document.documentElement.classList.contains('dark'))
-    }
-
-    update()
-    const observer = new MutationObserver(update)
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
-    return () => observer.disconnect()
-  }, [])
-
-  return isDarkMode
-}
-
-function ExcalidrawCanvasSurface({
-  scene,
-  appState,
-  canvasTheme,
-  readonly,
-  isDarkMode,
-  className,
-  style,
-}: ExcalidrawCanvasSurfaceProps) {
-  const handleContextMenu = React.useCallback((event: React.MouseEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-  }, [])
-  const handleMouseDownCapture = React.useCallback((event: React.MouseEvent) => {
-    if (event.button !== 2) return
-    event.preventDefault()
-    event.stopPropagation()
-  }, [])
-
-  return (
-    <div
-      data-ca-excalidraw-surface
-      onContextMenu={handleContextMenu}
-      onContextMenuCapture={handleContextMenu}
-      onMouseDownCapture={handleMouseDownCapture}
-      className={cn(
-        'ca-excalidraw-block',
-        isDarkMode ? 'ca-excalidraw-block--dark' : 'ca-excalidraw-block--light',
-        className,
-      )}
-      style={style}
-    >
-      <Excalidraw
-        initialData={{
-          elements: scene.elements ?? [],
-          appState,
-          files: scene.files ?? {},
-          scrollToContent: true,
-        }}
-        theme={canvasTheme}
-        viewModeEnabled={readonly}
-        zenModeEnabled
-        gridModeEnabled={false}
-        autoFocus={false}
-        UIOptions={excalidrawCanvasUiOptions}
-      />
-    </div>
-  )
-}
-
 export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawBlockProps) {
   const spec = React.useMemo(() => parseSpec(code), [code])
   const [isFullscreenOpen, setIsFullscreenOpen] = React.useState(false)
+  const [fullscreenMode, setFullscreenMode] = React.useState<'view' | 'edit'>('view')
   const isDarkMode = useDocumentDarkMode()
+
+  // Fullscreen opens read-only every time; the user clicks Edit to edit.
+  React.useEffect(() => {
+    if (!isFullscreenOpen) setFullscreenMode('view')
+  }, [isFullscreenOpen])
 
   const fallback = <CodeBlock code={code} language="json" mode="full" className={className} />
 
@@ -203,7 +109,7 @@ export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawB
   const readonly = spec.readonly ?? true
   const baseHeight = clampHeight(spec.height, 320)
   const canvasTheme = isDarkMode ? 'dark' : 'light'
-  const sceneKey = React.useMemo(() => `${canvasTheme}:${hashString(code)}`, [canvasTheme, code])
+  const sceneKey = React.useMemo(() => `markdown:${hashExcalidrawSceneKey(code)}`, [code])
   const sceneBackground = scene.appState?.viewBackgroundColor
   const appState = React.useMemo<Partial<AppState>>(() => ({
     ...scene.appState,
@@ -213,6 +119,15 @@ export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawB
       ? sceneBackground
       : 'transparent',
   }), [canvasTheme, isDarkMode, scene.appState, sceneBackground])
+
+  const fullscreenScene: CanvasScene = {
+    type: 'excalidraw',
+    version: spec.scene?.version ?? 2,
+    source: spec.scene?.source ?? 'agent',
+    elements: scene.elements ?? [],
+    appState,
+    files: scene.files ?? {},
+  }
 
   return (
     <ExcalidrawBlockErrorBoundary fallback={fallback}>
@@ -232,13 +147,12 @@ export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawB
           <Maximize2 className="w-3.5 h-3.5" />
         </button>
 
-        <ExcalidrawCanvasSurface
-          key={`inline:${sceneKey}`}
+        {/* Inline canvas is always read-only; editing happens only in fullscreen. */}
+        <ExcalidrawCanvas
           scene={scene}
           appState={appState}
-          canvasTheme={canvasTheme}
-          readonly={readonly}
-          isDarkMode={isDarkMode}
+          sceneKey={`inline:${sceneKey}`}
+          viewModeEnabled
           style={{ height: baseHeight }}
         />
       </div>
@@ -249,14 +163,28 @@ export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawB
         accessibleTitle={`${title} fullscreen preview`}
         title={title}
       >
-        <div className="mx-auto h-[calc(100vh-96px)] w-[calc(100vw-48px)] overflow-hidden rounded-[8px] border border-border/50 bg-background shadow-minimal">
-          <ExcalidrawCanvasSurface
-            key={`fullscreen:${sceneKey}`}
-            scene={scene}
-            appState={appState}
-            canvasTheme={canvasTheme}
-            readonly={readonly}
-            isDarkMode={isDarkMode}
+        <div className="relative mx-auto h-[calc(100vh-96px)] w-[calc(100vw-48px)] overflow-hidden rounded-[8px] border border-border/50 bg-background shadow-minimal">
+          {/* Editing is only offered in fullscreen, and only when the block allows it. */}
+          {!readonly && (
+            <button
+              onClick={() => setFullscreenMode(current => (current === 'edit' ? 'view' : 'edit'))}
+              className={cn(
+                "absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-xs font-medium transition-all select-none",
+                "bg-background/80 shadow-minimal backdrop-blur-sm",
+                fullscreenMode === 'edit' ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+                "focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              )}
+              title={fullscreenMode === 'edit' ? 'Switch to read-only' : 'Edit canvas'}
+              aria-label={fullscreenMode === 'edit' ? 'Switch canvas to read-only' : 'Edit canvas'}
+            >
+              {fullscreenMode === 'edit' ? <Eye className="w-3.5 h-3.5" /> : <PencilLine className="w-3.5 h-3.5" />}
+              {fullscreenMode === 'edit' ? 'Done' : 'Edit'}
+            </button>
+          )}
+          <EditableExcalidrawCanvas
+            scene={fullscreenScene}
+            sceneKey={`fullscreen:${sceneKey}`}
+            mode={readonly ? 'view' : fullscreenMode}
             className="h-full w-full"
           />
         </div>

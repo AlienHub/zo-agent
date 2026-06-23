@@ -27,7 +27,6 @@ import { imageSupportComponents } from './image-support'
 import { mobileWebUIComponents } from './mobile-webui'
 import { filesPanelLayoutComponents } from './files-panel-layout'
 import { excalidrawComponents } from './excalidraw'
-import { canvasComponents } from './canvas'
 
 export * from './types'
 
@@ -43,7 +42,6 @@ export const componentRegistry: ComponentEntry[] = [
   ...inputComponents,
   ...toastsComponents,
   ...slashCommandComponents,
-  ...canvasComponents,
   ...excalidrawComponents,
   ...markdownComponents,
   ...iconComponents,
@@ -64,7 +62,7 @@ export const componentRegistry: ComponentEntry[] = [
 ]
 
 export function getCategories(): CategoryGroup[] {
-  const categoryOrder: Category[] = ['Files Panel', 'Mobile WebUI', 'Automations', 'Onboarding', 'Agent Setup', 'Chat', 'Island', 'Artifact Host', 'Browser', 'Planner', 'Custom Shadows', 'Session List', 'Entity Lists', 'Edit Popover', 'Turn Cards', 'TurnCard Modes', 'Canvas', 'Fullscreen', 'Chat Messages', 'Chat Inputs', 'Toast Messages', 'Markdown', 'Icons', 'OAuth', 'Messaging']
+  const categoryOrder: Category[] = ['Files Panel', 'Mobile WebUI', 'Automations', 'Onboarding', 'Agent Setup', 'Chat', 'Island', 'Artifact Host', 'Browser', 'Planner', 'Custom Shadows', 'Session List', 'Entity Lists', 'Edit Popover', 'Turn Cards', 'TurnCard Modes', 'Fullscreen', 'Chat Messages', 'Chat Inputs', 'Toast Messages', 'Markdown', 'Icons', 'OAuth', 'Messaging']
   const categoryMap = new Map<Category, ComponentEntry[]>()
 
   for (const entry of componentRegistry) {

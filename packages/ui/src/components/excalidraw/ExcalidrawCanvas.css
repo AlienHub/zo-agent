@@ -1,0 +1,42 @@
+.ca-excalidraw-canvas {
+  position: relative;
+  background-color: var(--foreground-1\.5);
+  background-image: radial-gradient(
+    circle,
+    oklch(from var(--foreground) l c h / 0.09) 0.75px,
+    transparent 1.25px
+  );
+  background-position: 0 0;
+  background-size: 16px 16px;
+}
+
+.ca-excalidraw-canvas--dark {
+  background-color: var(--foreground-3);
+  background-image: radial-gradient(
+    circle,
+    oklch(from var(--foreground) l c h / 0.13) 0.75px,
+    transparent 1.25px
+  );
+}
+
+.ca-excalidraw-canvas .excalidraw,
+.ca-excalidraw-canvas .excalidraw__canvas,
+.ca-excalidraw-canvas canvas {
+  background: transparent !important;
+}
+
+.ca-excalidraw-canvas .main-menu-trigger,
+.ca-excalidraw-canvas .App-toolbar,
+.ca-excalidraw-canvas .zoom-actions,
+.ca-excalidraw-canvas .default-sidebar-trigger,
+.ca-excalidraw-canvas .sidebar-trigger,
+.ca-excalidraw-canvas .sidebar-trigger__label-element,
+.ca-excalidraw-canvas .mobile-misc-tools-container,
+.ca-excalidraw-canvas .context-menu,
+.ca-excalidraw-canvas .context-menu-content,
+.ca-excalidraw-canvas .Island.App-menu,
+.ca-excalidraw-canvas .selected-shape-actions,
+.ca-excalidraw-canvas .FixedSideContainer_side_top > .Stack.Stack_horizontal,
+.ca-excalidraw-canvas .App-menu_bottom {
+  display: none !important;
+}

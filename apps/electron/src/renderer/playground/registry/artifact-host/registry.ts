@@ -1,6 +1,7 @@
 import { Eye, FileText, Layers3, PencilLine } from 'lucide-react'
-import { CanvasArtifactStub } from './artifacts/CanvasArtifactStub'
+import { ExcalidrawArtifact } from './artifacts/ExcalidrawArtifact'
 import { MarkdownArtifact } from './artifacts/MarkdownArtifact'
+import { canvasSeedScenes } from './seedScenes'
 import type { ArtifactKind, ArtifactType } from './types'
 
 const initialMarkdown = `# Product Direction Brief
@@ -42,11 +43,16 @@ export const ARTIFACT_REGISTRY: Record<ArtifactKind, ArtifactType> = {
     title: 'Decision Canvas',
     icon: Layers3,
     caps: {
-      editable: false,
-      annotatable: false,
+      editable: true,
+      annotatable: true,
     },
-    initialContent: '',
-    Renderer: CanvasArtifactStub,
+    initialContent: canvasSeedScenes['product-map'],
+    defaultViewMode: 'read',
+    viewModes: [
+      { value: 'read', label: 'Read', icon: Eye },
+      { value: 'edit', label: 'Edit', icon: PencilLine },
+    ],
+    Renderer: ExcalidrawArtifact,
   },
 }
 

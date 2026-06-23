@@ -1,6 +1,31 @@
 import type { ComponentEntry } from '../types'
-import { AgentCanvasSurface } from './AgentCanvasSurface'
 import { ArtifactHost } from './ArtifactHost'
+import { canvasSeedScenes } from './seedScenes'
+import type { ArtifactKind, MarkdownMode } from './types'
+
+interface ArtifactHostPlaygroundProps {
+  artifactKind: ArtifactKind
+  markdownMode: MarkdownMode
+  showComments: boolean
+  initialContent?: string
+}
+
+function ArtifactHostPlayground({
+  artifactKind,
+  markdownMode,
+  showComments,
+  initialContent,
+}: ArtifactHostPlaygroundProps) {
+  return (
+    <ArtifactHost
+      key={`${artifactKind}:${initialContent ?? ''}`}
+      artifactKind={artifactKind}
+      markdownMode={markdownMode}
+      showComments={showComments}
+      initialContent={initialContent}
+    />
+  )
+}
 
 export const artifactHostComponents: ComponentEntry[] = [
   {
@@ -8,7 +33,7 @@ export const artifactHostComponents: ComponentEntry[] = [
     name: 'Panel Artifact Surface',
     category: 'Artifact Host',
     description: 'Registry-mounted artifact host with Markdown renderer, shared Island annotations, and Canvas as a registered surface.',
-    component: ArtifactHost,
+    component: ArtifactHostPlayground,
     layout: 'full',
     previewOverflow: 'hidden',
     props: [
@@ -42,6 +67,12 @@ export const artifactHostComponents: ComponentEntry[] = [
         control: { type: 'boolean' },
         defaultValue: true,
       },
+      {
+        name: 'initialContent',
+        description: 'Canvas scene JSON seed used by playground variants.',
+        control: { type: 'textarea', rows: 6 },
+        defaultValue: canvasSeedScenes['product-map'],
+      },
     ],
     variants: [
       {
@@ -63,12 +94,33 @@ export const artifactHostComponents: ComponentEntry[] = [
         },
       },
       {
-        name: 'Canvas registry',
-        description: 'Canvas kind registered in the generic host; Excalidraw panel lives in Agent Canvas Artifact.',
+        name: 'Canvas product map',
+        description: 'Editable Excalidraw canvas mounted through the artifact registry.',
         props: {
           artifactKind: 'canvas',
           markdownMode: 'edit',
           showComments: true,
+          initialContent: canvasSeedScenes['product-map'],
+        },
+      },
+      {
+        name: 'Canvas workflow',
+        description: 'Workflow seed mounted as the same registered canvas artifact.',
+        props: {
+          artifactKind: 'canvas',
+          markdownMode: 'edit',
+          showComments: true,
+          initialContent: canvasSeedScenes.workflow,
+        },
+      },
+      {
+        name: 'Canvas review',
+        description: 'Review seed mounted as the same registered canvas artifact.',
+        props: {
+          artifactKind: 'canvas',
+          markdownMode: 'edit',
+          showComments: true,
+          initialContent: canvasSeedScenes.review,
         },
       },
       {
@@ -79,47 +131,6 @@ export const artifactHostComponents: ComponentEntry[] = [
           markdownMode: 'edit',
           showComments: false,
         },
-      },
-    ],
-  },
-  {
-    id: 'agent-canvas-surface',
-    name: 'Agent Canvas Artifact',
-    category: 'Artifact Host',
-    description: 'Excalidraw canvas artifact where the agent builds editable board content directly on the canvas.',
-    component: AgentCanvasSurface,
-    layout: 'full',
-    previewOverflow: 'hidden',
-    props: [
-      {
-        name: 'agentScenario',
-        description: 'Agent-authored canvas structure mounted in the panel.',
-        control: {
-          type: 'select',
-          options: [
-            { label: 'Product map', value: 'product-map' },
-            { label: 'Workflow', value: 'workflow' },
-            { label: 'Review', value: 'review' },
-          ],
-        },
-        defaultValue: 'product-map',
-      },
-    ],
-    variants: [
-      {
-        name: 'Product map',
-        description: 'Agent builds a product decision map as editable Excalidraw elements.',
-        props: { agentScenario: 'product-map' },
-      },
-      {
-        name: 'Workflow',
-        description: 'Agent builds a collaboration workflow directly on the canvas.',
-        props: { agentScenario: 'workflow' },
-      },
-      {
-        name: 'Review',
-        description: 'Agent adds review notes near the current canvas selection.',
-        props: { agentScenario: 'review' },
       },
     ],
   },

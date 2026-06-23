@@ -13,6 +13,8 @@
     "./chat/TurnCard": "./src/components/chat/TurnCard.tsx",
     "./chat/turn-utils": "./src/components/chat/turn-utils.ts",
     "./markdown": "./src/components/markdown/index.ts",
+    "./excalidraw": "./src/components/excalidraw/index.ts",
+    "./excalidraw/canvasScene": "./src/components/excalidraw/canvasScene.ts",
     "./annotations/follow-up-state": "./src/components/annotations/follow-up-state.ts",
     "./ui/drawer": "./src/components/ui/drawer.tsx",
     "./context": "./src/context/index.ts",

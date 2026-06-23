@@ -91,6 +91,20 @@ export {
   type ImageCardStackItem,
 } from './components/markdown'
 
+// Excalidraw
+export {
+  ExcalidrawCanvas,
+  EditableExcalidrawCanvas,
+  canvasUiOptions,
+  hashExcalidrawSceneKey,
+  useDocumentDarkMode,
+  type ExcalidrawCanvasProps,
+  type ExcalidrawSceneData,
+  type EditableExcalidrawCanvasProps,
+  type CanvasAnnotationSurface,
+  type CanvasScene,
+} from './components/excalidraw'
+
 // UI primitives
 export {
   Spinner,

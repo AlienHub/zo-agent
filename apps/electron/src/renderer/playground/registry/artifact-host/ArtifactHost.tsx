@@ -19,14 +19,25 @@ interface ArtifactHostProps {
   artifactKind: ArtifactKind
   markdownMode: MarkdownMode
   showComments: boolean
+  /**
+   * Optional kind-agnostic seed override for the initially-active artifact.
+   * Lets a caller mount the host with a specific document/scene without
+   * mutating the shared registry. Applied only at mount (remount via `key`
+   * to reseed).
+   */
+  initialContent?: string
 }
 
 const EMPTY_ANNOTATIONS: AnnotationV1[] = []
 
-function createInitialContentState(): Record<string, string> {
-  return Object.fromEntries(
+function createInitialContentState(seedKind?: ArtifactKind, seedContent?: string): Record<string, string> {
+  const state = Object.fromEntries(
     Object.values(ARTIFACT_REGISTRY).map(artifact => [artifact.kind, artifact.initialContent])
   )
+  if (seedKind && seedContent != null) {
+    state[seedKind] = seedContent
+  }
+  return state
 }
 
 function createInitialViewModeState(): Record<string, string> {
@@ -48,10 +59,11 @@ function resolveViewMode(artifact: (typeof ARTIFACT_REGISTRY)[ArtifactKind], pre
     : artifact.defaultViewMode ?? artifact.viewModes[0]?.value
 }
 
-export function ArtifactHost({ artifactKind, markdownMode, showComments }: ArtifactHostProps) {
+export function ArtifactHost({ artifactKind, markdownMode, showComments, initialContent }: ArtifactHostProps) {
+  const seededContentState = () => createInitialContentState(resolveRegisteredKind(artifactKind), initialContent)
   const [activeKind, setActiveKind] = React.useState<ArtifactKind>(() => resolveRegisteredKind(artifactKind))
-  const [contentByKind, setContentByKind] = React.useState(createInitialContentState)
-  const [savedContentByKind, setSavedContentByKind] = React.useState(createInitialContentState)
+  const [contentByKind, setContentByKind] = React.useState(seededContentState)
+  const [savedContentByKind, setSavedContentByKind] = React.useState(seededContentState)
   const [viewModeByKind, setViewModeByKind] = React.useState(createInitialViewModeState)
   const [annotationsByKind, setAnnotationsByKind] = React.useState<Record<string, AnnotationV1[]>>({})
   const [lastFollowUpAtByKind, setLastFollowUpAtByKind] = React.useState<Record<string, number>>({})

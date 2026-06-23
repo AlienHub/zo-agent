@@ -1,6 +1,6 @@
 import * as React from 'react'
 import './excalidraw-assets'
-import { FONT_FAMILY, ROUNDNESS, convertToExcalidrawElements } from '@excalidraw/excalidraw'
+import { FONT_FAMILY, convertToExcalidrawElements } from '@excalidraw/excalidraw'
 import type { AppState, BinaryFiles } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import {
@@ -10,6 +10,12 @@ import {
   type ResponseContent,
 } from '@craft-agent/ui'
 import { useTheme } from '../../context/ThemeContext'
+import {
+  LIGHT_PALETTE,
+  arrow as sceneArrow,
+  node as sceneNode,
+  text as sceneText,
+} from '@craft-agent/ui/excalidraw/canvasScene'
 import type { ComponentEntry } from './types'
 
 interface ExcalidrawSceneData {
@@ -21,104 +27,8 @@ interface ExcalidrawSceneData {
   files?: BinaryFiles
 }
 
-function getCanvasPalette(isDarkMode: boolean) {
-  if (isDarkMode) {
-    return {
-      text: '#ececf0',
-      muted: '#8e95a3',
-      line: '#8a92a2',
-      node: '#252a35',
-      nodeStroke: '#596273',
-      accentFill: '#22304a',
-      accentStroke: '#6ea4e8',
-      successFill: '#173625',
-      successStroke: '#55b77e',
-      purpleFill: '#302646',
-      purpleStroke: '#a18cec',
-    }
-  }
-
-  return {
-    text: '#242733',
-    muted: '#727987',
-    line: '#7d8492',
-    node: '#ffffff',
-    nodeStroke: '#d7dbe4',
-    accentFill: '#edf5ff',
-    accentStroke: '#4d8bcc',
-    successFill: '#eaf7ef',
-    successStroke: '#42a66b',
-    purpleFill: '#f3efff',
-    purpleStroke: '#8a73d6',
-  }
-}
-
-function productNode(id: string, x: number, y: number, width: number, height: number, text: string, fill: string, stroke: string, textColor: string) {
-  return {
-    type: 'rectangle' as const,
-    id,
-    x,
-    y,
-    width,
-    height,
-    backgroundColor: fill,
-    strokeColor: stroke,
-    fillStyle: 'solid' as const,
-    strokeStyle: 'solid' as const,
-    strokeWidth: 1,
-    roughness: 0,
-    roundness: { type: ROUNDNESS.ADAPTIVE_RADIUS },
-    label: {
-      text,
-      fontSize: 17,
-      fontFamily: FONT_FAMILY.Helvetica,
-      strokeColor: textColor,
-    },
-  }
-}
-
-function productArrow(id: string, x: number, y: number, width: number, height: number, label: string, color: string, dashed = false) {
-  return {
-    type: 'arrow' as const,
-    id,
-    x,
-    y,
-    width,
-    height,
-    strokeColor: color,
-    strokeWidth: 1,
-    strokeStyle: dashed ? 'dashed' as const : 'solid' as const,
-    roughness: 0,
-    roundness: null,
-    endArrowhead: 'triangle' as const,
-    label: label
-      ? {
-        text: label,
-        fontSize: 12,
-        fontFamily: FONT_FAMILY.Helvetica,
-        strokeColor: color,
-      }
-      : undefined,
-  }
-}
-
-function productText(id: string, x: number, y: number, text: string, color: string) {
-  return {
-    type: 'text' as const,
-    id,
-    x,
-    y,
-    text,
-    fontSize: 13,
-    fontFamily: FONT_FAMILY.Helvetica,
-    strokeColor: color,
-    backgroundColor: 'transparent',
-    roughness: 0,
-  }
-}
-
 function createCanvasPreviewScene(isDarkMode: boolean): ExcalidrawSceneData {
-  const palette = getCanvasPalette(isDarkMode)
+  const palette = LIGHT_PALETTE
 
   return {
     type: 'excalidraw',
@@ -126,17 +36,17 @@ function createCanvasPreviewScene(isDarkMode: boolean): ExcalidrawSceneData {
     source: 'craft-agent-playground',
     elements: convertToExcalidrawElements(
       [
-        productText('group-title', 24, 34, 'Agent work loop', palette.muted),
-        productNode('request', 48, 96, 138, 58, 'Request', palette.node, palette.nodeStroke, palette.text),
-        productNode('plan', 270, 96, 138, 58, 'Plan', palette.purpleFill, palette.purpleStroke, palette.text),
-        productNode('tool', 492, 96, 154, 58, 'Tool call', palette.accentFill, palette.accentStroke, palette.text),
-        productNode('result', 270, 198, 138, 58, 'Result', palette.successFill, palette.successStroke, palette.text),
-        productNode('review', 492, 198, 154, 58, 'Review', palette.node, palette.nodeStroke, palette.text),
-        productArrow('edge-request-plan', 186, 125, 84, 0, 'analyze', palette.line),
-        productArrow('edge-plan-tool', 408, 125, 84, 0, 'invoke', palette.accentStroke),
-        productArrow('edge-tool-result', 569, 154, -161, 44, 'return', palette.successStroke),
-        productArrow('edge-result-review', 408, 227, 84, 0, 'inspect', palette.line),
-        productArrow('edge-review-plan', 492, 198, -84, -44, 'refine', palette.purpleStroke, true),
+        sceneText('group-title', 24, 34, 'Agent work loop', palette.muted),
+        sceneNode('request', 48, 96, 138, 58, 'Request', palette.surface, palette.stroke, palette.text),
+        sceneNode('plan', 270, 96, 138, 58, 'Plan', palette.purpleFill, palette.purpleStroke, palette.text),
+        sceneNode('tool', 492, 96, 154, 58, 'Tool call', palette.blueFill, palette.blueStroke, palette.text),
+        sceneNode('result', 270, 198, 138, 58, 'Result', palette.greenFill, palette.greenStroke, palette.text),
+        sceneNode('review', 492, 198, 154, 58, 'Review', palette.surface, palette.stroke, palette.text),
+        sceneArrow('edge-request-plan', 186, 125, 84, 0, 'analyze', palette.line),
+        sceneArrow('edge-plan-tool', 408, 125, 84, 0, 'invoke', palette.blueStroke),
+        sceneArrow('edge-tool-result', 569, 154, -161, 44, 'return', palette.greenStroke),
+        sceneArrow('edge-result-review', 408, 227, 84, 0, 'inspect', palette.line),
+        sceneArrow('edge-review-plan', 492, 198, -84, -44, 'refine', palette.purpleStroke, true),
       ],
       { regenerateIds: false },
     ) as ExcalidrawElement[],

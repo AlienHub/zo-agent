@@ -188,6 +188,10 @@ export type AnnotationSelector =
       rotation?: number;
     }
   | {
+      type: 'canvas-element';
+      elementId: string;
+    }
+  | {
       type: 'table-cell';
       rowKey: string | number;
       columnKey: string;
