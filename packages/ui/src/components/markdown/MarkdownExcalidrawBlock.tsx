@@ -1,36 +1,40 @@
 /**
- * MarkdownExcalidrawBlock - Renders ```excalidraw code blocks as inline canvas previews.
+ * MarkdownExcalidrawBlock - Renders ```excalidraw code blocks by loading a
+ * referenced .excalidraw FILE (not inline JSON).
  *
- * Expected JSON shape:
+ * Expected block body (JSON):
  * {
- *   "title": "Workflow canvas",
- *   "readonly": true,
- *   "height": 320,
- *   "scene": {
- *     "type": "excalidraw",
- *     "version": 2,
- *     "source": "agent",
- *     "elements": [],
- *     "appState": {},
- *     "files": {}
- *   }
+ *   "src": "/absolute/path/to/diagram.excalidraw",
+ *   "title": "Architecture",   // optional
+ *   "height": 320,             // optional
+ *   "readonly": true           // optional (default true)
  * }
  *
- * For convenience, a raw Excalidraw scene object with top-level `elements` is
- * accepted as well.
+ * Inline canvas JSON (a body carrying `elements`/`scene` instead of `src`) is
+ * intentionally rejected with a dedicated failure card — the canvas must be a
+ * persisted .excalidraw file so it has a stable identity for editing, locking,
+ * and comments.
+ *
+ * The .excalidraw file content is a standard Excalidraw scene
+ * ({ type, version, source, elements, appState, files }). It is loaded via
+ * `usePlatform().onReadFile` and rendered through the shared canvas components
+ * (read-only inline; fullscreen Edit toggle + Island comments).
  */
 
 import * as React from 'react'
 import { Maximize2, PencilLine, Eye } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { CodeBlock } from './CodeBlock'
+import { usePlatform } from '../../context/PlatformContext'
 import { FullscreenOverlayBase } from '../overlay/FullscreenOverlayBase'
 import {
   EditableExcalidrawCanvas,
+  ExcalidrawBlockFailure,
   ExcalidrawCanvas,
   hashExcalidrawSceneKey,
   useDocumentDarkMode,
   type CanvasScene,
+  type ExcalidrawFailureReason,
 } from '../excalidraw'
 import type { AppState, BinaryFiles } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
@@ -44,15 +48,22 @@ interface ExcalidrawSceneData {
   files?: BinaryFiles
 }
 
-interface ExcalidrawPreviewSpec {
+interface ExcalidrawFileSpec {
+  src: string
   title?: string
-  readonly?: boolean
   height?: number
-  scene?: ExcalidrawSceneData
-  elements?: readonly ExcalidrawElement[]
-  appState?: Partial<AppState>
-  files?: BinaryFiles
+  readonly?: boolean
 }
+
+type SpecResult =
+  | { kind: 'file'; spec: ExcalidrawFileSpec }
+  | { kind: 'inline' }
+  | { kind: 'not-json' }
+
+type SceneResult =
+  | { kind: 'scene'; scene: ExcalidrawSceneData }
+  | { kind: 'parse-error' }
+  | { kind: 'invalid-scene' }
 
 export interface MarkdownExcalidrawBlockProps {
   code: string
@@ -66,7 +77,7 @@ class ExcalidrawBlockErrorBoundary extends React.Component<
   state = { hasError: false }
   static getDerivedStateFromError() { return { hasError: true } }
   componentDidCatch(error: Error) {
-    console.warn('[MarkdownExcalidrawBlock] Render failed, falling back to CodeBlock:', error)
+    console.warn('[MarkdownExcalidrawBlock] Render failed:', error)
   }
   render() {
     if (this.state.hasError) return this.props.fallback
@@ -74,15 +85,30 @@ class ExcalidrawBlockErrorBoundary extends React.Component<
   }
 }
 
-function parseSpec(code: string): ExcalidrawPreviewSpec | null {
+function parseSpec(code: string): SpecResult {
+  let raw: unknown
   try {
-    const raw = JSON.parse(code) as ExcalidrawPreviewSpec
-    const scene = raw.scene ?? raw
-    if (!scene || !Array.isArray(scene.elements)) return null
-    return raw
+    raw = JSON.parse(code)
   } catch {
-    return null
+    return { kind: 'not-json' }
   }
+  if (raw && typeof raw === 'object' && typeof (raw as ExcalidrawFileSpec).src === 'string' && (raw as ExcalidrawFileSpec).src) {
+    return { kind: 'file', spec: raw as ExcalidrawFileSpec }
+  }
+  // Valid JSON, but no file reference → inline canvas, which is unsupported.
+  return { kind: 'inline' }
+}
+
+function parseScene(content: string): SceneResult {
+  let raw: { scene?: ExcalidrawSceneData } & ExcalidrawSceneData
+  try {
+    raw = JSON.parse(content)
+  } catch {
+    return { kind: 'parse-error' }
+  }
+  const scene = raw?.scene ?? raw
+  if (!scene || !Array.isArray(scene.elements)) return { kind: 'invalid-scene' }
+  return { kind: 'scene', scene }
 }
 
 function clampHeight(value: unknown, fallback: number) {
@@ -90,56 +116,133 @@ function clampHeight(value: unknown, fallback: number) {
 }
 
 export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawBlockProps) {
-  const spec = React.useMemo(() => parseSpec(code), [code])
+  const { onReadFile, onResourceUpdated } = usePlatform()
+  const isDarkMode = useDocumentDarkMode()
   const [isFullscreenOpen, setIsFullscreenOpen] = React.useState(false)
   const [fullscreenMode, setFullscreenMode] = React.useState<'view' | 'edit'>('view')
-  const isDarkMode = useDocumentDarkMode()
+  const [content, setContent] = React.useState<string | null>(null)
+  const [loading, setLoading] = React.useState(false)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
+  const [reloadNonce, setReloadNonce] = React.useState(0)
+
+  const specResult = React.useMemo(() => parseSpec(code), [code])
+  const src = specResult.kind === 'file' ? specResult.spec.src : undefined
 
   // Fullscreen opens read-only every time; the user clicks Edit to edit.
   React.useEffect(() => {
     if (!isFullscreenOpen) setFullscreenMode('view')
   }, [isFullscreenOpen])
 
-  const fallback = <CodeBlock code={code} language="json" mode="full" className={className} />
+  // Load the referenced .excalidraw file.
+  React.useEffect(() => {
+    if (!src || !onReadFile) return
+    let cancelled = false
+    setLoading(true)
+    setLoadError(null)
+    onReadFile(src)
+      .then(next => { if (!cancelled) setContent(next) })
+      .catch((err: unknown) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to read the canvas file') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [src, onReadFile, reloadNonce])
 
-  if (!spec) return fallback
+  // Reload when the file changes on disk (e.g. agent updated it).
+  React.useEffect(() => {
+    if (!src || !onResourceUpdated) return
+    return onResourceUpdated(src, () => setReloadNonce(previous => previous + 1))
+  }, [src, onResourceUpdated])
 
-  const scene = spec.scene ?? spec
+  const reload = React.useCallback(() => {
+    setContent(null)
+    setLoadError(null)
+    setReloadNonce(previous => previous + 1)
+  }, [])
+
+  const sceneResult = React.useMemo<SceneResult | null>(
+    () => (content != null ? parseScene(content) : null),
+    [content],
+  )
+  const scene = sceneResult?.kind === 'scene' ? sceneResult.scene : null
+
+  const canvasTheme = isDarkMode ? 'dark' : 'light'
+  const sceneBackground = scene?.appState?.viewBackgroundColor
+  const sceneKey = React.useMemo(
+    () => `markdown:${hashExcalidrawSceneKey(`${src ?? ''}:${reloadNonce}:${content ?? ''}`)}`,
+    [src, reloadNonce, content],
+  )
+  const appState = React.useMemo<Partial<AppState>>(() => ({
+    ...scene?.appState,
+    theme: canvasTheme,
+    gridModeEnabled: false,
+    viewBackgroundColor: sceneBackground && sceneBackground !== '#ffffff' ? sceneBackground : 'transparent',
+  }), [canvasTheme, scene?.appState, sceneBackground])
+
+  // --- Non-canvas render branches -------------------------------------------
+  if (specResult.kind === 'not-json') {
+    // Not even a JSON spec — leave the raw fence as a code block.
+    return <CodeBlock code={code} language="json" mode="full" className={className} />
+  }
+
+  const failureHeight = clampHeight(specResult.kind === 'file' ? specResult.spec.height : undefined, 320)
+  const renderFailure = (reason: ExcalidrawFailureReason, detail?: string, withReload = true) => (
+    <ExcalidrawBlockFailure
+      reason={reason}
+      detail={detail}
+      onReload={withReload ? reload : undefined}
+      className={className}
+      style={{ minHeight: failureHeight }}
+    />
+  )
+
+  if (specResult.kind === 'inline') {
+    return renderFailure('inline-not-supported', undefined, false)
+  }
+  if (!onReadFile) {
+    return renderFailure('file-read-error', 'Canvas loading is unavailable in this view.')
+  }
+  if (loadError) {
+    return renderFailure('file-read-error', loadError)
+  }
+  if (content == null) {
+    return (
+      <div
+        className={cn('flex items-center justify-center rounded-[8px] border border-border/60 bg-background text-sm text-muted-foreground shadow-minimal', className)}
+        style={{ minHeight: failureHeight }}
+      >
+        {loading ? 'Loading canvas…' : ''}
+      </div>
+    )
+  }
+  if (!scene || sceneResult?.kind !== 'scene') {
+    return renderFailure(sceneResult?.kind === 'parse-error' ? 'parse-error' : 'invalid-scene')
+  }
+
+  // --- Canvas render --------------------------------------------------------
+  const { spec } = specResult
   const title = spec.title || 'Canvas'
   const readonly = spec.readonly ?? true
   const baseHeight = clampHeight(spec.height, 320)
-  const canvasTheme = isDarkMode ? 'dark' : 'light'
-  const sceneKey = React.useMemo(() => `markdown:${hashExcalidrawSceneKey(code)}`, [code])
-  const sceneBackground = scene.appState?.viewBackgroundColor
-  const appState = React.useMemo<Partial<AppState>>(() => ({
-    ...scene.appState,
-    theme: canvasTheme,
-    gridModeEnabled: false,
-    viewBackgroundColor: sceneBackground && sceneBackground !== '#ffffff'
-      ? sceneBackground
-      : 'transparent',
-  }), [canvasTheme, isDarkMode, scene.appState, sceneBackground])
 
   const fullscreenScene: CanvasScene = {
     type: 'excalidraw',
-    version: spec.scene?.version ?? 2,
-    source: spec.scene?.source ?? 'agent',
+    version: scene.version ?? 2,
+    source: scene.source ?? 'agent',
     elements: scene.elements ?? [],
     appState,
     files: scene.files ?? {},
   }
 
   return (
-    <ExcalidrawBlockErrorBoundary fallback={fallback}>
+    <ExcalidrawBlockErrorBoundary fallback={renderFailure('render-error')}>
       <div className={cn('relative group overflow-hidden rounded-[8px] border border-border/50 bg-background shadow-minimal', className)}>
         <button
           onClick={() => setIsFullscreenOpen(true)}
           className={cn(
-            "absolute right-2 top-2 z-10 p-1.5 rounded-[6px] transition-all select-none",
-            "bg-background/80 shadow-minimal backdrop-blur-sm",
-            "text-muted-foreground/50 hover:text-foreground",
-            "focus:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:opacity-100",
-            "opacity-0 group-hover:opacity-100",
+            'absolute right-2 top-2 z-10 p-1.5 rounded-[6px] transition-all select-none',
+            'bg-background/80 shadow-minimal backdrop-blur-sm',
+            'text-muted-foreground/50 hover:text-foreground',
+            'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:opacity-100',
+            'opacity-0 group-hover:opacity-100',
           )}
           title="Open fullscreen"
           aria-label="Open Excalidraw fullscreen"
@@ -169,10 +272,10 @@ export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawB
             <button
               onClick={() => setFullscreenMode(current => (current === 'edit' ? 'view' : 'edit'))}
               className={cn(
-                "absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-xs font-medium transition-all select-none",
-                "bg-background/80 shadow-minimal backdrop-blur-sm",
-                fullscreenMode === 'edit' ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-                "focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                'absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-xs font-medium transition-all select-none',
+                'bg-background/80 shadow-minimal backdrop-blur-sm',
+                fullscreenMode === 'edit' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
               )}
               title={fullscreenMode === 'edit' ? 'Switch to read-only' : 'Edit canvas'}
               aria-label={fullscreenMode === 'edit' ? 'Switch canvas to read-only' : 'Edit canvas'}

@@ -101,6 +101,14 @@ export interface PlatformActions {
   onReadFileBinary?: (path: string) => Promise<Uint8Array>
 
   /**
+   * Subscribe to "this file changed on disk" notifications for file-backed
+   * blocks (e.g. an agent-updated .excalidraw canvas). Returns an unsubscribe
+   * function. When omitted, file-backed blocks rely on their manual Reload
+   * affordance. The Electron app wires this to a resource-updated broadcast.
+   */
+  onResourceUpdated?: (path: string, callback: () => void) => () => void
+
+  /**
    * Reveal a file in the system file manager (Electron: shell.showItemInFolder)
    * Web: Not available (menu items hidden when undefined)
    */

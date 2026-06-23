@@ -4,6 +4,7 @@ import { FONT_FAMILY, convertToExcalidrawElements } from '@excalidraw/excalidraw
 import type { AppState, BinaryFiles } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import {
+  PlatformProvider,
   TurnCard,
   UserMessageBubble,
   type ActivityItem,
@@ -83,12 +84,16 @@ const canvasPreviewActivities: ActivityItem[] = [
   },
 ]
 
-function createCanvasPreviewResponse(readonly: boolean, scene: ExcalidrawSceneData): ResponseContent {
+// File-reference model: the agent (here, the demo) references a .excalidraw
+// file by path. The playground serves it from an in-memory mock onReadFile.
+const PLAYGROUND_CANVAS_SRC = 'playground://canvas/agent-loop.excalidraw'
+
+function createCanvasPreviewResponse(readonly: boolean): ResponseContent {
   const blockSpec = {
+    src: PLAYGROUND_CANVAS_SRC,
     title: 'Canvas preview',
     readonly,
     height: 320,
-    scene,
   }
 
   return {
@@ -112,9 +117,16 @@ function ExcalidrawCanvasInTurnCard({
   const isDomDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
   const isDarkMode = isDark || isDomDark
   const scene = React.useMemo(() => createCanvasPreviewScene(isDarkMode), [isDarkMode])
-  const response = React.useMemo(() => createCanvasPreviewResponse(readonly, scene), [readonly, scene])
+  const response = React.useMemo(() => createCanvasPreviewResponse(readonly), [readonly])
+  const platformActions = React.useMemo(() => ({
+    onReadFile: async (path: string) => {
+      if (path !== PLAYGROUND_CANVAS_SRC) throw new Error(`Mock canvas not found for: ${path}`)
+      return JSON.stringify(scene)
+    },
+  }), [scene])
 
   return (
+    <PlatformProvider actions={platformActions}>
     <div className="mx-auto flex w-full max-w-[860px] flex-col gap-4 px-4 py-6">
       <UserMessageBubble content="Show a canvas preview in this turn." />
 
@@ -134,6 +146,7 @@ function ExcalidrawCanvasInTurnCard({
         onOpenActivityDetails={(activity) => console.log('[Playground] Open activity details:', activity.id, activity.toolName)}
       />
     </div>
+    </PlatformProvider>
   )
 }
 

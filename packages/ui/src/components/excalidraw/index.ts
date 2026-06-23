@@ -12,6 +12,11 @@ export {
   type CanvasAnnotationSurface,
 } from './EditableExcalidrawCanvas'
 export {
+  ExcalidrawBlockFailure,
+  type ExcalidrawBlockFailureProps,
+  type ExcalidrawFailureReason,
+} from './ExcalidrawBlockFailure'
+export {
   LIGHT_PALETTE,
   NODE_ACTION_EDGE_INSET,
   NODE_ACTION_GAP,
