@@ -12,12 +12,53 @@ import {
 } from '@craft-agent/ui'
 import { useTheme } from '../../context/ThemeContext'
 import {
-  LIGHT_PALETTE,
-  arrow as sceneArrow,
-  node as sceneNode,
-  text as sceneText,
+  edgeStyle,
+  nodeElement,
+  theme as graphiteTheme,
+  type EdgeKind,
+  type Role,
+  type Shape,
 } from '@craft-agent/ui/excalidraw/canvasScene'
+import type { ExcalidrawElementSkeleton } from '@excalidraw/excalidraw/data/transform'
 import type { ComponentEntry } from './types'
+
+const GRAPHITE_MODE = 'light' as const
+
+function pNode(id: string, x: number, y: number, w: number, h: number, text: string, role: Role = 'default', shape: Shape = 'rect') {
+  return nodeElement({ id, x, y, w, h, text, role, shape }, GRAPHITE_MODE)
+}
+
+function pNote(id: string, x: number, y: number, value: string) {
+  return {
+    type: 'text' as const,
+    id,
+    x,
+    y,
+    text: value,
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.Helvetica,
+    strokeColor: graphiteTheme(GRAPHITE_MODE).labelText,
+    backgroundColor: 'transparent',
+    roughness: 0,
+    customData: { graphite: { kind: 'title' } },
+  }
+}
+
+function pEdge(id: string, x: number, y: number, w: number, h: number, label: string, kind: EdgeKind = 'branch', dashed = false) {
+  const style = edgeStyle(kind, GRAPHITE_MODE, { dashed })
+  return {
+    ...style,
+    type: 'arrow' as const,
+    id,
+    x,
+    y,
+    points: [[0, 0], [w, h]] as [number, number][],
+    customData: { ...(style.customData as object), productGeneratedLine: true },
+    ...(label
+      ? { label: { text: label, fontSize: 13, fontFamily: FONT_FAMILY.Helvetica, strokeColor: graphiteTheme(GRAPHITE_MODE).labelText } }
+      : {}),
+  }
+}
 
 interface ExcalidrawSceneData {
   type: 'excalidraw'
@@ -29,26 +70,26 @@ interface ExcalidrawSceneData {
 }
 
 function createCanvasPreviewScene(isDarkMode: boolean): ExcalidrawSceneData {
-  const palette = LIGHT_PALETTE
-
+  // Bake the canonical light scene with Graphite semantic tags; the display
+  // recolors to the active light/dark mode at view time.
   return {
     type: 'excalidraw',
     version: 2,
     source: 'craft-agent-playground',
     elements: convertToExcalidrawElements(
       [
-        sceneText('group-title', 24, 34, 'Agent work loop', palette.muted),
-        sceneNode('request', 48, 96, 138, 58, 'Request', palette.surface, palette.stroke, palette.text),
-        sceneNode('plan', 270, 96, 138, 58, 'Plan', palette.purpleFill, palette.purpleStroke, palette.text),
-        sceneNode('tool', 492, 96, 154, 58, 'Tool call', palette.blueFill, palette.blueStroke, palette.text),
-        sceneNode('result', 270, 198, 138, 58, 'Result', palette.greenFill, palette.greenStroke, palette.text),
-        sceneNode('review', 492, 198, 154, 58, 'Review', palette.surface, palette.stroke, palette.text),
-        sceneArrow('edge-request-plan', 186, 125, 84, 0, 'analyze', palette.line),
-        sceneArrow('edge-plan-tool', 408, 125, 84, 0, 'invoke', palette.blueStroke),
-        sceneArrow('edge-tool-result', 569, 154, -161, 44, 'return', palette.greenStroke),
-        sceneArrow('edge-result-review', 408, 227, 84, 0, 'inspect', palette.line),
-        sceneArrow('edge-review-plan', 492, 198, -84, -44, 'refine', palette.purpleStroke, true),
-      ],
+        pNote('group-title', 24, 34, 'Agent work loop'),
+        pNode('request', 48, 96, 138, 58, 'Request', 'default', 'ellipse'),
+        pNode('plan', 270, 96, 138, 58, 'Plan', 'accent'),
+        pNode('tool', 492, 96, 154, 58, 'Tool call'),
+        pNode('result', 270, 198, 138, 58, 'Result'),
+        pNode('review', 492, 198, 154, 58, 'Review', 'default', 'diamond'),
+        pEdge('edge-request-plan', 186, 125, 84, 0, 'analyze'),
+        pEdge('edge-plan-tool', 408, 125, 84, 0, 'invoke'),
+        pEdge('edge-tool-result', 569, 154, -161, 44, 'return'),
+        pEdge('edge-result-review', 408, 227, 84, 0, 'inspect'),
+        pEdge('edge-review-plan', 492, 198, -84, -44, 'refine', 'branch', true),
+      ] as unknown as ExcalidrawElementSkeleton[],
       { regenerateIds: false },
     ) as ExcalidrawElement[],
     appState: {

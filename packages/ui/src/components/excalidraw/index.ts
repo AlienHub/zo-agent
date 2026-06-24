@@ -35,3 +35,4 @@ export {
   type CanvasScene,
   type SelectionOverlay,
 } from './canvasScene'
+export * from './graphiteStyle'

@@ -437,16 +437,32 @@ export type ExcalidrawSkeletonElement =
     end: string;
   };
 
+/** Graphite node semantics. Colors derive from role; type derives from shape. */
+export type ExcalidrawNodeRole = 'default' | 'accent' | 'alert' | 'muted';
+export type ExcalidrawNodeShape = 'rect' | 'rectSharp' | 'ellipse' | 'circle' | 'diamond' | 'triangle';
+/** Graphite edge kind: branch = crisp orthogonal route; curve = soft bend. */
+export type ExcalidrawEdgeKind = 'branch' | 'curve';
+
 export interface ExcalidrawGraphNode {
   id: string;
   label: string;
   group?: string;
+  /** Graphite role drives color (default gray; accent ≤1–2/graph; alert; muted). */
+  role?: ExcalidrawNodeRole;
+  /** Graphite shape expresses type (rect/process; rectSharp/data; ellipse/start-end; diamond/decision). */
+  shape?: ExcalidrawNodeShape;
 }
 
 export interface ExcalidrawGraphEdge {
   from: string;
   to: string;
   label?: string;
+  /** branch (architecture/flow/tree) or curve (mind map / associative). One main kind per graph. */
+  kind?: ExcalidrawEdgeKind;
+  /** Async / weak relationship — rendered dashed. */
+  dashed?: boolean;
+  /** Set false to drop the arrowhead (common for mind maps). */
+  arrow?: boolean;
 }
 
 export interface ExcalidrawGraph {

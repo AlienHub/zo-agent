@@ -5,7 +5,16 @@ import type { AppState, BinaryFiles } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import type { ExcalidrawElementSkeleton } from '@excalidraw/excalidraw/data/transform'
 import type { ExcalidrawGraph, ExcalidrawGraphNode } from '@craft-agent/session-tools-core'
-import { LIGHT_PALETTE, node, text } from '@craft-agent/ui/excalidraw/canvasScene'
+import {
+  GRAPHITE_FONT,
+  GRAPHITE_LAYOUT,
+  edgeStyle,
+  nodeElement,
+  theme as graphiteTheme,
+  type EdgeKind,
+  type Role,
+  type Shape,
+} from '@craft-agent/ui/excalidraw/canvasScene'
 
 declare global {
   interface Window {
@@ -32,30 +41,49 @@ interface MeasuredNode extends Bounds {
   id: string
   label: string
   group?: string
-  fill: string
-  stroke: string
+  role: Role
+  shape: Shape
 }
 
-const NODE_PADDING_X = 28
-const NODE_PADDING_Y = 20
-const NODE_MIN_WIDTH = 140
-const NODE_MIN_HEIGHT = 64
-const NODE_FONT_SIZE = 16
+// Canonical bake mode. The on-disk scene is always light; the display recolors
+// to the active light/dark mode at view time from the stamped graphite tags.
+const BAKE_MODE = 'light' as const
+
+const NODE_PADDING = GRAPHITE_LAYOUT.nodePadding
+// Non-rectangular containers inscribe their label, so they need extra slack to
+// keep text inside the ellipse / diamond.
+const SHAPE_PADDING_EXTRA: Partial<Record<Shape, number>> = {
+  ellipse: 14,
+  circle: 14,
+  diamond: 18,
+  triangle: 24,
+}
+const NODE_MIN_WIDTH = GRAPHITE_LAYOUT.nodeMinWidth
+const NODE_MIN_HEIGHT = GRAPHITE_LAYOUT.nodeMinHeight
+const NODE_FONT_SIZE = GRAPHITE_FONT.nodeLabel
 const NODE_LINE_HEIGHT = 22
-const EDGE_FONT_SIZE = 12
+const EDGE_FONT_SIZE = GRAPHITE_FONT.edgeLabel
 const EDGE_LINE_HEIGHT = 16
-const LAYOUT_NODES_EP = 72
-const LAYOUT_RANK_SEP = 112
+const LAYOUT_NODES_EP = Math.max(72, GRAPHITE_LAYOUT.siblingGapMin)
+const LAYOUT_RANK_SEP = Math.max(96, GRAPHITE_LAYOUT.rankGapMin)
 const LAYOUT_MARGIN = 48
 const EXPORT_PADDING = 48
 
-const PALETTE = [
-  { fill: LIGHT_PALETTE.blueFill, stroke: LIGHT_PALETTE.blueStroke },
-  { fill: LIGHT_PALETTE.greenFill, stroke: LIGHT_PALETTE.greenStroke },
-  { fill: LIGHT_PALETTE.purpleFill, stroke: LIGHT_PALETTE.purpleStroke },
-  { fill: LIGHT_PALETTE.amberFill, stroke: LIGHT_PALETTE.amberStroke },
-  { fill: LIGHT_PALETTE.surface, stroke: LIGHT_PALETTE.stroke },
-]
+const ROLES: ReadonlySet<Role> = new Set(['default', 'accent', 'alert', 'muted'])
+const SHAPES: ReadonlySet<Shape> = new Set(['rect', 'rectSharp', 'ellipse', 'circle', 'diamond', 'triangle'])
+const EDGE_KINDS: ReadonlySet<EdgeKind> = new Set(['branch', 'curve'])
+
+function resolveRole(value: unknown): Role {
+  return typeof value === 'string' && ROLES.has(value as Role) ? (value as Role) : 'default'
+}
+
+function resolveShape(value: unknown): Shape {
+  return typeof value === 'string' && SHAPES.has(value as Shape) ? (value as Shape) : 'rect'
+}
+
+function resolveEdgeKind(value: unknown): EdgeKind {
+  return typeof value === 'string' && EDGE_KINDS.has(value as EdgeKind) ? (value as EdgeKind) : 'branch'
+}
 
 function createTextMeasurer(fontSize: number) {
   const canvas = document.createElement('canvas')
@@ -74,31 +102,23 @@ function createTextMeasurer(fontSize: number) {
   }
 }
 
-function colorForNode(node: ExcalidrawGraphNode, index: number, groups: Map<string, number>) {
-  if (!node.group) return PALETTE[index % PALETTE.length]
-  const existing = groups.get(node.group)
-  if (existing !== undefined) return PALETTE[existing % PALETTE.length]
-  const next = groups.size
-  groups.set(node.group, next)
-  return PALETTE[next % PALETTE.length]
-}
-
 function measureNodes(nodes: ExcalidrawGraphNode[]) {
   const measure = createTextMeasurer(NODE_FONT_SIZE)
-  const groups = new Map<string, number>()
-  return nodes.map((graphNode, index): MeasuredNode => {
+  return nodes.map((graphNode): MeasuredNode => {
     const labelSize = measure(graphNode.label, NODE_LINE_HEIGHT)
-    const colors = colorForNode(graphNode, index, groups)
+    const role = resolveRole((graphNode as { role?: unknown }).role)
+    const shape = resolveShape((graphNode as { shape?: unknown }).shape)
+    const pad = NODE_PADDING + (SHAPE_PADDING_EXTRA[shape] ?? 0)
     return {
       id: graphNode.id,
       label: graphNode.label,
       ...(graphNode.group ? { group: graphNode.group } : {}),
       x: 0,
       y: 0,
-      width: Math.max(NODE_MIN_WIDTH, labelSize.width + NODE_PADDING_X * 2),
-      height: Math.max(NODE_MIN_HEIGHT, labelSize.height + NODE_PADDING_Y * 2),
-      fill: colors.fill,
-      stroke: colors.stroke,
+      width: Math.max(NODE_MIN_WIDTH, labelSize.width + pad * 2),
+      height: Math.max(NODE_MIN_HEIGHT, labelSize.height + pad * 2),
+      role,
+      shape,
     }
   })
 }
@@ -175,60 +195,110 @@ function centerOf(bounds: Bounds) {
   }
 }
 
+/**
+ * Graphite `branch` routing: a crisp right-angle ("elbow") polyline with a
+ * single mid-bend, oriented along the layout's primary axis. Anchors on the
+ * facing edge of each node; collapses to a straight line when the nodes are
+ * axis-aligned. `convertToExcalidrawElements` doesn't accept native `elbowed`
+ * arrows, so we generate the orthogonal points ourselves (curve edges keep
+ * dagre's obstacle-avoiding waypoints instead). Adjacent-rank edges — the common
+ * case — stay clean; the agent's preview self-review catches the rare long span
+ * that would cross an intervening node.
+ */
+function orthogonalPoints(source: Bounds, target: Bounds, direction: 'TB' | 'LR') {
+  const s = centerOf(source)
+  const t = centerOf(target)
+
+  if (direction === 'LR') {
+    const startX = t.x >= s.x ? source.x + source.width : source.x
+    const endX = t.x >= s.x ? target.x : target.x + target.width
+    const start = { x: startX, y: s.y }
+    const end = { x: endX, y: t.y }
+    if (Math.abs(start.y - end.y) < 1) return [start, end]
+    const midX = (start.x + end.x) / 2
+    return [start, { x: midX, y: start.y }, { x: midX, y: end.y }, end]
+  }
+
+  const startY = t.y >= s.y ? source.y + source.height : source.y
+  const endY = t.y >= s.y ? target.y : target.y + target.height
+  const start = { x: s.x, y: startY }
+  const end = { x: t.x, y: endY }
+  if (Math.abs(start.x - end.x) < 1) return [start, end]
+  const midY = (start.y + end.y) / 2
+  return [start, { x: start.x, y: midY }, { x: end.x, y: midY }, end]
+}
+
 function buildOfficialSkeleton(graph: ExcalidrawGraph): ExcalidrawElementSkeleton[] {
   const { nodesById, edgePoints } = layoutGraph(graph)
   const skeleton: ExcalidrawElementSkeleton[] = []
   const optionalTitle = (graph as ExcalidrawGraph & { title?: unknown }).title
+  const layoutDir: 'TB' | 'LR' = graph.direction === 'LR' ? 'LR' : 'TB'
 
   for (const graphNode of graph.nodes) {
     const measured = nodesById.get(graphNode.id)
     if (!measured) continue
-    skeleton.push(node(
-      measured.id,
-      measured.x,
-      measured.y,
-      measured.width,
-      measured.height,
-      measured.label,
-      measured.fill,
-      measured.stroke,
-      LIGHT_PALETTE.text,
-    ) as ExcalidrawElementSkeleton)
+    skeleton.push(nodeElement({
+      id: measured.id,
+      x: measured.x,
+      y: measured.y,
+      w: measured.width,
+      h: measured.height,
+      role: measured.role,
+      shape: measured.shape,
+      text: measured.label,
+    }, BAKE_MODE) as ExcalidrawElementSkeleton)
   }
 
   if (typeof optionalTitle === 'string' && optionalTitle.trim()) {
     const positionedNodes = [...nodesById.values()]
     const minX = positionedNodes.length ? Math.min(...positionedNodes.map((graphNode) => graphNode.x)) : LAYOUT_MARGIN
     const minY = positionedNodes.length ? Math.min(...positionedNodes.map((graphNode) => graphNode.y)) : LAYOUT_MARGIN
-    skeleton.push(text('canvas-title', minX, minY - 44, optionalTitle, LIGHT_PALETTE.text) as ExcalidrawElementSkeleton)
+    skeleton.push({
+      type: 'text',
+      id: 'canvas-title',
+      x: minX,
+      y: minY - 44,
+      text: optionalTitle,
+      fontSize: 18,
+      fontFamily: FONT_FAMILY.Helvetica,
+      strokeColor: graphiteTheme(BAKE_MODE).labelText,
+      backgroundColor: 'transparent',
+      roughness: 0,
+      customData: { graphite: { kind: 'title' } },
+    } as ExcalidrawElementSkeleton)
   }
 
   graph.edges.forEach((edge, index) => {
     const source = nodesById.get(edge.from)
     const target = nodesById.get(edge.to)
     if (!source || !target) return
-    // Follow dagre's routed waypoints (falls back to a straight center-to-center
-    // line only if routing is unavailable).
+    const kind = resolveEdgeKind((edge as { kind?: unknown }).kind)
+    const dashed = (edge as { dashed?: unknown }).dashed === true
+    const arrow = (edge as { arrow?: unknown }).arrow !== false
+    const style = edgeStyle(kind, BAKE_MODE, { dashed, arrow })
+    const isBranch = kind === 'branch'
+    // branch = crisp right-angle elbow polyline (orthogonal route, adaptive
+    // rounded corners ≈ Graphite's 9px). curve = dagre's obstacle-avoiding
+    // waypoints smoothed into a bezier (proportional radius).
     const routed = edgePoints.get(index)
-    const points = routed && routed.length >= 2 ? routed : [centerOf(source), centerOf(target)]
+    const points = isBranch
+      ? orthogonalPoints(source, target, layoutDir)
+      : (routed && routed.length >= 2 ? routed : [centerOf(source), centerOf(target)])
     const origin = points[0]
     skeleton.push({
+      ...style,
       type: 'arrow',
       id: `edge-${index}-${edge.from}-${edge.to}`,
       x: origin.x,
       y: origin.y,
       points: points.map((point) => [point.x - origin.x, point.y - origin.y] as [number, number]),
-      strokeColor: LIGHT_PALETTE.line,
-      strokeWidth: 1,
-      strokeStyle: 'solid',
-      roughness: 0,
-      // Smooth the routed waypoints into a curve instead of sharp elbows.
-      roundness: { type: ROUNDNESS.PROPORTIONAL_RADIUS },
-      endArrowhead: 'triangle',
-      customData: { productGeneratedLine: true },
+      roundness: { type: isBranch ? ROUNDNESS.ADAPTIVE_RADIUS : ROUNDNESS.PROPORTIONAL_RADIUS },
+      customData: { ...(style.customData as object), productGeneratedLine: true },
       start: { id: edge.from },
       end: { id: edge.to },
-      ...(edge.label ? { label: { text: edge.label, fontSize: EDGE_FONT_SIZE, fontFamily: FONT_FAMILY.Helvetica } } : {}),
+      ...(edge.label
+        ? { label: { text: edge.label, fontSize: EDGE_FONT_SIZE, fontFamily: FONT_FAMILY.Helvetica, strokeColor: graphiteTheme(BAKE_MODE).labelText } }
+        : {}),
     } as ExcalidrawElementSkeleton)
   })
 

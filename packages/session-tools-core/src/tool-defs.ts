@@ -114,19 +114,27 @@ export const ExcalidrawCreateCanvasSchema = z.object({
 export const ExcalidrawGraphNodeSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Stable node id for edge references'),
   label: z.string().describe('Visible node label text'),
-  group: z.string().optional().describe('Optional semantic group used for stable palette assignment'),
+  group: z.string().optional().describe('Optional semantic group (for layout/containers — not color)'),
+  role: z.enum(['default', 'accent', 'alert', 'muted']).optional()
+    .describe('Graphite role = color meaning. default (gray, the norm); accent (focus/hub/key decision, AT MOST 1–2 per graph); alert (error/reject/risk); muted (secondary). Color is information, not decoration — when unsure use default.'),
+  shape: z.enum(['rect', 'rectSharp', 'ellipse', 'circle', 'diamond', 'triangle']).optional()
+    .describe('Graphite shape = type meaning. rect (default/process/service); rectSharp (data/storage); ellipse (start/end/state); diamond (decision/branch); triangle (use sparingly). Prefer expressing type via shape before color.'),
 });
 
 export const ExcalidrawGraphEdgeSchema = z.object({
   from: z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Source node id'),
   to: z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Target node id'),
-  label: z.string().optional().describe('Optional visible edge label'),
+  label: z.string().optional().describe('Optional visible edge label (only when the relationship is not self-evident)'),
+  kind: z.enum(['branch', 'curve']).optional()
+    .describe('branch = crisp orthogonal route (architecture/flow/tree, the default); curve = soft bend (mind map / associative). Keep ONE main kind per graph.'),
+  dashed: z.boolean().optional().describe('Async / weak dependency — rendered dashed.'),
+  arrow: z.boolean().optional().describe('Set false to drop the arrowhead (common for mind maps).'),
 });
 
 export const ExcalidrawSetGraphSchema = z.object({
   canvasId: z.string().describe('Canvas id returned by excalidraw_create_canvas'),
-  nodes: z.array(ExcalidrawGraphNodeSchema).describe('Full replacement list of graph nodes. Do not include coordinates or sizes.'),
-  edges: z.array(ExcalidrawGraphEdgeSchema).describe('Full replacement list of graph edges. Reference nodes by id.'),
+  nodes: z.array(ExcalidrawGraphNodeSchema).describe('Full replacement list of graph nodes. Set role/shape per Graphite semantics. Do not include coordinates or sizes.'),
+  edges: z.array(ExcalidrawGraphEdgeSchema).describe('Full replacement list of graph edges. Reference nodes by id; pick one main kind per graph.'),
   direction: z.enum(['TB', 'LR']).optional().describe('Preferred layout direction: top-to-bottom or left-to-right'),
 });
 
@@ -351,8 +359,10 @@ After creating, call excalidraw_set_graph with a full replacement graph.`,
 
   excalidraw_set_graph: `Replace the coordinate-free graph for a session-scoped Excalidraw canvas.
 
-Provide only nodes, edges, and an optional direction. Do not calculate x/y coordinates, sizes, or raw Excalidraw JSON yourself.
-The backend measures text, lays out the graph with dagre, applies the shared canvasScene style, materializes it via @excalidraw/excalidraw in a DOM renderer, writes the .excalidraw file, saves a preview PNG, and broadcasts a resource update.
+Provide only nodes, edges, per-node role/shape, per-edge kind/dashed, and an optional direction. Do not calculate x/y coordinates, sizes, colors, or raw Excalidraw JSON yourself.
+The backend measures text, lays out the graph with dagre, applies the Graphite design language (graphiteStyle), materializes it via @excalidraw/excalidraw in a DOM renderer, writes the .excalidraw file, saves a preview PNG, and broadcasts a resource update. Colors are derived from role and re-themed for light/dark at view time — never hard-code hex.
+
+Graphite rules: most nodes are role "default"; use "accent" for at most 1–2 focus/hub nodes and "alert" only for error/risk. Express type with shape first (diamond=decision, ellipse=start/end, rectSharp=data). Keep one edge kind per graph (branch for flow/architecture, curve for mind maps); dashed for async.
 
 Use the returned previewPngPath to inspect clarity and accuracy. If validation or preview review fails, fix the graph and retry. After 3 consecutive failures for the same canvas, the tool returns a terminal error and you must stop retrying and tell the user: 画布生成失败，请调整需求或稍后再试`,
 

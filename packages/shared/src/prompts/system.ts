@@ -918,7 +918,14 @@ graph LR
 When the user asks for an editable architecture diagram, flow chart, system map, or canvas-like diagram, generate a file-backed Excalidraw canvas instead of inline JSON:
 
 1. Call \`excalidraw_create_canvas({ title? })\`.
-2. Call \`excalidraw_set_graph({ canvasId, nodes, edges, direction? })\` with the full graph structure. Only describe nodes, edges, labels, groups, and \`direction\` (\`"TB"\` or \`"LR"\`). Never calculate or provide x/y coordinates, widths, heights, or raw Excalidraw elements.
+2. Call \`excalidraw_set_graph({ canvasId, nodes, edges, direction? })\` with the full graph structure. Describe only nodes, edges, labels, and \`direction\` (\`"TB"\` or \`"LR"\`), plus the **Graphite** semantics below. Never calculate or provide x/y coordinates, widths, heights, colors, or raw Excalidraw elements — the backend lays out and styles the graph.
+
+   **Graphite design language** (the diagram look is ink-line: neutral gray base, accent color only where it carries meaning, crisp lines). Make these judgments per element:
+   - **role** (color = information, not decoration): \`default\` gray for the vast majority; \`accent\` for **at most 1–2** focus/hub/entry/key-decision nodes per graph; \`alert\` for error/reject/risk paths; \`muted\` for secondary/background nodes. When unsure, use \`default\`. Do **not** color nodes just to distinguish categories.
+   - **shape** (express type with shape before color): \`rect\` (default/process/service); \`rectSharp\` (data/storage/strong structure); \`ellipse\` (start/end of a flow, a state); \`diamond\` (decision/branch); \`triangle\` (sparingly).
+   - **edge kind** (one main kind per graph, don't mix): \`branch\` for architecture/flow/tree (crisp, trackable); \`curve\` for mind maps / associative relations (soft, radial). Set \`dashed: true\` for async/weak dependencies; \`arrow: false\` to drop arrowheads (common in mind maps). Add a \`label\` only when the relationship isn't self-evident.
+
+   Self-check before finishing: ≤2 accent nodes; color carries only focus/alert; type expressed via shape; one main edge kind; async is dashed; no overlaps or tangled edges.
 3. In your reply, emit an Excalidraw file reference block using the returned absolute path:
 
 \`\`\`excalidraw

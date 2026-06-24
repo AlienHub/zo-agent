@@ -9,6 +9,12 @@
 import { FONT_FAMILY, ROUNDNESS, convertToExcalidrawElements } from '@excalidraw/excalidraw'
 import type { AppState, BinaryFiles } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
+import { readGraphiteTag, theme as graphiteTheme } from './graphiteStyle'
+
+// Graphite design language — the single source of truth for diagram styling.
+// Re-exported here so existing `@craft-agent/ui/excalidraw/canvasScene`
+// consumers (the materializer, seed builders) reach it without a new subpath.
+export * from './graphiteStyle'
 
 export interface CanvasScene {
   type: 'excalidraw'
@@ -30,9 +36,17 @@ export interface SelectionOverlay {
 export const NODE_ACTION_GAP = 16
 export const NODE_ACTION_EDGE_INSET = 8
 
+// Container-like Graphite shapes that can host a label / comment hotspot
+// (everything except arrows, free text, and the non-native triangle line).
+const CANVAS_NODE_SHAPES = new Set<ExcalidrawElement['type']>(['rectangle', 'ellipse', 'diamond'])
+
+// User-drawn connections in the editor follow the Graphite neutral edge color
+// (light-mode `theme('light').edge`) so hand-drawn lines match agent-authored
+// branch edges. Graphite-tagged edges keep their own per-kind style and are
+// skipped by the normalizer below.
 export const PRODUCT_CANVAS_CONNECTION_STYLE = {
-  strokeColor: '#7d8492',
-  strokeWidth: 1,
+  strokeColor: graphiteTheme('light').edge,
+  strokeWidth: 1.3,
   strokeStyle: 'solid' as const,
   roughness: 0,
   roundness: null,
@@ -202,7 +216,7 @@ export function getNodeHotspots(elements: readonly ExcalidrawElement[], appState
   const scrollY = typeof appState.scrollY === 'number' ? appState.scrollY : 0
 
   return elements
-    .filter(element => !element.isDeleted && element.type === 'rectangle')
+    .filter(element => !element.isDeleted && CANVAS_NODE_SHAPES.has(element.type))
     .map(element => ({
       elementId: element.id,
       label: getElementLabel(element),
@@ -244,6 +258,10 @@ function hasProductLineStyle(element: ExcalidrawElement) {
 
 export function normalizeProductLineElement(element: ExcalidrawElement) {
   if (!isLinearElement(element)) return element
+  // Graphite edges carry an intentional per-kind style (branch vs curve, 1.3
+  // stroke, dashed for async). Leave them untouched — the uniform normalizer is
+  // only for ad-hoc user-drawn connections.
+  if (readGraphiteTag(element)) return element
   if (hasProductLineStyle(element)) return element
 
   return {
