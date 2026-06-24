@@ -79,6 +79,12 @@ export interface SessionScopedToolCallbacks {
   getMessagingBindingsFn?: (sessionId: string) => Array<{ platform: string; channelId: string; threadId?: number; channelName?: string; enabled: boolean }>;
   /** Unbind messaging channels from a session. Returns count of removed bindings. */
   unbindMessagingChannelFn?: (sessionId: string, platform?: string) => number;
+  /** Materialize a coordinate-free Excalidraw graph in a DOM-capable backend. */
+  materializeCanvasFn?: (
+    graph: import('@craft-agent/session-tools-core').ExcalidrawGraph
+  ) => Promise<import('@craft-agent/session-tools-core').ExcalidrawMaterializeResult>;
+  /** Notify renderers that a session-owned resource file changed. */
+  notifyResourceUpdatedFn?: (path: string) => void | Promise<void>;
 }
 
 // Registry of callbacks keyed by sessionId

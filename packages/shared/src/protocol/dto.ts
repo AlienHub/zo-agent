@@ -223,6 +223,7 @@ export type SessionEvent =
   | { type: 'usage_update'; sessionId: string; tokenUsage: { inputTokens: number; contextWindow?: number } }
   | { type: 'message_annotations_updated'; sessionId: string; messageId: string; annotations: AnnotationV1[] }
   | { type: 'resource_annotations_updated'; sessionId: string; resource: SessionResourceRef; annotations: AnnotationV1[] }
+  | { type: 'resource_updated'; sessionId: string; path: string }
   | { type: 'working_directory_error'; sessionId: string; error: string }
 
 export interface SendMessageOptions {

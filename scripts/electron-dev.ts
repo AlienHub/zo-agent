@@ -201,6 +201,14 @@ function copyResources(): void {
 // `scripts/build-wa-worker.ts` as a subprocess so the dev path stays in
 // sync with the packaged/CI build. Cheap (~70ms) so we always rebuild.
 async function buildWaWorker(): Promise<void> {
+  // Escape hatch for machines where esbuild is unreliable (e.g. EDR/Gatekeeper
+  // killing the bundler mid-bundle): reuse a previously built worker.cjs so the
+  // app can still launch. Set CRAFT_SKIP_WA_WORKER=1 to opt in.
+  const waWorkerOutput = join(ROOT_DIR, "packages/messaging-whatsapp-worker/dist/worker.cjs");
+  if (process.env.CRAFT_SKIP_WA_WORKER && existsSync(waWorkerOutput)) {
+    console.log("⏭️  WhatsApp worker rebuild skipped (CRAFT_SKIP_WA_WORKER); using cached", waWorkerOutput);
+    return;
+  }
   console.log("📨 Building WhatsApp worker...");
   const proc = spawn({
     cmd: ["bun", "run", "scripts/build-wa-worker.ts"],
@@ -590,6 +598,30 @@ async function main(): Promise<void> {
   await toolbarPreloadContext.watch();
   esbuildContexts.push(toolbarPreloadContext);
   console.log("👀 Watching browser toolbar preload...");
+
+  // 4b. Excalidraw materializer preload — built once with Bun's native bundler
+  // (NOT an esbuild watcher). The hidden materializer window needs this preload
+  // to expose its IPC bridge; without it, materializeCanvas() hangs forever
+  // waiting for the renderer's ready signal. Built with Bun because esbuild is
+  // unreliable on some machines (EDR/Gatekeeper killing/hanging the binary).
+  const materializerPreloadProc = spawn({
+    cmd: [
+      "bun", "build",
+      "apps/electron/src/preload/excalidraw-materializer.ts",
+      "--target=node",
+      "--format=cjs",
+      "--outfile=apps/electron/dist/excalidraw-materializer-preload.cjs",
+      "--external", "electron",
+    ],
+    cwd: ROOT_DIR,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  if ((await materializerPreloadProc.exited) !== 0) {
+    console.error("❌ Excalidraw materializer preload build failed");
+    process.exit(1);
+  }
+  console.log("✅ Built Excalidraw materializer preload (Bun)");
 
   // 5. Start Electron (build already verified)
   console.log("🚀 Starting Electron...\n");

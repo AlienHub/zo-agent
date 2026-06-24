@@ -132,6 +132,12 @@ export type {
   ListSessionsResult,
   ResolvedLabelsResult,
   ResolvedStatusResult,
+  ExcalidrawSkeletonElement,
+  ExcalidrawGraphNode,
+  ExcalidrawGraphEdge,
+  ExcalidrawGraph,
+  ExcalidrawMaterializeError,
+  ExcalidrawMaterializeResult,
 } from './context.ts';
 
 export { createNodeFileSystem } from './context.ts';
@@ -146,6 +152,10 @@ export {
   handleSkillValidate,
   // Mermaid Validate
   handleMermaidValidate,
+  // Excalidraw Canvas
+  handleExcalidrawCreateCanvas,
+  handleExcalidrawSetGraph,
+  handleExcalidrawDescribeCanvas,
   // Source Test
   handleSourceTest,
   // OAuth Triggers
@@ -172,6 +182,9 @@ export type {
   ConfigValidateArgs,
   SkillValidateArgs,
   MermaidValidateArgs,
+  ExcalidrawCreateCanvasArgs,
+  ExcalidrawSetGraphArgs,
+  ExcalidrawDescribeCanvasArgs,
   SourceTestArgs,
   SourceOAuthTriggerArgs,
   GoogleOAuthTriggerArgs,
@@ -192,6 +205,12 @@ export {
   ConfigValidateSchema,
   SkillValidateSchema,
   MermaidValidateSchema,
+  ExcalidrawSkeletonSchema,
+  ExcalidrawCreateCanvasSchema,
+  ExcalidrawGraphNodeSchema,
+  ExcalidrawGraphEdgeSchema,
+  ExcalidrawSetGraphSchema,
+  ExcalidrawDescribeCanvasSchema,
   SourceTestSchema,
   SourceOAuthTriggerSchema,
   CredentialPromptSchema,

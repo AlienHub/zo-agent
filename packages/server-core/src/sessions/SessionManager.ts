@@ -124,6 +124,7 @@ interface SessionRuntimeHooks {
   captureException: (error: unknown, context?: { errorSource?: string; sessionId?: string }) => void
   onSessionStarted: () => void
   onSessionStopped: () => void
+  materializeCanvas?: (graph: import('@craft-agent/session-tools-core').ExcalidrawGraph) => Promise<import('@craft-agent/session-tools-core').ExcalidrawMaterializeResult>
 }
 
 const defaultSessionRuntimeHooks: SessionRuntimeHooks = {
@@ -4143,6 +4144,10 @@ export class SessionManager implements ISessionManager {
 
       // Wire up session self-management tools (set_session_labels, set_session_status, etc.)
       mergeSessionScopedToolCallbacks(managed.id, {
+        materializeCanvasFn: sessionRuntimeHooks.materializeCanvas,
+        notifyResourceUpdatedFn: async (path: string) => {
+          this.notifyResourceUpdated(managed.id, path)
+        },
         setSessionLabelsFn: async (sessionId: string | undefined, labels: string[]) => {
           await this.setSessionLabels(sessionId ?? managed.id, labels)
         },
@@ -5467,6 +5472,19 @@ export class SessionManager implements ISessionManager {
 
     saveSessionResourceAnnotations(managed.workspace.rootPath, sessionId, managed.resourceAnnotations)
     this.sendEvent({ type: 'resource_annotations_updated', sessionId, resource, annotations: nextGroup.annotations }, managed.workspace.id)
+  }
+
+  /**
+   * Notify renderers that a session-owned resource file changed on disk.
+   */
+  notifyResourceUpdated(sessionId: string, path: string): void {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) {
+      sessionLog.warn(`Cannot notify resource update: session ${sessionId} not found`)
+      return
+    }
+
+    this.sendEvent({ type: 'resource_updated', sessionId, path }, managed.workspace.id)
   }
 
   /**

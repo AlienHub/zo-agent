@@ -33,6 +33,7 @@ export {
   getSessionPath,
   getSessionFilePath,
   getSessionAttachmentsPath,
+  getSessionCanvasesPath,
   getSessionPlansPath,
   ensureAttachmentsDir,
   loadSessionResourceAnnotations,
@@ -127,4 +128,3 @@ export {
   validateBundle,
   MAX_BUNDLE_SIZE_BYTES,
 } from './bundle.ts';
-

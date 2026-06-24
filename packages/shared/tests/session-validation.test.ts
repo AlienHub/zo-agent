@@ -7,7 +7,10 @@
  * 2. The actual storage functions produce safe paths (integration tests)
  */
 import { describe, it, expect } from 'bun:test';
+import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 import { join, normalize } from 'path';
+import { getWorkspaceSessionsPath } from '../src/workspaces/storage.ts';
 import {
   validateSessionId,
   sanitizeSessionId,
@@ -16,8 +19,10 @@ import {
 import {
   getSessionPath,
   getSessionAttachmentsPath,
+  getSessionCanvasesPath,
   getSessionPlansPath,
   getSessionDownloadsPath,
+  ensureSessionDir,
 } from '../src/sessions/storage.ts';
 
 // ============================================================
@@ -230,6 +235,27 @@ describe('getSessionAttachmentsPath - defense in depth', () => {
     expect(result).not.toBe('/tmp/attachments');
     expect(result).toBe(`${expectedSessionsDir}/tmp/attachments`);
     expect(result.startsWith(expectedSessionsDir)).toBe(true);
+  });
+});
+
+describe('getSessionCanvasesPath - session canvas storage', () => {
+  it('returns a canvases path inside the sanitized session directory', () => {
+    const workspaceRoot = '/tmp/workspace';
+    const result = getSessionCanvasesPath(workspaceRoot, '../../../tmp');
+
+    expect(normalize(result)).toBe(normalize(join(getWorkspaceSessionsPath(workspaceRoot), 'tmp', 'canvases')));
+  });
+
+  it('ensureSessionDir creates the canvases directory', () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'session-canvases-'));
+    try {
+      ensureSessionDir(workspaceRoot, '260202-swift-river');
+      const canvasesPath = getSessionCanvasesPath(workspaceRoot, '260202-swift-river');
+
+      expect(existsSync(canvasesPath)).toBe(true);
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
   });
 });
 

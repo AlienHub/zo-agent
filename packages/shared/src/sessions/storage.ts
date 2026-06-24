@@ -6,6 +6,7 @@
  * Each session folder contains:
  * - session.jsonl (main data in JSONL format: line 1 = header, lines 2+ = messages)
  * - attachments/ (file attachments)
+ * - canvases/ (agent-generated Excalidraw canvas files)
  * - plans/ (plan files for Safe Mode)
  * - data/ (transform_data tool output: JSON files for datatable/spreadsheet blocks)
  * - long_responses/ (full tool results that were summarized due to size limits)
@@ -91,7 +92,7 @@ export function ensureSessionDir(workspaceRootPath: string, sessionId: string): 
   if (!existsSync(sessionDir)) {
     mkdirSync(sessionDir, { recursive: true });
   }
-  // Also create plans, attachments, long_responses, and downloads directories
+  // Also create plans, attachments, canvases, long_responses, and downloads directories
   const plansDir = join(sessionDir, 'plans');
   if (!existsSync(plansDir)) {
     mkdirSync(plansDir, { recursive: true });
@@ -99,6 +100,10 @@ export function ensureSessionDir(workspaceRootPath: string, sessionId: string): 
   const attachmentsDir = join(sessionDir, 'attachments');
   if (!existsSync(attachmentsDir)) {
     mkdirSync(attachmentsDir, { recursive: true });
+  }
+  const canvasesDir = join(sessionDir, 'canvases');
+  if (!existsSync(canvasesDir)) {
+    mkdirSync(canvasesDir, { recursive: true });
   }
   const longResponsesDir = join(sessionDir, 'long_responses');
   if (!existsSync(longResponsesDir)) {
@@ -122,6 +127,13 @@ export function ensureSessionDir(workspaceRootPath: string, sessionId: string): 
  */
 export function getSessionAttachmentsPath(workspaceRootPath: string, sessionId: string): string {
   return join(getSessionPath(workspaceRootPath, sessionId), 'attachments');
+}
+
+/**
+ * Get the canvases directory for a session
+ */
+export function getSessionCanvasesPath(workspaceRootPath: string, sessionId: string): string {
+  return join(getSessionPath(workspaceRootPath, sessionId), 'canvases');
 }
 
 /**

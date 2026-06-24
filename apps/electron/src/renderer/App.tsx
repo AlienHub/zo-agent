@@ -249,6 +249,15 @@ export default function App() {
   const updateSessionDirect = useSetAtom(updateSessionAtom)
   const replaceLoadedSession = useSetAtom(replaceLoadedSessionAtom)
   const store = useStore()
+  const resourceUpdateCallbacksRef = useRef(new Map<string, Set<() => void>>())
+
+  const dispatchResourceUpdated = useCallback((path: string) => {
+    const callbacks = resourceUpdateCallbacksRef.current.get(path)
+    if (!callbacks) return
+    for (const callback of Array.from(callbacks)) {
+      callback()
+    }
+  }, [])
 
   // Helper to update a session by ID with partial fields
   // Uses per-session atom directly instead of updating an array
@@ -911,6 +920,11 @@ export default function App() {
         return
       }
 
+      if (event.type === 'resource_updated') {
+        dispatchResourceUpdated(event.path)
+        return
+      }
+
       const agentEvent = event as unknown as AgentEvent
 
       // Track activity for stale session watchdog
@@ -1018,6 +1032,7 @@ export default function App() {
     syncSessionOptionsFromSession,
     applyPermissionModeState,
     reconcilePermissionModeState,
+    dispatchResourceUpdated,
   ])
 
   // Transport reconnect recovery — refresh session metadata plus active/processing
@@ -1878,6 +1893,18 @@ export default function App() {
     onReadFileDataUrl: (path: string) => window.electronAPI.readFileDataUrl(path),
     // Read file as binary Uint8Array (used by PDF preview blocks)
     onReadFileBinary: (path: string) => window.electronAPI.readFileBinary(path),
+    // Subscribe to file-backed resource updates (used by Excalidraw src blocks)
+    onResourceUpdated: (path: string, callback: () => void) => {
+      const callbacks = resourceUpdateCallbacksRef.current.get(path) ?? new Set<() => void>()
+      callbacks.add(callback)
+      resourceUpdateCallbacksRef.current.set(path, callbacks)
+      return () => {
+        callbacks.delete(callback)
+        if (callbacks.size === 0) {
+          resourceUpdateCallbacksRef.current.delete(path)
+        }
+      }
+    },
     // Open a URL or local HTML file in the dedicated in-app browser surface
     onOpenInAppBrowser: async (target: { url?: string; filePath?: string }) => {
       try {

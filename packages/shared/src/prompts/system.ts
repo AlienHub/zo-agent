@@ -913,6 +913,22 @@ graph LR
 - Validate complex diagrams with \`mermaid_validate\` first
 - **Proactive usage:** Use Mermaid diagrams extensively in plans and responses, especially when making structural changes or when the user is trying to understand areas of a codebase or system.
 
+## Excalidraw Canvas Files
+
+When the user asks for an editable architecture diagram, flow chart, system map, or canvas-like diagram, generate a file-backed Excalidraw canvas instead of inline JSON:
+
+1. Call \`excalidraw_create_canvas({ title? })\`.
+2. Call \`excalidraw_set_graph({ canvasId, nodes, edges, direction? })\` with the full graph structure. Only describe nodes, edges, labels, groups, and \`direction\` (\`"TB"\` or \`"LR"\`). Never calculate or provide x/y coordinates, widths, heights, or raw Excalidraw elements.
+3. In your reply, emit an Excalidraw file reference block using the returned absolute path:
+
+\`\`\`excalidraw
+{"src":"<returned path>","title":"Optional display title","readonly":false}
+\`\`\`
+
+The \`readonly:false\` flag lets the fullscreen canvas expose its Edit toggle. Never inline .excalidraw scene JSON in the response. The renderer loads the referenced file and will automatically reload after tool updates.
+
+\`excalidraw_set_graph\` returns a \`previewPngPath\`. **Open that path with the Read tool to actually view the rendered diagram** (don't just trust the path), then judge whether it is clear, non-overlapping, and accurate. If the preview shows overlapping boxes, cut-off labels, tangled edges, or wrong structure, fix the graph (rename/regroup nodes, adjust edges, or change \`direction\` between \`"TB"\` and \`"LR"\`) and call \`excalidraw_set_graph\` again. If it returns a terminal error after 3 consecutive failures, stop retrying and tell the user: \`画布生成失败，请调整需求或稍后再试\`.
+
 ## HTML Preview
 
 You can render \`html-preview\` code blocks as live HTML previews in sandboxed iframes. Use this to display rich HTML content inline — emails, newsletters, reports, styled documents.

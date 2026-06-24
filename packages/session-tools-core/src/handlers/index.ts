@@ -21,6 +21,18 @@ export type { SkillValidateArgs } from './skill-validate.ts';
 export { handleMermaidValidate } from './mermaid-validate.ts';
 export type { MermaidValidateArgs } from './mermaid-validate.ts';
 
+// Excalidraw Canvas
+export {
+  handleExcalidrawCreateCanvas,
+  handleExcalidrawSetGraph,
+  handleExcalidrawDescribeCanvas,
+} from './excalidraw-canvas.ts';
+export type {
+  ExcalidrawCreateCanvasArgs,
+  ExcalidrawSetGraphArgs,
+  ExcalidrawDescribeCanvasArgs,
+} from './excalidraw-canvas.ts';
+
 // Source Test
 export { handleSourceTest } from './source-test.ts';
 export type { SourceTestArgs } from './source-test.ts';

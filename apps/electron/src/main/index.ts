@@ -119,6 +119,7 @@ import { initNotificationService, initBadgeIcon, initInstanceBadge, updateBadgeC
 import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating, setBeforeUpdateQuitHook } from './auto-update'
 import type { EventSink } from '@craft-agent/server-core/transport'
 import { validateGitBashPath, checkVCRedistInstalled } from '@craft-agent/server-core/services'
+import { getExcalidrawMaterializerService, shutdownExcalidrawMaterializerService } from './excalidraw-materializer'
 
 // Initialize electron-log for renderer process support
 log.initialize()
@@ -640,6 +641,7 @@ app.whenReady().then(async () => {
             updateBadgeCount,
             onSessionStarted,
             onSessionStopped,
+            materializeCanvas: (graph) => getExcalidrawMaterializerService().materializeCanvas(graph),
             captureException: (error, context) => {
               Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
                 tags: {
@@ -1176,6 +1178,9 @@ app.on('before-quit', async (event) => {
 
   // Ensure Cmd+Q/app quit bypasses layered window close interception (Cmd+W behavior).
   windowManager?.setAppQuitting(true)
+
+  // Tear down the hidden Excalidraw materializer window + pending requests.
+  shutdownExcalidrawMaterializerService()
 
   if (windowManager) {
     const windows = windowManager.getWindowStates()

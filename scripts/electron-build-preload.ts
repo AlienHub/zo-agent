@@ -4,6 +4,7 @@
  * Builds BOTH preload entry points:
  * - apps/electron/src/preload/bootstrap.ts -> dist/bootstrap-preload.cjs
  * - apps/electron/src/preload/browser-toolbar.ts -> dist/browser-toolbar-preload.cjs
+ * - apps/electron/src/preload/excalidraw-materializer.ts -> dist/excalidraw-materializer-preload.cjs
  */
 
 import { spawn } from "bun";
@@ -23,6 +24,11 @@ const OUTPUTS = [
     entry: "apps/electron/src/preload/browser-toolbar.ts",
     outfile: "apps/electron/dist/browser-toolbar-preload.cjs",
     label: "browser-toolbar-preload.cjs",
+  },
+  {
+    entry: "apps/electron/src/preload/excalidraw-materializer.ts",
+    outfile: "apps/electron/dist/excalidraw-materializer-preload.cjs",
+    label: "excalidraw-materializer-preload.cjs",
   },
 ] as const;
 
@@ -83,15 +89,18 @@ async function verifyJsFile(filePath: string): Promise<{ valid: boolean; error?:
 }
 
 async function buildEntry(entry: string, outfile: string): Promise<number> {
+  // Use Bun's native bundler (NOT esbuild). On some machines the esbuild binary
+  // is killed/hung by security tooling and lands in an uninterruptible state
+  // that even a timeout-kill can't clear, blocking the dev launch. Bun's
+  // bundler produces equivalent CJS preload bundles without that risk.
   const proc = spawn({
     cmd: [
-      "bun", "run", "esbuild",
+      "bun", "build",
       entry,
-      "--bundle",
-      "--platform=node",
+      "--target=node",
       "--format=cjs",
       `--outfile=${outfile}`,
-      "--external:electron",
+      "--external", "electron",
     ],
     cwd: ROOT_DIR,
     stdout: "inherit",

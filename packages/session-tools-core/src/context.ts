@@ -288,6 +288,23 @@ export interface SessionToolContext {
   testGoogleSource?(source: SourceConfig): Promise<ApiTestResult>;
 
   // ============================================================
+  // Excalidraw Canvas Materialization
+  // ============================================================
+
+  /**
+   * Materialize a coordinate-free Excalidraw graph into a legal .excalidraw
+   * scene. Electron injects this via a hidden DOM renderer because
+   * @excalidraw/excalidraw's convertToExcalidrawElements and PNG export depend
+   * on DOM APIs.
+   */
+  materializeCanvas?(graph: ExcalidrawGraph): Promise<ExcalidrawMaterializeResult>;
+
+  /**
+   * Notify renderers that a session-owned resource file changed.
+   */
+  notifyResourceUpdated?(path: string): void | Promise<void>;
+
+  // ============================================================
   // Preferences (for update_user_preferences)
   // ============================================================
 
@@ -388,6 +405,64 @@ export interface SessionToolContext {
    */
   dataPath?: string;
 }
+
+export type ExcalidrawSkeletonElement =
+  | {
+    id?: string;
+    type: 'rectangle';
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    label?: string;
+  }
+  | {
+    id?: string;
+    type: 'text';
+    x: number;
+    y: number;
+    width?: number;
+    height?: number;
+    label: string;
+  }
+  | {
+    id?: string;
+    type: 'arrow';
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    label?: string;
+    start: string;
+    end: string;
+  };
+
+export interface ExcalidrawGraphNode {
+  id: string;
+  label: string;
+  group?: string;
+}
+
+export interface ExcalidrawGraphEdge {
+  from: string;
+  to: string;
+  label?: string;
+}
+
+export interface ExcalidrawGraph {
+  nodes: ExcalidrawGraphNode[];
+  edges: ExcalidrawGraphEdge[];
+  direction?: 'TB' | 'LR';
+}
+
+export interface ExcalidrawMaterializeError {
+  reason: string;
+  message: string;
+}
+
+export type ExcalidrawMaterializeResult =
+  | { ok: true; scene: unknown; previewPng?: string }
+  | { ok: false; error: ExcalidrawMaterializeError };
 
 // ============================================================
 // Session Self-Management Types — Resolution

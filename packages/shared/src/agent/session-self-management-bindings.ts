@@ -93,6 +93,22 @@ export function attachSessionSelfManagementBindings(
     enumerable: true,
   });
 
+  Object.defineProperty(context, 'materializeCanvas', {
+    get() {
+      return getSessionScopedToolCallbacks(sessionId)?.materializeCanvasFn;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
+  Object.defineProperty(context, 'notifyResourceUpdated', {
+    get() {
+      return getSessionScopedToolCallbacks(sessionId)?.notifyResourceUpdatedFn;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
   // Messaging gateway bindings
   Object.defineProperty(context, 'getMessagingBindings', {
     get() {

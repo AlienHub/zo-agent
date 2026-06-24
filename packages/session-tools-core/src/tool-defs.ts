@@ -34,6 +34,11 @@ import { handleTransformData } from './handlers/transform-data.ts';
 import { handleScriptSandbox } from './handlers/script-sandbox.ts';
 import { handleRenderTemplate } from './handlers/render-template.ts';
 import { handleSendDeveloperFeedback } from './handlers/send-developer-feedback.ts';
+import {
+  handleExcalidrawCreateCanvas,
+  handleExcalidrawDescribeCanvas,
+  handleExcalidrawSetGraph,
+} from './handlers/excalidraw-canvas.ts';
 import { handleSetSessionLabels } from './handlers/set-session-labels.ts';
 import { handleSetSessionStatus } from './handlers/set-session-status.ts';
 import { handleGetSessionInfo } from './handlers/get-session-info.ts';
@@ -62,6 +67,71 @@ export const SkillValidateSchema = z.object({
 export const MermaidValidateSchema = z.object({
   code: z.string().describe('The mermaid diagram code to validate'),
   render: z.boolean().optional().describe('Also attempt to render (catches layout errors)'),
+});
+
+const ExcalidrawBaseSkeletonSchema = z.object({
+  id: z.string().regex(/^[A-Za-z0-9_-]+$/).optional().describe('Stable skeleton element id for references'),
+  label: z.string().optional().describe('Visible label text'),
+});
+
+const ExcalidrawRectangleSkeletonSchema = ExcalidrawBaseSkeletonSchema.extend({
+  type: z.literal('rectangle'),
+  x: z.number(),
+  y: z.number(),
+  width: z.number().positive(),
+  height: z.number().positive(),
+});
+
+const ExcalidrawTextSkeletonSchema = ExcalidrawBaseSkeletonSchema.extend({
+  type: z.literal('text'),
+  x: z.number(),
+  y: z.number(),
+  width: z.number().positive().optional(),
+  height: z.number().positive().optional(),
+  label: z.string().describe('Text content'),
+});
+
+const ExcalidrawArrowSkeletonSchema = ExcalidrawBaseSkeletonSchema.extend({
+  type: z.literal('arrow'),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  start: z.string().describe('Element id the arrow starts from'),
+  end: z.string().describe('Element id the arrow ends at'),
+});
+
+export const ExcalidrawSkeletonSchema = z.discriminatedUnion('type', [
+  ExcalidrawRectangleSkeletonSchema,
+  ExcalidrawTextSkeletonSchema,
+  ExcalidrawArrowSkeletonSchema,
+]);
+
+export const ExcalidrawCreateCanvasSchema = z.object({
+  title: z.string().optional().describe('Optional display title for the canvas'),
+});
+
+export const ExcalidrawGraphNodeSchema = z.object({
+  id: z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Stable node id for edge references'),
+  label: z.string().describe('Visible node label text'),
+  group: z.string().optional().describe('Optional semantic group used for stable palette assignment'),
+});
+
+export const ExcalidrawGraphEdgeSchema = z.object({
+  from: z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Source node id'),
+  to: z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Target node id'),
+  label: z.string().optional().describe('Optional visible edge label'),
+});
+
+export const ExcalidrawSetGraphSchema = z.object({
+  canvasId: z.string().describe('Canvas id returned by excalidraw_create_canvas'),
+  nodes: z.array(ExcalidrawGraphNodeSchema).describe('Full replacement list of graph nodes. Do not include coordinates or sizes.'),
+  edges: z.array(ExcalidrawGraphEdgeSchema).describe('Full replacement list of graph edges. Reference nodes by id.'),
+  direction: z.enum(['TB', 'LR']).optional().describe('Preferred layout direction: top-to-bottom or left-to-right'),
+});
+
+export const ExcalidrawDescribeCanvasSchema = z.object({
+  canvasId: z.string().describe('Canvas id returned by excalidraw_create_canvas'),
 });
 
 export const SourceTestSchema = z.object({
@@ -270,6 +340,25 @@ Use this when:
 - Debugging a diagram that failed to render
 
 Returns validation result with specific error messages if invalid.`,
+
+  excalidraw_create_canvas: `Create a session-scoped Excalidraw canvas file.
+
+Use this before generating architecture diagrams, flow charts, or other editable canvases. The tool creates:
+- {sessionDir}/canvases/{canvasId}.graph.json as your coordinate-free work model
+- {sessionDir}/canvases/{canvasId}.excalidraw as the renderable file
+
+After creating, call excalidraw_set_graph with a full replacement graph.`,
+
+  excalidraw_set_graph: `Replace the coordinate-free graph for a session-scoped Excalidraw canvas.
+
+Provide only nodes, edges, and an optional direction. Do not calculate x/y coordinates, sizes, or raw Excalidraw JSON yourself.
+The backend measures text, lays out the graph with dagre, applies the shared canvasScene style, materializes it via @excalidraw/excalidraw in a DOM renderer, writes the .excalidraw file, saves a preview PNG, and broadcasts a resource update.
+
+Use the returned previewPngPath to inspect clarity and accuracy. If validation or preview review fails, fix the graph and retry. After 3 consecutive failures for the same canvas, the tool returns a terminal error and you must stop retrying and tell the user: 画布生成失败，请调整需求或稍后再试`,
+
+  excalidraw_describe_canvas: `Describe a session-scoped Excalidraw canvas from its stored graph model.
+
+Use this to inspect existing generated nodes and edges before answering follow-up questions or regenerating the full canvas.`,
 
   source_test: `Validate, test, and (by default) activate a source configuration.
 
@@ -533,6 +622,9 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'config_validate', description: TOOL_DESCRIPTIONS.config_validate, inputSchema: ConfigValidateSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleConfigValidate },
   { name: 'skill_validate', description: TOOL_DESCRIPTIONS.skill_validate, inputSchema: SkillValidateSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleSkillValidate },
   { name: 'mermaid_validate', description: TOOL_DESCRIPTIONS.mermaid_validate, inputSchema: MermaidValidateSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleMermaidValidate },
+  { name: 'excalidraw_create_canvas', description: TOOL_DESCRIPTIONS.excalidraw_create_canvas, inputSchema: ExcalidrawCreateCanvasSchema, executionMode: 'registry', safeMode: 'allow', handler: handleExcalidrawCreateCanvas },
+  { name: 'excalidraw_set_graph', description: TOOL_DESCRIPTIONS.excalidraw_set_graph, inputSchema: ExcalidrawSetGraphSchema, executionMode: 'registry', safeMode: 'allow', handler: handleExcalidrawSetGraph },
+  { name: 'excalidraw_describe_canvas', description: TOOL_DESCRIPTIONS.excalidraw_describe_canvas, inputSchema: ExcalidrawDescribeCanvasSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleExcalidrawDescribeCanvas },
   { name: 'source_test', description: TOOL_DESCRIPTIONS.source_test, inputSchema: SourceTestSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSourceTest },
   { name: 'source_oauth_trigger', description: TOOL_DESCRIPTIONS.source_oauth_trigger, inputSchema: SourceOAuthTriggerSchema, executionMode: 'registry', safeMode: 'block', handler: handleSourceOAuthTrigger },
   { name: 'source_google_oauth_trigger', description: TOOL_DESCRIPTIONS.source_google_oauth_trigger, inputSchema: SourceOAuthTriggerSchema, executionMode: 'registry', safeMode: 'block', handler: handleGoogleOAuthTrigger },
