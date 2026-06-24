@@ -252,10 +252,12 @@ export function ExcalidrawCanvas({
         onChange={handleChange}
       />
       {children}
-      {/* Zoom controls reveal on hover; they drive Excalidraw's own zoom. */}
+      {/* Zoom controls reveal on hover; they drive Excalidraw's own zoom.
+          Bottom-right keeps clear of the top-right fullscreen / edit chrome;
+          the preset dropdown opens upward so it isn't clipped at the edge. */}
       <div
         className={cn(
-          'pointer-events-none absolute right-2 top-2 opacity-0 transition-opacity duration-150',
+          'pointer-events-none absolute bottom-2 right-2 opacity-0 transition-opacity duration-150',
           'group-hover:pointer-events-auto group-hover:opacity-100',
           'focus-within:pointer-events-auto focus-within:opacity-100',
         )}
@@ -272,6 +274,7 @@ export function ExcalidrawCanvas({
           onZoomToFit={fitToView}
           onReset={() => applyZoom(1)}
           resetDisabled={Math.abs(scale - 1) < 0.005}
+          dropdownPlacement="up"
         />
       </div>
     </div>
