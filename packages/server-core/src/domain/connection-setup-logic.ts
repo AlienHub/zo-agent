@@ -136,6 +136,7 @@ export const BUILT_IN_CONNECTION_TEMPLATES: Record<string, {
   providerType: LlmConnection['providerType'] | ((hasCustomEndpoint: boolean) => LlmConnection['providerType'])
   authType: LlmConnection['authType'] | ((hasCustomEndpoint: boolean) => LlmConnection['authType'])
   piAuthProvider?: string
+  customEndpointApi?: CustomEndpointApi
 }> = {
   'anthropic-api': {
     name: (h) => h ? 'Custom Anthropic-Compatible' : 'Anthropic (API Key)',
@@ -165,6 +166,34 @@ export const BUILT_IN_CONNECTION_TEMPLATES: Record<string, {
     authType: 'api_key',
     // piAuthProvider set dynamically from setup.piAuthProvider
   },
+  'opencode-zen-anthropic': {
+    name: 'OpenCode Zen (Claude / Qwen)',
+    providerType: 'pi_compat',
+    authType: 'api_key_with_endpoint',
+    piAuthProvider: 'opencode-zen-anthropic',
+    customEndpointApi: 'anthropic-messages',
+  },
+  'opencode-zen-openai': {
+    name: 'OpenCode Zen (GPT / GLM / Kimi)',
+    providerType: 'pi_compat',
+    authType: 'api_key_with_endpoint',
+    piAuthProvider: 'opencode-zen-openai',
+    customEndpointApi: 'openai-completions',
+  },
+  'opencode-go-anthropic': {
+    name: 'OpenCode Go (MiniMax / Qwen)',
+    providerType: 'pi_compat',
+    authType: 'api_key_with_endpoint',
+    piAuthProvider: 'opencode-go-anthropic',
+    customEndpointApi: 'anthropic-messages',
+  },
+  'opencode-go-openai': {
+    name: 'OpenCode Go (GLM / Kimi / DeepSeek)',
+    providerType: 'pi_compat',
+    authType: 'api_key_with_endpoint',
+    piAuthProvider: 'opencode-go-openai',
+    customEndpointApi: 'openai-completions',
+  },
 }
 
 // ============================================================
@@ -189,6 +218,10 @@ const PI_AUTH_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   'minimax-cn': 'Minimax CN',
   'kimi-coding': 'Kimi (Coding)',
   'vercel-ai-gateway': 'Vercel AI Gateway',
+  'opencode-zen-anthropic': 'OpenCode Zen',
+  'opencode-zen-openai': 'OpenCode Zen',
+  'opencode-go-anthropic': 'OpenCode Go',
+  'opencode-go-openai': 'OpenCode Go',
 }
 
 /** Get a human-readable display name for a Pi auth provider key */
@@ -239,6 +272,7 @@ export function createBuiltInConnection(slug: string, baseUrl?: string | null): 
     defaultModel: getDefaultModelForConnection(providerType, template.piAuthProvider),
     modelSelectionMode: providerType === 'pi' ? 'automaticallySyncedFromProvider' : undefined,
     piAuthProvider: template.piAuthProvider,
+    customEndpoint: template.customEndpointApi ? { api: template.customEndpointApi } : undefined,
     midStreamBehavior: defaultMidStreamBehavior(providerType),
     createdAt: Date.now(),
   }

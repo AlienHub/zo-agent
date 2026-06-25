@@ -17,6 +17,12 @@ import {
   normalizeDeprecatedModelId,
 } from './models';
 import type { CredentialManager } from '../credentials/manager.ts';
+import {
+  getOpenCodeGoAnthropicModels,
+  getOpenCodeGoOpenAiModels,
+  getOpenCodeZenAnthropicModels,
+  getOpenCodeZenOpenAiModels,
+} from './opencode-provider.ts';
 
 // ============================================================
 // Pi Model Resolver (dependency injection to avoid Pi SDK in renderer)
@@ -32,6 +38,28 @@ let _piModelResolver: PiModelResolver = () => [];
  */
 export function registerPiModelResolver(resolver: PiModelResolver): void {
   _piModelResolver = resolver;
+}
+
+// ============================================================
+// OpenCode Zen/Go catalogs (static, see opencode-provider.ts)
+// ============================================================
+
+/**
+ * OpenCode Zen/Go piAuthProvider slugs used as connection.piAuthProvider on
+ * pi_compat connections. They are NOT registered with the Pi SDK's
+ * AuthStorage — they only act as a routing key into our static catalog.
+ */
+export const OPENCODE_PI_AUTH_PROVIDERS = [
+  'opencode-go-anthropic',
+  'opencode-go-openai',
+  'opencode-zen-anthropic',
+  'opencode-zen-openai',
+] as const;
+
+export type OpenCodePiAuthProvider = (typeof OPENCODE_PI_AUTH_PROVIDERS)[number];
+
+export function isOpenCodePiAuthProvider(piAuthProvider?: string): piAuthProvider is OpenCodePiAuthProvider {
+  return !!piAuthProvider && (OPENCODE_PI_AUTH_PROVIDERS as readonly string[]).includes(piAuthProvider);
 }
 
 // ============================================================
@@ -570,8 +598,17 @@ export function modelSupportsImages(
  * @returns Model list from registry, or empty array for compat providers
  */
 export function getModelsForProviderType(providerType: LlmProviderType, piAuthProvider?: string): ModelDefinition[] {
-  // Compat providers require explicit model lists from the connection
+  // Compat providers require explicit model lists from the connection,
+  // except OpenCode Zen/Go catalogs which are seeded from a static snapshot.
   if (isCompatProvider(providerType)) {
+    if (isOpenCodePiAuthProvider(piAuthProvider)) {
+      switch (piAuthProvider) {
+        case 'opencode-go-anthropic':  return getOpenCodeGoAnthropicModels();
+        case 'opencode-go-openai':     return getOpenCodeGoOpenAiModels();
+        case 'opencode-zen-anthropic': return getOpenCodeZenAnthropicModels();
+        case 'opencode-zen-openai':    return getOpenCodeZenOpenAiModels();
+      }
+    }
     return [];
   }
 
@@ -646,6 +683,14 @@ export function getDefaultModelsForConnection(providerType: LlmProviderType, piA
       });
     }
     return models;
+  }
+  if (providerType === 'pi_compat' && piAuthProvider) {
+    switch (piAuthProvider) {
+      case 'opencode-go-anthropic':  return getOpenCodeGoAnthropicModels();
+      case 'opencode-go-openai':     return getOpenCodeGoOpenAiModels();
+      case 'opencode-zen-anthropic': return getOpenCodeZenAnthropicModels();
+      case 'opencode-zen-openai':    return getOpenCodeZenOpenAiModels();
+    }
   }
   if (providerType === 'pi_compat') return [];  // Dynamic — user specifies
   // anthropic
