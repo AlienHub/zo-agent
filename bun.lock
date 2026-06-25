@@ -45,6 +45,7 @@
         "jotai": "^2.16.0",
         "js-yaml": "^4.1.1",
         "katex": "^0.16.33",
+        "koffi": "^2.15.1",
         "linkify-it": "^5.0.0",
         "lucide-react": "^0.561.0",
         "marked": "^17.0.1",
@@ -433,6 +434,7 @@
     "electron-winstaller",
     "protobufjs",
     "electron",
+    "koffi",
     "@sentry/cli",
   ],
   "packages": {
@@ -2753,6 +2755,8 @@
     "khroma": ["khroma@2.1.0", "", {}, "sha512-Ls993zuzfayK269Svk9hzpeGUKob/sIgZzyHYdjQoAdQetRKpOLj+k/QQQ/6Qi0Yz65mlROrfd+Ev+1+7dz9Kw=="],
 
     "kind-of": ["kind-of@6.0.3", "", {}, "sha512-dcS1ul+9tmeD95T+x28/ehLgd9mENa3LsvDTtzm3vyBEO7RPptvAD+t44WVXaUjTBRcrpFeFlC8WCruUR456hw=="],
+
+    "koffi": ["koffi@2.16.2", "", {}, "sha512-owU0MRwv6xkrVqCd+33uw6BaYppkTRXbO/rVdJNI2dvZG0gzyRhYwW25eWtc5pauwK8TGh3AbkFONSezdykfSA=="],
 
     "langium": ["langium@3.3.1", "", { "dependencies": { "chevrotain": "~11.0.3", "chevrotain-allstar": "~0.3.0", "vscode-languageserver": "~9.0.1", "vscode-languageserver-textdocument": "~1.0.11", "vscode-uri": "~3.0.8" } }, "sha512-QJv/h939gDpvT+9SiLVlY7tZC3xB2qK57v0J04Sh9wpMb6MP1q8gB21L3WIo8T5P1MSMg3Ep14L7KkDCFG3y4w=="],
 
