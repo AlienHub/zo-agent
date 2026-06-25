@@ -101,6 +101,8 @@ describe('resolvePresetStateForBaseUrlChange', () => {
 
 describe('resolveCustomEndpointPayload', () => {
   const BRANDED = new Set(['manifest'])
+  const NO_BRANDED_ANTHROPIC = new Set<string>()
+  const NO_ROUTING_SLUGS = new Set<string>()
 
   it('routes branded openai-compat presets through openai-completions regardless of toggle', () => {
     expect(resolveCustomEndpointPayload({
@@ -108,6 +110,8 @@ describe('resolveCustomEndpointPayload', () => {
       baseUrl: 'https://app.manifest.build/v1',
       customApi: 'anthropic-messages',
       brandedOpenAiCompatPresets: BRANDED,
+      brandedAnthropicCompatPresets: NO_BRANDED_ANTHROPIC,
+      brandedRoutingSlugPresets: NO_ROUTING_SLUGS,
       fallbackPiAuthProvider: undefined,
     })).toEqual({
       customEndpoint: { api: 'openai-completions' },
@@ -121,6 +125,8 @@ describe('resolveCustomEndpointPayload', () => {
       baseUrl: 'https://my-endpoint.example.com',
       customApi: 'anthropic-messages',
       brandedOpenAiCompatPresets: BRANDED,
+      brandedAnthropicCompatPresets: NO_BRANDED_ANTHROPIC,
+      brandedRoutingSlugPresets: NO_ROUTING_SLUGS,
       fallbackPiAuthProvider: undefined,
     })).toEqual({
       customEndpoint: { api: 'anthropic-messages' },
@@ -134,6 +140,8 @@ describe('resolveCustomEndpointPayload', () => {
       baseUrl: 'https://openrouter.ai/api/v1',
       customApi: 'openai-completions',
       brandedOpenAiCompatPresets: BRANDED,
+      brandedAnthropicCompatPresets: NO_BRANDED_ANTHROPIC,
+      brandedRoutingSlugPresets: NO_ROUTING_SLUGS,
       fallbackPiAuthProvider: 'openrouter',
     })).toEqual({
       customEndpoint: undefined,
@@ -147,10 +155,45 @@ describe('resolveCustomEndpointPayload', () => {
       baseUrl: '',
       customApi: 'openai-completions',
       brandedOpenAiCompatPresets: BRANDED,
+      brandedAnthropicCompatPresets: NO_BRANDED_ANTHROPIC,
+      brandedRoutingSlugPresets: NO_ROUTING_SLUGS,
       fallbackPiAuthProvider: undefined,
     })).toEqual({
       customEndpoint: undefined,
       piAuthProvider: undefined,
+    })
+  })
+
+  it('routes OpenCode Zen anthropic preset through anthropic-messages with its routing slug', () => {
+    const OPENCODE = new Set(['opencode-zen-anthropic', 'opencode-zen-openai', 'opencode-go-anthropic', 'opencode-go-openai'])
+    const ANTHROPIC_COMPAT = new Set(['opencode-zen-anthropic', 'opencode-go-anthropic'])
+    expect(resolveCustomEndpointPayload({
+      activePreset: 'opencode-zen-anthropic',
+      baseUrl: 'https://opencode.ai/zen/v1',
+      customApi: 'openai-completions',
+      brandedOpenAiCompatPresets: new Set(['opencode-zen-openai', 'opencode-go-openai']),
+      brandedAnthropicCompatPresets: ANTHROPIC_COMPAT,
+      brandedRoutingSlugPresets: OPENCODE,
+      fallbackPiAuthProvider: 'opencode-zen-anthropic',
+    })).toEqual({
+      customEndpoint: { api: 'anthropic-messages' },
+      piAuthProvider: 'opencode-zen-anthropic',
+    })
+  })
+
+  it('routes OpenCode Go openai preset through openai-completions with its routing slug', () => {
+    const OPENCODE = new Set(['opencode-zen-anthropic', 'opencode-zen-openai', 'opencode-go-anthropic', 'opencode-go-openai'])
+    expect(resolveCustomEndpointPayload({
+      activePreset: 'opencode-go-openai',
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      customApi: 'anthropic-messages',
+      brandedOpenAiCompatPresets: new Set(['opencode-zen-openai', 'opencode-go-openai']),
+      brandedAnthropicCompatPresets: new Set(['opencode-zen-anthropic', 'opencode-go-anthropic']),
+      brandedRoutingSlugPresets: OPENCODE,
+      fallbackPiAuthProvider: 'opencode-go-openai',
+    })).toEqual({
+      customEndpoint: { api: 'openai-completions' },
+      piAuthProvider: 'opencode-go-openai',
     })
   })
 })

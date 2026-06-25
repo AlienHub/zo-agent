@@ -32,6 +32,14 @@ import {
 } from "./submit-helpers"
 
 import type { CustomEndpointApi, CustomEndpointConfig } from '@config/llm-connections'
+import {
+  OPENCODE_ZEN_BASE_URL,
+  OPENCODE_GO_BASE_URL,
+  getOpenCodeZenAnthropicModels,
+  getOpenCodeZenOpenAiModels,
+  getOpenCodeGoAnthropicModels,
+  getOpenCodeGoOpenAiModels,
+} from '@config/opencode-provider'
 
 export type ApiKeyStatus = 'idle' | 'validating' | 'success' | 'error'
 
@@ -113,6 +121,10 @@ const ANTHROPIC_PRESETS: Preset[] = [
   { key: 'kimi-coding', label: 'Kimi (Coding)', url: 'https://api.kimi.com/coding', placeholder: 'sk-kimi-...' },
   { key: 'vercel-ai-gateway', label: 'Vercel AI Gateway', url: 'https://ai-gateway.vercel.sh', placeholder: 'Paste your key here...' },
   { key: 'manifest', label: 'Manifest', url: 'https://app.manifest.build/v1', placeholder: 'mnfst_...' },
+  { key: 'opencode-zen-anthropic', label: 'OpenCode Zen (Claude / Qwen)', url: OPENCODE_ZEN_BASE_URL, placeholder: 'Paste your key here...' },
+  { key: 'opencode-zen-openai', label: 'OpenCode Zen (GPT / GLM / Kimi)', url: OPENCODE_ZEN_BASE_URL, placeholder: 'Paste your key here...' },
+  { key: 'opencode-go-anthropic', label: 'OpenCode Go (MiniMax / Qwen)', url: OPENCODE_GO_BASE_URL, placeholder: 'Paste your key here...' },
+  { key: 'opencode-go-openai', label: 'OpenCode Go (GLM / Kimi / DeepSeek)', url: OPENCODE_GO_BASE_URL, placeholder: 'Paste your key here...' },
   { key: 'custom', label: 'Custom', url: '', placeholder: 'Paste your key here...' },
 ]
 
@@ -121,7 +133,32 @@ const ANTHROPIC_PRESETS: Preset[] = [
  * OpenAI-compatible protocol. They behave like 'custom' on submit (customEndpoint
  * gets pinned to openai-completions) but stay branded in the dropdown.
  */
-const OPENAI_COMPAT_CUSTOM_URL_PRESETS: ReadonlySet<string> = new Set(['manifest'])
+const OPENAI_COMPAT_CUSTOM_URL_PRESETS: ReadonlySet<string> = new Set([
+  'manifest',
+  'opencode-zen-openai',
+  'opencode-go-openai',
+])
+
+/**
+ * Branded presets whose endpoint speaks the Anthropic Messages protocol.
+ * customEndpoint gets pinned to anthropic-messages for these.
+ */
+const ANTHROPIC_COMPAT_CUSTOM_URL_PRESETS: ReadonlySet<string> = new Set([
+  'opencode-zen-anthropic',
+  'opencode-go-anthropic',
+])
+
+/**
+ * Branded presets whose preset key IS the piAuthProvider routing slug.
+ * The preset key is forwarded as piAuthProvider so the backend routes
+ * through the provider's own static catalog (see opencode-provider.ts).
+ */
+const BRANDED_ROUTING_SLUG_PRESETS: ReadonlySet<string> = new Set([
+  'opencode-zen-anthropic',
+  'opencode-zen-openai',
+  'opencode-go-anthropic',
+  'opencode-go-openai',
+])
 
 // OpenAI provider presets - for Codex backend
 // Only direct OpenAI is supported; 3PP providers (OpenRouter, Vercel, Ollama) should be
@@ -142,8 +179,18 @@ const GOOGLE_PRESETS: Preset[] = [
   { key: 'google', label: 'Google AI Studio', url: '' },
 ]
 
-/** Presets that require the Pi SDK for authentication — hidden in Anthropic API Key mode */
-const PI_ONLY_PRESET_KEYS: ReadonlySet<string> = new Set(['minimax-global', 'minimax-cn'])
+/** Presets that require the Pi SDK for authentication — hidden in Anthropic API Key mode.
+ *  OpenCode Zen/Go presets are included because they need the pi_api_key flow's
+ *  piAuthProvider routing (their preset key IS the routing slug); pure Anthropic
+ *  mode would lose that slug and the OpenCode catalog would not resolve. */
+const PI_ONLY_PRESET_KEYS: ReadonlySet<string> = new Set([
+  'minimax-global',
+  'minimax-cn',
+  'opencode-zen-anthropic',
+  'opencode-zen-openai',
+  'opencode-go-anthropic',
+  'opencode-go-openai',
+])
 
 const COMPAT_ANTHROPIC_DEFAULTS = 'claude-opus-4-8, claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5'
 const COMPAT_OPENAI_DEFAULTS = 'openai/gpt-5.2-codex, openai/gpt-5.1-codex-mini'
@@ -296,6 +343,18 @@ export function ApiKeyInput({
       setConnectionDefaultModel(COMPAT_KIMI_DEFAULTS)
     } else if (preset.key === 'manifest') {
       setConnectionDefaultModel('auto')
+    } else if (preset.key === 'opencode-zen-anthropic') {
+      setConnectionDefaultModel(getOpenCodeZenAnthropicModels().map(m => m.id).join(', '))
+      setCustomApi('anthropic-messages')
+    } else if (preset.key === 'opencode-zen-openai') {
+      setConnectionDefaultModel(getOpenCodeZenOpenAiModels().map(m => m.id).join(', '))
+      setCustomApi('openai-completions')
+    } else if (preset.key === 'opencode-go-anthropic') {
+      setConnectionDefaultModel(getOpenCodeGoAnthropicModels().map(m => m.id).join(', '))
+      setCustomApi('anthropic-messages')
+    } else if (preset.key === 'opencode-go-openai') {
+      setConnectionDefaultModel(getOpenCodeGoOpenAiModels().map(m => m.id).join(', '))
+      setCustomApi('openai-completions')
     } else if (preset.key === 'custom' || OPENAI_COMPAT_CUSTOM_URL_PRESETS.has(preset.key)) {
       setConnectionDefaultModel(providerType === 'openai' ? COMPAT_OPENAI_DEFAULTS : COMPAT_ANTHROPIC_DEFAULTS)
     } else {
@@ -405,6 +464,8 @@ export function ApiKeyInput({
       baseUrl: effectiveBaseUrl,
       customApi,
       brandedOpenAiCompatPresets: OPENAI_COMPAT_CUSTOM_URL_PRESETS,
+      brandedAnthropicCompatPresets: ANTHROPIC_COMPAT_CUSTOM_URL_PRESETS,
+      brandedRoutingSlugPresets: BRANDED_ROUTING_SLUG_PRESETS,
       fallbackPiAuthProvider: effectivePiAuthProvider,
     })
 

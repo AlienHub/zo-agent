@@ -69,21 +69,47 @@ export function resolveCustomEndpointPayload(params: {
   baseUrl: string
   customApi: CustomEndpointApi
   brandedOpenAiCompatPresets: ReadonlySet<string>
+  brandedAnthropicCompatPresets: ReadonlySet<string>
+  /**
+   * Branded presets whose preset key IS the piAuthProvider routing slug
+   * (e.g. OpenCode Zen/Go). For these, the preset key is returned as
+   * piAuthProvider instead of the generic openai/anthropic derivation, so
+   * the backend routes through the provider's own model catalog.
+   */
+  brandedRoutingSlugPresets: ReadonlySet<string>
   fallbackPiAuthProvider: string | undefined
 }): {
   customEndpoint: CustomEndpointConfig | undefined
   piAuthProvider: string | undefined
 } {
-  const { activePreset, baseUrl, customApi, brandedOpenAiCompatPresets, fallbackPiAuthProvider } = params
+  const {
+    activePreset,
+    baseUrl,
+    customApi,
+    brandedOpenAiCompatPresets,
+    brandedAnthropicCompatPresets,
+    brandedRoutingSlugPresets,
+    fallbackPiAuthProvider,
+  } = params
 
   const isBrandedOpenAiCompat = brandedOpenAiCompatPresets.has(activePreset) && !!baseUrl
-  const isCustomEndpoint = (activePreset === 'custom' && !!baseUrl) || isBrandedOpenAiCompat
-  const effectiveApi: CustomEndpointApi = isBrandedOpenAiCompat ? 'openai-completions' : customApi
+  const isBrandedAnthropicCompat = brandedAnthropicCompatPresets.has(activePreset) && !!baseUrl
+  const isBrandedCompat = isBrandedOpenAiCompat || isBrandedAnthropicCompat
+  const isCustomEndpoint = (activePreset === 'custom' && !!baseUrl) || isBrandedCompat
+  const effectiveApi: CustomEndpointApi = isBrandedAnthropicCompat
+    ? 'anthropic-messages'
+    : isBrandedOpenAiCompat
+      ? 'openai-completions'
+      : customApi
+
+  const usesRoutingSlug = isBrandedCompat && brandedRoutingSlugPresets.has(activePreset)
 
   return {
     customEndpoint: isCustomEndpoint ? { api: effectiveApi } : undefined,
     piAuthProvider: isCustomEndpoint
-      ? (effectiveApi === 'anthropic-messages' ? 'anthropic' : 'openai')
+      ? (usesRoutingSlug
+          ? activePreset
+          : (effectiveApi === 'anthropic-messages' ? 'anthropic' : 'openai'))
       : fallbackPiAuthProvider,
   }
 }
