@@ -680,6 +680,15 @@ export interface BackendConfig extends CoreBackendConfig {
   automationSystem?: AutomationSystem;
 
   /**
+   * Whether the resolved model accepts image input. Resolved by the backend
+   * factory from the connection (see `modelSupportsImages`). Lets the prompt
+   * builder suppress vision-dependent guidance (e.g. the Excalidraw "Read the
+   * preview PNG" self-review) for text-only models. Defaults to `true` when
+   * unset so callers that don't resolve it keep the vision-capable behavior.
+   */
+  modelSupportsImageInput?: boolean;
+
+  /**
    * Opaque runtime payload resolved by backend drivers.
    * This keeps provider-specific runtime details out of the public config surface.
    */

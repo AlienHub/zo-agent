@@ -35,6 +35,7 @@ import type { LlmConnectionType, CustomEndpointConfig } from '../../config/llm-c
 // Import validation helpers for provider-auth combinations
 import {
   isValidProviderAuthCombination,
+  modelSupportsImages,
 } from '../../config/llm-connections.ts';
 import { parseValidationError, type LlmValidationResult } from '../../config/llm-validation.ts';
 import type { ModelFetchResult } from '../../config/model-fetcher.ts';
@@ -183,6 +184,14 @@ export function createBackendFromResolvedContext(args: {
     authType: context.authType || getDefaultAuthType(context.provider),
     model: context.resolvedModel,
     connectionSlug: context.connection?.slug,
+    // Resolve image-input capability once here (the connection lives at this layer)
+    // so the prompt builder can gate vision-dependent guidance — e.g. the
+    // Excalidraw "Read the preview PNG" self-review step is a dead end for
+    // text-only models. Same predicate that gates image attachments at send time
+    // (filterAttachmentsForModelInput), so prompt and attachment gating never disagree.
+    modelSupportsImageInput: context.connection
+      ? modelSupportsImages(context.connection, context.resolvedModel)
+      : true,
     runtime,
   };
 

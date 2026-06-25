@@ -2065,7 +2065,8 @@ export class PiAgent extends BaseAgent {
         this.config.session?.workingDirectory,
         this.config.systemPromptPreset,
         'Zo Backend', // backendName
-        getCoAuthorPreference() // respect user's includeCoAuthoredBy preference (#576)
+        getCoAuthorPreference(), // respect user's includeCoAuthoredBy preference (#576)
+        this.config.modelSupportsImageInput ?? true // gate vision-dependent prompt guidance for text-only models
       );
 
       // Build context from sources

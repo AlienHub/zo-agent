@@ -344,6 +344,10 @@ Use config_validate to verify changes match the expected schema.
  * @param workingDirectory - Working directory for context file discovery
  * @param preset - System prompt preset ('default' | 'mini' | custom string)
  * @param backendName - Backend name for "powered by X" text (default: 'Claude Code')
+ * @param includeCoAuthoredBy - Whether to include the git Co-Authored-By trailer
+ * @param modelSupportsImages - Whether the active model accepts image input.
+ *   When false, vision-dependent guidance (e.g. the Excalidraw "Read the preview
+ *   PNG" self-review) is swapped for a text-only equivalent. Defaults to true.
  */
 export function getSystemPrompt(
   pinnedPreferencesPrompt?: string,
@@ -352,7 +356,8 @@ export function getSystemPrompt(
   workingDirectory?: string,
   preset?: SystemPromptPreset | string,
   backendName?: string,
-  includeCoAuthoredBy?: boolean
+  includeCoAuthoredBy?: boolean,
+  modelSupportsImages: boolean = true
 ): string {
   // Use mini agent prompt for quick edits (pass workspace root for config paths)
   if (preset === 'mini') {
@@ -374,7 +379,7 @@ export function getSystemPrompt(
   // Note: Date/time context is now added to user messages instead of system prompt
   // to enable prompt caching. The system prompt stays static and cacheable.
   // Safe Mode context is also in user messages for the same reason.
-  const basePrompt = getCraftAssistantPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy);
+  const basePrompt = getCraftAssistantPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, modelSupportsImages);
   const fullPrompt = `${basePrompt}${preferences}${debugContext}${projectContextFiles}`;
 
   debug('[getSystemPrompt] full prompt length:', fullPrompt.length);
@@ -452,7 +457,7 @@ function getCraftAgentEnvironmentMarker(): string {
  * @param backendName - Backend name for "powered by X" text (default: 'Claude Code')
  * @param includeCoAuthoredBy - Whether to include the Co-Authored-By git trailer instruction (default: true)
  */
-function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string = 'Claude Code', includeCoAuthoredBy: boolean = true): string {
+function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string = 'Claude Code', includeCoAuthoredBy: boolean = true, modelSupportsImages: boolean = true): string {
   // Default to ${APP_ROOT}/workspaces/{id} if no path provided
   const workspacePath = workspaceRootPath || `${APP_ROOT}/workspaces/{id}`;
   const workspaceDataPath = workspaceRootPath ? getWorkspaceDataPath(workspaceRootPath) : `${workspacePath}/.zo`;
@@ -519,6 +524,16 @@ Use the browser as an **alternative/fallback** path when source setup is fragile
 - \`release\` — you're done but user may want to keep browsing the page
 - \`hide\` — temporarily done, may need browser again later in conversation
 ` : '';
+
+  // Excalidraw self-review is vision-dependent: only image-capable models can
+  // Read the preview PNG and judge the layout. For text-only models that
+  // instruction is a dead end — worse, the Read injects an image block the model
+  // can't consume (and which the send-time attachment gate doesn't cover, since
+  // it only filters user attachments, not tool results), wasting a tool round-trip.
+  // Gate on the same predicate that decides whether image attachments are sent.
+  const excalidrawReviewGuidance = modelSupportsImages
+    ? `\`excalidraw_set_graph\` returns a \`previewPngPath\`. **Open that path with the Read tool to actually view the rendered diagram** (don't just trust the path), then judge whether it is clear, non-overlapping, and accurate. If the preview shows overlapping boxes, cut-off labels, tangled edges, or wrong structure, fix the graph (rename/regroup nodes, adjust edges, or change \`direction\` between \`"TB"\` and \`"LR"\`) and call \`excalidraw_set_graph\` again.`
+    : `\`excalidraw_set_graph\` returns a \`previewPngPath\`, but **this model has no image input — do NOT Read that PNG** (you can't see it, and the attempt just wastes a tool round-trip). Instead verify the graph structurally: re-check the self-check rules above and call \`excalidraw_describe_canvas\` to confirm the nodes, edges, and \`direction\` match your intent. If the structure is wrong, fix the graph (rename/regroup nodes, adjust edges, or change \`direction\` between \`"TB"\` and \`"LR"\`) and call \`excalidraw_set_graph\` again. Tell the user to open the canvas to review the visual layout.`;
 
   return `${environmentMarker}
 
@@ -934,7 +949,7 @@ When the user asks for an editable architecture diagram, flow chart, system map,
 
 The \`readonly:false\` flag lets the fullscreen canvas expose its Edit toggle. Never inline .excalidraw scene JSON in the response. The renderer loads the referenced file and will automatically reload after tool updates.
 
-\`excalidraw_set_graph\` returns a \`previewPngPath\`. **Open that path with the Read tool to actually view the rendered diagram** (don't just trust the path), then judge whether it is clear, non-overlapping, and accurate. If the preview shows overlapping boxes, cut-off labels, tangled edges, or wrong structure, fix the graph (rename/regroup nodes, adjust edges, or change \`direction\` between \`"TB"\` and \`"LR"\`) and call \`excalidraw_set_graph\` again. If it returns a terminal error after 3 consecutive failures, stop retrying and tell the user: \`画布生成失败，请调整需求或稍后再试\`.
+${excalidrawReviewGuidance} If it returns a terminal error after 3 consecutive failures, stop retrying and tell the user: \`画布生成失败，请调整需求或稍后再试\`.
 
 ## HTML Preview
 
