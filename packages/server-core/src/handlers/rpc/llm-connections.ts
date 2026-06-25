@@ -112,6 +112,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
           baseUrl: setup.baseUrl ?? undefined,
           credential: setup.credential ?? undefined,
           customEndpointApi: customEndpoint.api,
+          piAuthProviderHint: setup.piAuthProvider,
         })
         updates.authType = branch.authType
         if (branch.name !== undefined) updates.name = branch.name

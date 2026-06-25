@@ -108,10 +108,16 @@ export function resolveCustomEndpointSetup(input: {
   baseUrl: string | undefined
   credential: string | undefined
   customEndpointApi: CustomEndpointApi
+  /**
+   * When provided, overrides the derived piAuthProvider. Used by branded
+   * custom-endpoint presets (e.g. OpenCode Zen/Go) that carry their own
+   * routing slug instead of the generic 'openai'/'anthropic' hint.
+   */
+  piAuthProviderHint?: string
 }): {
   authType: Extract<LlmConnection['authType'], 'none' | 'api_key_with_endpoint'>
   name?: 'Local Model'
-  piAuthProvider?: 'openai' | 'anthropic'
+  piAuthProvider?: string
 } {
   const isKeylessLoopback = isLoopbackBaseUrl(input.baseUrl) && !input.credential
   if (isKeylessLoopback) {
@@ -119,7 +125,7 @@ export function resolveCustomEndpointSetup(input: {
   }
   return {
     authType: 'api_key_with_endpoint',
-    piAuthProvider: input.customEndpointApi === 'anthropic-messages' ? 'anthropic' : 'openai',
+    piAuthProvider: input.piAuthProviderHint ?? (input.customEndpointApi === 'anthropic-messages' ? 'anthropic' : 'openai'),
   }
 }
 

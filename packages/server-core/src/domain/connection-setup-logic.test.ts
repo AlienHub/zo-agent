@@ -109,6 +109,33 @@ describe('resolveCustomEndpointSetup', () => {
       customEndpointApi: 'openai-completions',
     })).toEqual({ authType: 'api_key_with_endpoint', piAuthProvider: 'openai' })
   })
+
+  it('preserves a branded piAuthProvider hint instead of deriving openai/anthropic', () => {
+    expect(resolveCustomEndpointSetup({
+      baseUrl: 'https://opencode.ai/zen/v1',
+      credential: 'sk-opencode',
+      customEndpointApi: 'anthropic-messages',
+      piAuthProviderHint: 'opencode-zen-anthropic',
+    })).toEqual({ authType: 'api_key_with_endpoint', piAuthProvider: 'opencode-zen-anthropic' })
+  })
+
+  it('preserves a branded piAuthProvider hint for openai-completions protocol', () => {
+    expect(resolveCustomEndpointSetup({
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      credential: 'sk-opencode-go',
+      customEndpointApi: 'openai-completions',
+      piAuthProviderHint: 'opencode-go-openai',
+    })).toEqual({ authType: 'api_key_with_endpoint', piAuthProvider: 'opencode-go-openai' })
+  })
+
+  it('ignores the hint for keyless loopback endpoints', () => {
+    expect(resolveCustomEndpointSetup({
+      baseUrl: 'http://localhost:11434/v1',
+      credential: undefined,
+      customEndpointApi: 'openai-completions',
+      piAuthProviderHint: 'opencode-zen-openai',
+    })).toEqual({ authType: 'none', name: 'Local Model' })
+  })
 })
 
 // New connections must persist a per-provider midStreamBehavior default so the
@@ -157,7 +184,7 @@ describe('createBuiltInConnection — OpenCode Zen/Go templates', () => {
     expect(conn.customEndpoint).toEqual({ api: 'anthropic-messages' })
     expect(conn.midStreamBehavior).toBe('steer')
     expect(Array.isArray(conn.models)).toBe(true)
-    expect(conn.models.length).toBeGreaterThan(0)
+    expect(conn.models!.length).toBeGreaterThan(0)
     expect(conn.defaultModel).toBe('claude-fable-5')
   })
 
@@ -170,7 +197,7 @@ describe('createBuiltInConnection — OpenCode Zen/Go templates', () => {
     expect(conn.piAuthProvider).toBe('opencode-zen-openai')
     expect(conn.customEndpoint).toEqual({ api: 'openai-completions' })
     expect(Array.isArray(conn.models)).toBe(true)
-    expect(conn.models.length).toBeGreaterThan(0)
+    expect(conn.models!.length).toBeGreaterThan(0)
     expect(conn.defaultModel).toBe('deepseek-v4-pro')
   })
 
@@ -183,7 +210,7 @@ describe('createBuiltInConnection — OpenCode Zen/Go templates', () => {
     expect(conn.piAuthProvider).toBe('opencode-go-anthropic')
     expect(conn.customEndpoint).toEqual({ api: 'anthropic-messages' })
     expect(Array.isArray(conn.models)).toBe(true)
-    expect(conn.models.length).toBeGreaterThan(0)
+    expect(conn.models!.length).toBeGreaterThan(0)
     expect(conn.defaultModel).toBe('minimax-m3')
   })
 
@@ -196,7 +223,7 @@ describe('createBuiltInConnection — OpenCode Zen/Go templates', () => {
     expect(conn.piAuthProvider).toBe('opencode-go-openai')
     expect(conn.customEndpoint).toEqual({ api: 'openai-completions' })
     expect(Array.isArray(conn.models)).toBe(true)
-    expect(conn.models.length).toBeGreaterThan(0)
+    expect(conn.models!.length).toBeGreaterThan(0)
     expect(conn.defaultModel).toBe('glm-5.2')
   })
 })
