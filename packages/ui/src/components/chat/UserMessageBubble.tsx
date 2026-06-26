@@ -13,10 +13,12 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Clock } from 'lucide-react'
-import type { StoredAttachment, ContentBadge } from '@craft-agent/core'
+import type { StoredAttachment, ContentBadge, AnnotationV1 } from '@craft-agent/core'
 import { normalizePath } from '@craft-agent/core/utils'
 import { cn } from '../../lib/utils'
 import { Markdown } from '../markdown'
+import { AnnotatableMarkdownDocument } from '../overlay/AnnotatableMarkdownDocument'
+import type { ExternalOpenAnnotationRequest } from '../annotations/use-annotation-interaction-controller'
 import { FileTypeIcon, getFileTypeLabel } from './attachment-helpers'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '../tooltip'
 import { useTranslation } from 'react-i18next'
@@ -321,6 +323,29 @@ export interface UserMessageBubbleProps {
   isQueued?: boolean
   /** Compact mode - reduces padding for popover embedding */
   compactMode?: boolean
+
+  // --- Annotation / follow-up support (lets users comment on their OWN messages) ---
+  /** Message id this bubble renders. Required to anchor annotations. */
+  messageId?: string
+  /** Session id (passed through to the annotation host). */
+  sessionId?: string
+  /** Existing annotations on this message. */
+  annotations?: AnnotationV1[]
+  /** When the user is streaming a response, annotation creation is suppressed. */
+  isStreaming?: boolean
+  /** Whether the Enter key sends the follow-up (mirrors composer setting). */
+  sendMessageKey?: 'enter' | 'cmd-enter'
+  /** External request to open a specific annotation (e.g. from a follow-up chip). */
+  openAnnotationRequest?: ExternalOpenAnnotationRequest | null
+  onAddAnnotation?: (messageId: string, annotation: AnnotationV1) => void | Promise<void>
+  onRemoveAnnotation?: (messageId: string, annotationId: string) => void | Promise<void>
+  onUpdateAnnotation?: (messageId: string, annotationId: string, patch: Partial<AnnotationV1>) => void | Promise<void>
+  onSaveAndSendFollowUp?: (target: {
+    messageId: string
+    annotationId: string
+    note: string
+    selectedText: string
+  }) => void
 }
 
 /** Minimum visible duration of the "Queued" chip. Both backends ack
@@ -338,6 +363,16 @@ export function UserMessageBubble({
   badges,
   isQueued,
   compactMode,
+  messageId,
+  sessionId,
+  annotations,
+  isStreaming,
+  sendMessageKey,
+  openAnnotationRequest,
+  onAddAnnotation,
+  onRemoveAnnotation,
+  onUpdateAnnotation,
+  onSaveAndSendFollowUp,
 }: UserMessageBubbleProps) {
   const { t } = useTranslation()
   const hasAttachments = attachments && attachments.length > 0
@@ -408,6 +443,17 @@ export function UserMessageBubble({
     }
     displayContent = displayContent.trim()
   }
+
+  // Annotation is offered only on plain-prose user messages: a real messageId +
+  // an add handler, not embedded in a compact popover, and free of inline/edit
+  // badges (those use a different renderer and would desync text offsets, since
+  // `displayContent` only equals `content` when no edit badges were stripped).
+  const canAnnotate =
+    !!messageId &&
+    !!onAddAnnotation &&
+    !compactMode &&
+    !hasInlineBadges &&
+    !hasEditRequestBadges
 
   return (
     <div className={cn("flex flex-col items-end gap-3 w-full", className)}>
@@ -502,6 +548,26 @@ export function UserMessageBubble({
         )}
         {hasInlineBadges
           ? renderContentWithBadges(displayContent, inlineBadges, onUrlClick, onFileClick)
+          : canAnnotate
+          ? (
+            <AnnotatableMarkdownDocument
+              content={displayContent}
+              contentClassName="text-sm [&_a]:underline [&_code]:bg-foreground/10 [&_p]:whitespace-pre-wrap"
+              messageId={messageId!}
+              sessionId={sessionId}
+              annotations={annotations}
+              isStreaming={isStreaming}
+              sendMessageKey={sendMessageKey}
+              islandUsePortal
+              openAnnotationRequest={openAnnotationRequest}
+              onAddAnnotation={onAddAnnotation}
+              onRemoveAnnotation={onRemoveAnnotation}
+              onUpdateAnnotation={onUpdateAnnotation}
+              onSaveAndSendFollowUp={onSaveAndSendFollowUp}
+              onOpenUrl={onUrlClick}
+              onOpenFile={onFileClick}
+            />
+          )
           : (
             <Markdown
               mode="minimal"

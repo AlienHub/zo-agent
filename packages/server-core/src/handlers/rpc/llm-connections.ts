@@ -35,6 +35,10 @@ function normalizeOpenCodeBaseUrl(value: string | undefined): string | null {
   }
 }
 
+function isMaskedCredentialValue(value: string | undefined | null): boolean {
+  return !!value && value.includes('•')
+}
+
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.llmConnections.LIST,
   RPC_CHANNELS.llmConnections.LIST_WITH_STATUS,
@@ -70,6 +74,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   server.handle(RPC_CHANNELS.settings.SETUP_LLM_CONNECTION, async (_ctx, setup: LlmConnectionSetup): Promise<{ success: boolean; error?: string }> => {
     try {
       const manager = getCredentialManager()
+      const setupCredential = isMaskedCredentialValue(setup.credential) ? undefined : setup.credential
 
       // Ensure connection exists in config
       let connection = getLlmConnection(setup.slug)
@@ -128,7 +133,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
         updates.providerType = 'pi_compat'
         const branch = resolveCustomEndpointSetup({
           baseUrl: setup.baseUrl ?? undefined,
-          credential: setup.credential ?? undefined,
+          credential: setupCredential ?? undefined,
           customEndpointApi: customEndpoint.api,
           piAuthProviderHint: setup.piAuthProvider,
         })
@@ -271,14 +276,13 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       }
 
       // Store credential if provided (skip masked placeholders from GET_API_KEY)
-      const isMasked = setup.credential?.includes('••')
-      if (setup.credential && !isMasked) {
+      if (setupCredential) {
         const authType = pendingConnection.authType
         if (authType === 'oauth') {
-          await manager.setLlmOAuth(setup.slug, { accessToken: setup.credential })
+          await manager.setLlmOAuth(setup.slug, { accessToken: setupCredential })
           deps.platform.logger?.info('Saved OAuth access token to LLM connection')
         } else {
-          await manager.setLlmApiKey(setup.slug, setup.credential)
+          await manager.setLlmApiKey(setup.slug, setupCredential)
           deps.platform.logger?.info('Saved API key to LLM connection')
         }
       }
@@ -334,7 +338,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   // and validate credentials via runMiniCompletion(). Same code path as actual chat.
   server.handle(RPC_CHANNELS.settings.TEST_LLM_CONNECTION_SETUP, async (_ctx, params: import('@craft-agent/shared/protocol').TestLlmConnectionParams): Promise<import('@craft-agent/shared/protocol').TestLlmConnectionResult> => {
     const { provider, apiKey, baseUrl, model, piAuthProvider, customEndpoint } = params
-    const trimmedKey = apiKey?.trim() ?? ''
+    const trimmedKey = isMaskedCredentialValue(apiKey) ? '' : apiKey?.trim() ?? ''
     const allowEmptyApiKey = !setupTestRequiresApiKey(baseUrl)
 
     if (!trimmedKey && !allowEmptyApiKey) {
@@ -648,7 +652,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     try {
       const result = await fetchOpenCodeModels({
         baseUrl: normalizedBaseUrl,
-        apiKey: args.apiKey,
+        apiKey: isMaskedCredentialValue(args.apiKey) ? undefined : args.apiKey,
       })
       const models = result.models.length > 0 ? result.models : staticModels
       return {

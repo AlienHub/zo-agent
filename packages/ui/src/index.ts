@@ -41,6 +41,9 @@ export {
   getAnnotationFollowUpState,
   isAnnotationFollowUpSent,
   extractAnnotationSelectedText,
+  getAnnotationContext,
+  computeQuoteLineRange,
+  computeAnnotationLineRange,
   normalizeFollowUpText,
   // Inline execution for EditPopover
   InlineExecution,

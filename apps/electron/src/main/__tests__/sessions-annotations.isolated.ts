@@ -27,7 +27,7 @@ mock.module('../notifications', () => ({
 
 const { SessionManager } = await import('@craft-agent/server-core/sessions')
 
-function makeAnnotation(id: string, extraMeta?: Record<string, unknown>): AnnotationV1 {
+function makeAnnotation(id: string, extraMeta?: Record<string, unknown>, targetMessageId = 'msg-1'): AnnotationV1 {
   return {
     id,
     schemaVersion: 1,
@@ -35,7 +35,7 @@ function makeAnnotation(id: string, extraMeta?: Record<string, unknown>): Annota
     intent: 'highlight',
     body: [{ type: 'highlight' }],
     target: {
-      source: { sessionId: 'session-1', messageId: 'msg-1' },
+      source: { sessionId: 'session-1', messageId: targetMessageId },
       selectors: [
         { type: 'text-position', start: 0, end: 5 },
         { type: 'text-quote', exact: 'hello' },
@@ -45,10 +45,18 @@ function makeAnnotation(id: string, extraMeta?: Record<string, unknown>): Annota
   }
 }
 
-function createHarness(initialAnnotations: AnnotationV1[] = []) {
+function createHarness(
+  initialAnnotations: AnnotationV1[] = [],
+  message?: { id: string; optimisticMessageId?: string }
+) {
   const managed = {
     workspace: { id: 'ws-1' },
-    messages: [{ id: 'msg-1', content: 'hello world', annotations: initialAnnotations }],
+    messages: [{
+      id: message?.id ?? 'msg-1',
+      ...(message?.optimisticMessageId ? { optimisticMessageId: message.optimisticMessageId } : {}),
+      content: 'hello world',
+      annotations: initialAnnotations,
+    }],
   }
 
   let persistCalls = 0
@@ -92,6 +100,24 @@ describe('SessionManager annotation validation', () => {
     expect(h.managed.messages[0].annotations).toHaveLength(0)
     expect(h.persistCalls).toBe(0)
     expect(h.events).toHaveLength(0)
+  })
+
+  it('resolves add by the renderer optimistic id when the live bubble kept it', () => {
+    // The server message has its own canonical id, but a live user bubble is
+    // annotated using the optimistic id the renderer never swapped. The lookup
+    // must match the optimistic id, otherwise the note is silently dropped
+    // (the bug: vanishing 追问 note when saved during an in-flight turn).
+    const h = createHarness([], { id: 'server-msg-1', optimisticMessageId: 'opt-msg-1' })
+
+    h.manager.addMessageAnnotation('session-1', 'opt-msg-1', makeAnnotation('ann-1', undefined, 'opt-msg-1'))
+
+    expect(h.managed.messages[0].annotations).toHaveLength(1)
+    expect(h.managed.messages[0].annotations[0]?.id).toBe('ann-1')
+    expect(h.persistCalls).toBe(1)
+    // Event echoes the id the client sent (optimistic) so the renderer's bubble matches.
+    expect(h.events).toHaveLength(1)
+    expect(h.events[0]?.event.type).toBe('message_annotations_updated')
+    expect(h.events[0]?.event.messageId).toBe('opt-msg-1')
   })
 
   it('rejects update patch with empty selectors array', () => {

@@ -295,6 +295,11 @@ export interface Message {
   isPending?: boolean;
   // Queued: user message that is waiting to be processed (sent during ongoing response)
   isQueued?: boolean;
+  // The renderer's optimistic id for this user message. The renderer never swaps
+  // a live user bubble's id to the server's canonical id, so server-side lookups
+  // keyed by the client-sent id (e.g. annotations) must also match this. See
+  // SessionManager user-message creation + the annotation methods' fallback.
+  optimisticMessageId?: string;
   // Intermediate text (commentary between tool calls, not final response)
   isIntermediate?: boolean;
   // Turn ID: Correlation ID from the API's message.id, groups all messages in an assistant turn

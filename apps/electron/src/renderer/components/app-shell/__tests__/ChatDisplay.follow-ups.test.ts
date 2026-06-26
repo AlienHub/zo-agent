@@ -53,6 +53,39 @@ describe('formatFollowUpSection — the OSS #580 regression', () => {
     expect(output).toContain('→ why here?')
   })
 
+  test('document comments carry the line range and ⟦⟧-marked context', () => {
+    const output = formatFollowUpSection([
+      followUp({
+        selectedText: 'PM 和全栈设计师非常看好',
+        note: '论据是什么?',
+        sourceLabel: '/repo/doc.md',
+        sourceLine: 12,
+        sourceEndLine: 12,
+        context: { before: '我对', after: '。' },
+      }),
+    ])
+    expect(output).toContain('> [#1] Source: `/repo/doc.md` (line 12)')
+    expect(output).toContain('我对⟦PM 和全栈设计师非常看好⟧。')
+    expect(output).toContain('→ 论据是什么?')
+  })
+
+  test('document comment renders a multi-line range', () => {
+    const output = formatFollowUpSection([
+      followUp({ selectedText: 'x', note: 'n', sourceLabel: '/a.md', sourceLine: 4, sourceEndLine: 9 }),
+    ])
+    expect(output).toContain('Source: `/a.md` (lines 4–9)')
+  })
+
+  test('chat-message comments stay bare (no line/context — full message is in history)', () => {
+    const output = formatFollowUpSection([
+      followUp({ selectedText: 'CLI 已经结束了', note: '展开', context: { before: 'x', after: 'y' }, sourceLine: 3 }),
+    ])
+    // No sourceLabel ⇒ message comment ⇒ no Source/line/⟦⟧ even if fields are present.
+    expect(output).toContain('> [#1] CLI 已经结束了')
+    expect(output).not.toContain('⟦')
+    expect(output).not.toContain('line 3')
+  })
+
   test('numbers multiple follow-ups sequentially', () => {
     const output = formatFollowUpSection([
       followUp({ annotationId: 'a', selectedText: 'one', note: 'n1' }),

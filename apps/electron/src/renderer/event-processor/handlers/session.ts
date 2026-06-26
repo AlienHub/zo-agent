@@ -605,7 +605,7 @@ export function handleMessageAnnotationsUpdated(
       session: {
         ...session,
         messages: session.messages.map(m =>
-          m.id === event.messageId
+          m.id === event.messageId || m.optimisticMessageId === event.messageId
             ? { ...m, annotations: event.annotations }
             : m
         ),

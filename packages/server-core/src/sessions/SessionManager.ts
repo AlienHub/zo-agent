@@ -5251,7 +5251,11 @@ export class SessionManager implements ISessionManager {
       return
     }
 
-    const message = managed.messages.find(m => m.id === messageId)
+    // Match the server id OR the renderer's optimistic id: live user bubbles keep
+    // their optimistic id (never swapped to this server id), so annotations sent
+    // mid-stream arrive keyed by it. Without this fallback the lookup misses and
+    // the note is silently dropped before persist/emit.
+    const message = managed.messages.find(m => m.id === messageId || m.optimisticMessageId === messageId)
     if (!message) {
       sessionLog.warn(`Cannot add annotation: message ${messageId} not found in session ${sessionId}`)
       return
@@ -5317,7 +5321,8 @@ export class SessionManager implements ISessionManager {
       return
     }
 
-    const message = managed.messages.find(m => m.id === messageId)
+    // Match server id OR the renderer's optimistic id (see addMessageAnnotation).
+    const message = managed.messages.find(m => m.id === messageId || m.optimisticMessageId === messageId)
     if (!message) {
       sessionLog.warn(`Cannot update annotation: message ${messageId} not found in session ${sessionId}`)
       return
@@ -5391,7 +5396,8 @@ export class SessionManager implements ISessionManager {
       return
     }
 
-    const message = managed.messages.find(m => m.id === messageId)
+    // Match server id OR the renderer's optimistic id (see addMessageAnnotation).
+    const message = managed.messages.find(m => m.id === messageId || m.optimisticMessageId === messageId)
     if (!message) {
       sessionLog.warn(`Cannot remove annotation: message ${messageId} not found in session ${sessionId}`)
       return
@@ -5776,6 +5782,9 @@ export class SessionManager implements ISessionManager {
         timestamp: this.monotonic(),
         attachments: storedAttachments,
         badges: options?.badges,
+        // Keep the renderer's optimistic id so annotation/content IPCs (which
+        // arrive keyed by it — the renderer never swaps to this server id) resolve.
+        optimisticMessageId: options?.optimisticMessageId,
       }
       managed.messages.push(userMessage)
 
@@ -5825,6 +5834,9 @@ export class SessionManager implements ISessionManager {
         timestamp: this.monotonic(),
         attachments: storedAttachments, // Include for persistence (has thumbnailBase64)
         badges: options?.badges,  // Include content badges (sources, skills with embedded icons)
+        // Keep the renderer's optimistic id so annotation/content IPCs (which
+        // arrive keyed by it — the renderer never swaps to this server id) resolve.
+        optimisticMessageId: options?.optimisticMessageId,
       }
       managed.messages.push(userMessage)
 

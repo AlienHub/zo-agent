@@ -25,6 +25,16 @@ export function stripPiPrefixForDisplay(value: string): string {
   return value.startsWith('pi/') ? value.slice(3) : value
 }
 
+export function dedupeModelsById<T extends string | { id: string }>(models: readonly T[]): T[] {
+  const seen = new Set<string>()
+  return models.filter((model) => {
+    const id = typeof model === 'string' ? model : model.id
+    if (!id || seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
+}
+
 export type ConnectionGroup = [groupName: string, connections: LlmConnection[]]
 
 /**

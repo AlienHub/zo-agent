@@ -1,6 +1,11 @@
 import type { AnnotationV1 } from '@craft-agent/core'
 
-export const ANNOTATION_PREFIX_SUFFIX_WINDOW = 24
+// Context captured before/after a highlighted span. Used (a) by the resolver to
+// disambiguate identical quotes and (b) as surrounding context handed to the agent
+// for document comments. 80 (was 24) gives the agent meaningful context; widening
+// is safe because the resolver prefers the text-position selector and only falls
+// back to prefix/suffix matching when a document was edited after annotating.
+export const ANNOTATION_PREFIX_SUFFIX_WINDOW = 80
 export const SELECTION_POINTER_MAX_AGE_MS = 1500
 
 export type TextAnnotationSelection = {

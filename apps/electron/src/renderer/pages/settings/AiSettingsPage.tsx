@@ -67,35 +67,46 @@ function formatTokenCount(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`
 }
 
+type ModelOption = { value: string; label: string; description: string; descriptionKey?: string }
+
+function dedupeModelOptions(options: ModelOption[]): ModelOption[] {
+  const seen = new Set<string>()
+  return options.filter((option) => {
+    if (seen.has(option.value)) return false
+    seen.add(option.value)
+    return true
+  })
+}
+
 /**
  * Derive model dropdown options from a connection's models array,
  * falling back to registry models for the connection's provider type.
  */
 function getModelOptionsForConnection(
   connection: LlmConnectionWithStatus | undefined,
-): Array<{ value: string; label: string; description: string; descriptionKey?: string }> {
+): ModelOption[] {
   if (!connection) return []
 
   // If connection has explicit models, use those
   if (connection.models && connection.models.length > 0) {
-    return connection.models.map((m) => {
+    return dedupeModelOptions(connection.models.map((m) => {
       if (typeof m === 'string') {
         return { value: m, label: getModelShortName(m), description: '' }
       }
       // ModelDefinition object
       const def = m as ModelDefinition
       return { value: def.id, label: def.name, description: def.description, descriptionKey: def.descriptionKey }
-    })
+    }))
   }
 
   // Fall back to registry models for this provider type
   const registryModels = getModelsForProviderType(connection.providerType, connection.piAuthProvider)
-  return registryModels.map((m) => ({
+  return dedupeModelOptions(registryModels.map((m) => ({
     value: m.id,
     label: m.name,
     description: m.description,
     descriptionKey: m.descriptionKey,
-  }))
+  })))
 }
 
 export const meta: DetailsPageMeta = {

@@ -48,4 +48,42 @@ describe('handleMessageAnnotationsUpdated', () => {
     expect((next.state.session.messages[0] as any).annotations).toEqual([])
     expect((next.state.session.messages[1] as any).annotations).toEqual(annotations)
   })
+
+  it('updates annotations when the backend event uses the renderer optimistic id', () => {
+    const state = makeState([
+      {
+        id: 'server-msg-1',
+        optimisticMessageId: 'opt-msg-1',
+        role: 'user',
+        content: 'hello',
+      },
+    ])
+
+    const annotations = [
+      {
+        id: 'ann-1',
+        schemaVersion: 1 as const,
+        createdAt: 1700000000000,
+        motivation: 'highlighting' as const,
+        body: [{ type: 'highlight' as const }],
+        target: {
+          source: { sessionId: 'session-1', messageId: 'opt-msg-1' },
+          selectors: [
+            { type: 'text-position' as const, start: 0, end: 5 },
+            { type: 'text-quote' as const, exact: 'hello' },
+          ],
+        },
+      },
+    ]
+
+    const event: MessageAnnotationsUpdatedEvent = {
+      type: 'message_annotations_updated',
+      sessionId: 'session-1',
+      messageId: 'opt-msg-1',
+      annotations,
+    }
+
+    const next = handleMessageAnnotationsUpdated(state, event)
+    expect((next.state.session.messages[0] as any).annotations).toEqual(annotations)
+  })
 })

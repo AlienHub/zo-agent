@@ -8,6 +8,7 @@
 import { describe, test, expect } from 'bun:test'
 import type { LlmConnection } from '@craft-agent/shared/config/llm-connections'
 import {
+  dedupeModelsById,
   formatTokenCount,
   groupConnectionsByProvider,
   stripPiPrefixForDisplay,
@@ -71,6 +72,27 @@ describe('formatTokenCount', () => {
     expect(formatTokenCount(1_000_000)).toBe('1.0M')
     expect(formatTokenCount(1_500_000)).toBe('1.5M')
     expect(formatTokenCount(12_345_678)).toBe('12.3M')
+  })
+})
+
+// -----------------------------------------------------------------------------
+// dedupeModelsById
+// -----------------------------------------------------------------------------
+
+describe('dedupeModelsById', () => {
+  test('removes duplicate string model IDs while preserving first occurrence order', () => {
+    expect(dedupeModelsById(['glm-5.2', 'glm-5.2', 'deepseek-v4-flash'])).toEqual([
+      'glm-5.2',
+      'deepseek-v4-flash',
+    ])
+  })
+
+  test('removes duplicate object model IDs while preserving the first object', () => {
+    const first = { id: 'glm-5.2', name: 'GLM 5.2' }
+    const duplicate = { id: 'glm-5.2', name: 'Duplicate GLM' }
+    const fast = { id: 'deepseek-v4-flash', name: 'DeepSeek Flash' }
+
+    expect(dedupeModelsById([first, duplicate, fast])).toEqual([first, fast])
   })
 })
 

@@ -7,6 +7,8 @@ import {
   Spinner,
   AnnotatableMarkdownDocument,
   classifyFile,
+  computeAnnotationLineRange,
+  getAnnotationContext,
 } from '@craft-agent/ui'
 import { useSetAtom } from 'jotai'
 import { AlertCircle, ChevronDown, Copy, ExternalLink, FileText, FolderOpen, Globe, Monitor } from 'lucide-react'
@@ -116,15 +118,42 @@ function formatResourceFollowUpMessage(params: {
   resource: SessionResourceRef
   note: string
   selectedText: string
+  sourceLine?: number
+  sourceEndLine?: number
+  context?: { before: string; after: string }
 }): string {
-  const quoteText = params.selectedText.replace(/\s+/g, ' ').trim()
+  const collapse = (s: string) => s.replace(/\s+/g, ' ').trim()
+  const quoteText = collapse(params.selectedText)
+  const before = params.context?.before ? collapse(params.context.before) : ''
+  const after = params.context?.after ? collapse(params.context.after) : ''
+  // ⟦⟧ marks the exact highlight inside its captured surrounding context.
+  const markedQuote = before || after ? `${before}⟦${quoteText}⟧${after}` : quoteText
+  const lineSuffix = params.sourceLine
+    ? (params.sourceEndLine && params.sourceEndLine > params.sourceLine
+        ? ` (lines ${params.sourceLine}–${params.sourceEndLine})`
+        : ` (line ${params.sourceLine})`)
+    : ''
   return [
     '**Follow-ups**',
     '',
-    `> [#1] Source: \`${getResourceSourceLabel(params.resource)}\``,
-    `> ${quoteText}`,
+    `> [#1] Source: \`${getResourceSourceLabel(params.resource)}\`${lineSuffix}`,
+    `> ${markedQuote}`,
     `→ ${params.note}`,
   ].join('\n')
+}
+
+/** Compute the 1-based line range of an annotation's highlight in the raw file and
+ *  stamp it onto `meta.sourceLine`/`meta.sourceEndLine` so document comments can tell
+ *  the agent where to Read. No-op when the quote isn't a verbatim substring of the
+ *  raw text (annotation offsets are anchored to rendered text). */
+function withResourceSourceLine(annotation: AnnotationV1, rawContent: string | null): AnnotationV1 {
+  if (!rawContent) return annotation
+  const range = computeAnnotationLineRange(rawContent, annotation)
+  if (!range) return annotation
+  return {
+    ...annotation,
+    meta: { ...(annotation.meta ?? {}), sourceLine: range.start, sourceEndLine: range.end },
+  }
 }
 
 function injectHtmlPreviewBase(html: string, sourcePath: string): string {
@@ -474,7 +503,8 @@ export default function SessionResourcePreviewPage({
     await window.electronAPI.sessionCommand(resourceDetails.sessionId, {
       type: 'addResourceAnnotation',
       resource: resourceRef,
-      annotation,
+      // Stamp the highlight's line range now, while the raw file text is in hand.
+      annotation: withResourceSourceLine(annotation, lastTextContentRef.current),
     })
   }, [resourceDetails.sessionId, resourceRef])
 
@@ -500,16 +530,21 @@ export default function SessionResourcePreviewPage({
     note: string
     selectedText: string
   }) => {
+    const currentAnnotation = resourceAnnotations.find(annotation => annotation.id === followUp.annotationId)
+    const currentMeta = currentAnnotation?.meta ?? {}
+    const sourceLine = typeof currentMeta.sourceLine === 'number' ? currentMeta.sourceLine : undefined
+    const sourceEndLine = typeof currentMeta.sourceEndLine === 'number' ? currentMeta.sourceEndLine : undefined
     const message = formatResourceFollowUpMessage({
       resource: resourceRef,
       note: followUp.note,
       selectedText: followUp.selectedText,
+      sourceLine,
+      sourceEndLine,
+      context: currentAnnotation ? getAnnotationContext(currentAnnotation) : undefined,
     })
     onSendMessage(resourceDetails.sessionId, message)
 
     const sentAt = Date.now()
-    const currentAnnotation = resourceAnnotations.find(annotation => annotation.id === followUp.annotationId)
-    const currentMeta = currentAnnotation?.meta ?? {}
     const currentFollowUpMeta = currentMeta.followUp && typeof currentMeta.followUp === 'object' && !Array.isArray(currentMeta.followUp)
       ? currentMeta.followUp as Record<string, unknown>
       : {}

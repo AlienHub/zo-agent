@@ -42,7 +42,7 @@ import {
 } from "@craft-agent/ui"
 import { useFocusZone } from "@/hooks/keyboard"
 import { useTheme } from "@/hooks/useTheme"
-import type { Session, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, LoadedSource, LoadedSkill } from "../../../shared/types"
+import type { Session, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, LoadedSource, LoadedSkill, AnnotationV1 } from "../../../shared/types"
 import type { PermissionMode } from "@craft-agent/shared/agent/modes"
 import type { ThinkingLevel } from "@craft-agent/shared/agent/thinking-levels"
 import {
@@ -56,6 +56,7 @@ import {
   getAnnotationNoteText,
   isAnnotationFollowUpSent,
   extractAnnotationSelectedText,
+  getAnnotationContext,
   normalizeFollowUpText,
   type Turn,
   type AssistantTurn,
@@ -1062,7 +1063,9 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     const pending: PendingFollowUpAnnotation[] = []
 
     for (const message of messages) {
-      if (message.role !== 'assistant' && message.role !== 'plan') continue
+      // 'user' is included so follow-ups anchored on the user's OWN messages are
+      // collected and flushed alongside assistant/plan annotations.
+      if (message.role !== 'assistant' && message.role !== 'plan' && message.role !== 'user') continue
       if (!message.annotations?.length) continue
 
       for (const annotation of message.annotations) {
@@ -1089,6 +1092,9 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
         if (!note) continue
         if (isAnnotationFollowUpSent(annotation)) continue
 
+        const annotationMeta = asRecord(annotation.meta) ?? undefined
+        const sourceLine = typeof annotationMeta?.sourceLine === 'number' ? annotationMeta.sourceLine : undefined
+        const sourceEndLine = typeof annotationMeta?.sourceEndLine === 'number' ? annotationMeta.sourceEndLine : undefined
         pending.push({
           kind: 'resource',
           messageId: annotation.target.source.messageId,
@@ -1097,9 +1103,12 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
           selectedText: extractAnnotationSelectedText(annotation, ''),
           createdAt: annotation.updatedAt ?? annotation.createdAt,
           color: annotation.style?.color,
-          meta: asRecord(annotation.meta) ?? undefined,
+          meta: annotationMeta,
           resource: group.resource,
           sourceLabel: group.resource.target,
+          sourceLine,
+          sourceEndLine,
+          context: getAnnotationContext(annotation),
         })
       }
     }
@@ -1330,6 +1339,43 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
       }))
     }, 0)
   }, [session, isInputDisabled, disableSend, connectionUnavailable])
+
+  // Shared annotation handlers — used by both the assistant TurnCard and the
+  // user message bubble, so commenting works identically on either side.
+  const handleAddAnnotation = useCallback(async (messageId: string, annotation: AnnotationV1) => {
+    if (!session) return
+    try {
+      await window.electronAPI.sessionCommand(session.id, { type: 'addAnnotation', messageId, annotation })
+    } catch (error) {
+      toast.error(t('toast.couldNotSaveHighlight'), {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      })
+      throw error
+    }
+  }, [session, t])
+
+  const handleRemoveAnnotation = useCallback(async (messageId: string, annotationId: string) => {
+    if (!session) return
+    try {
+      await window.electronAPI.sessionCommand(session.id, { type: 'removeAnnotation', messageId, annotationId })
+    } catch (error) {
+      toast.error(t('toast.couldNotRemoveHighlight'), {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      })
+    }
+  }, [session, t])
+
+  const handleUpdateAnnotation = useCallback(async (messageId: string, annotationId: string, patch: Partial<AnnotationV1>) => {
+    if (!session) return
+    try {
+      await window.electronAPI.sessionCommand(session.id, { type: 'updateAnnotation', messageId, annotationId, patch })
+    } catch (error) {
+      toast.error(t('toast.couldNotUpdateHighlight'), {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      })
+      throw error
+    }
+  }, [session, t])
 
   // Handle stop request from InputContainer
   // silent=true when redirecting (sending new message), silent=false when user clicks Stop button
@@ -1669,6 +1715,13 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             onOpenUrl={onOpenUrl}
                             sessionId={session?.id}
                             compactMode={compactMode}
+                            annotations={turn.message.annotations}
+                            sendMessageKey={sendMessageKey}
+                            openAnnotationRequest={openAnnotationRequest}
+                            onAddAnnotation={handleAddAnnotation}
+                            onRemoveAnnotation={handleRemoveAnnotation}
+                            onUpdateAnnotation={handleUpdateAnnotation}
+                            onSaveAndSendFollowUp={handleSaveAndSendFollowUp}
                           />
                         </div>
                       )
@@ -1815,51 +1868,9 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             toast.error(t('toast.couldNotCreateBranch'), { description: message })
                           }
                         } : undefined}
-                        onAddAnnotation={async (messageId, annotation) => {
-                          if (!session) return
-                          try {
-                            await window.electronAPI.sessionCommand(session.id, {
-                              type: 'addAnnotation',
-                              messageId,
-                              annotation,
-                            })
-                          } catch (error) {
-                            toast.error(t('toast.couldNotSaveHighlight'), {
-                              description: error instanceof Error ? error.message : 'Unknown error',
-                            })
-                            throw error
-                          }
-                        }}
-                        onRemoveAnnotation={async (messageId, annotationId) => {
-                          if (!session) return
-                          try {
-                            await window.electronAPI.sessionCommand(session.id, {
-                              type: 'removeAnnotation',
-                              messageId,
-                              annotationId,
-                            })
-                          } catch (error) {
-                            toast.error(t('toast.couldNotRemoveHighlight'), {
-                              description: error instanceof Error ? error.message : 'Unknown error',
-                            })
-                          }
-                        }}
-                        onUpdateAnnotation={async (messageId, annotationId, patch) => {
-                          if (!session) return
-                          try {
-                            await window.electronAPI.sessionCommand(session.id, {
-                              type: 'updateAnnotation',
-                              messageId,
-                              annotationId,
-                              patch,
-                            })
-                          } catch (error) {
-                            toast.error(t('toast.couldNotUpdateHighlight'), {
-                              description: error instanceof Error ? error.message : 'Unknown error',
-                            })
-                            throw error
-                          }
-                        }}
+                        onAddAnnotation={handleAddAnnotation}
+                        onRemoveAnnotation={handleRemoveAnnotation}
+                        onUpdateAnnotation={handleUpdateAnnotation}
                         onSaveAndSendFollowUp={handleSaveAndSendFollowUp}
                         onAcceptPlan={() => {
                           const planMessage = session?.messages.findLast(m => m.role === 'plan')
@@ -2200,6 +2211,22 @@ interface MessageBubbleProps {
   compactMode?: boolean
   /** Callback to resend the user message that preceded an error */
   onRetry?: () => void
+
+  // --- Annotation / follow-up support for user messages ---
+  annotations?: AnnotationV1[]
+  sendMessageKey?: 'enter' | 'cmd-enter'
+  openAnnotationRequest?: {
+    messageId: string
+    annotationId: string
+    mode: 'view' | 'edit'
+    anchorX?: number
+    anchorY?: number
+    nonce: number
+  } | null
+  onAddAnnotation?: (messageId: string, annotation: AnnotationV1) => void | Promise<void>
+  onRemoveAnnotation?: (messageId: string, annotationId: string) => void | Promise<void>
+  onUpdateAnnotation?: (messageId: string, annotationId: string, patch: Partial<AnnotationV1>) => void | Promise<void>
+  onSaveAndSendFollowUp?: (target: { messageId: string; annotationId: string; note: string; selectedText: string }) => void
 }
 
 /**
@@ -2287,6 +2314,13 @@ function MessageBubble({
   onPopOut,
   compactMode,
   onRetry,
+  annotations,
+  sendMessageKey,
+  openAnnotationRequest,
+  onAddAnnotation,
+  onRemoveAnnotation,
+  onUpdateAnnotation,
+  onSaveAndSendFollowUp,
 }: MessageBubbleProps) {
   const { t } = useTranslation()
 
@@ -2302,6 +2336,15 @@ function MessageBubble({
         onUrlClick={onOpenUrl}
         onFileClick={onOpenFile}
         compactMode={compactMode}
+        messageId={message.id}
+        sessionId={sessionId}
+        annotations={annotations ?? message.annotations}
+        sendMessageKey={sendMessageKey}
+        openAnnotationRequest={openAnnotationRequest}
+        onAddAnnotation={onAddAnnotation}
+        onRemoveAnnotation={onRemoveAnnotation}
+        onUpdateAnnotation={onUpdateAnnotation}
+        onSaveAndSendFollowUp={onSaveAndSendFollowUp}
       />
     )
   }
@@ -2432,11 +2475,15 @@ const MemoizedMessageBubble = React.memo(MessageBubble, (prev, next) => {
   if (prev.message.isStreaming || next.message.isStreaming) {
     return false
   }
-  // Skip re-render if key props unchanged
+  // Skip re-render if key props unchanged. Annotations + the external open
+  // request must be compared so user-message comments render/open live.
   return (
     prev.message.id === next.message.id &&
     prev.message.content === next.message.content &&
     prev.message.role === next.message.role &&
+    prev.message.annotations === next.message.annotations &&
+    prev.annotations === next.annotations &&
+    prev.openAnnotationRequest === next.openAnnotationRequest &&
     prev.sessionId === next.sessionId &&
     prev.compactMode === next.compactMode
   )

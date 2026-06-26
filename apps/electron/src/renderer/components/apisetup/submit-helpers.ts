@@ -28,6 +28,10 @@ export function resolvePiAuthProviderForSubmit(
   return PI_AUTH_PROVIDER_ALIASES[activePreset] ?? activePreset
 }
 
+export function isMaskedCredential(value: string | undefined | null): boolean {
+  return !!value && value.includes('•')
+}
+
 export function resolvePresetStateForBaseUrlChange(params: {
   matchedPreset: PresetKey
   activePreset: PresetKey

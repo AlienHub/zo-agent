@@ -192,13 +192,20 @@ class ModelRefreshService {
     }
 
     if (!newModels || newModels.length === 0) {
+      const staticModels = getModelsForProviderType(connection.providerType, connection.piAuthProvider)
       if (connection.models && connection.models.length > 0) {
-        handlerLog.warn(`Model refresh [${slug}]: keeping ${connection.models.length} persisted OpenCode models (live fetch failed)`)
-        return
-      }
-      newModels = getModelsForProviderType(connection.providerType, connection.piAuthProvider)
-      if (newModels.length > 0) {
-        handlerLog.info(`Model refresh [${slug}]: using ${newModels.length} models from static OpenCode catalog`)
+        if (staticModels.length > connection.models.length) {
+          newModels = staticModels
+          handlerLog.warn(`Model refresh [${slug}]: repairing persisted OpenCode catalog from ${connection.models.length} to ${staticModels.length} static models`)
+        } else {
+          handlerLog.warn(`Model refresh [${slug}]: keeping ${connection.models.length} persisted OpenCode models (live fetch failed)`)
+          return
+        }
+      } else {
+        newModels = staticModels
+        if (newModels.length > 0) {
+          handlerLog.info(`Model refresh [${slug}]: using ${newModels.length} models from static OpenCode catalog`)
+        }
       }
     }
 

@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'bun:test'
 import {
+  isMaskedCredential,
   resolveCustomEndpointPayload,
   resolvePiAuthProviderForSubmit,
   resolvePresetStateForBaseUrlChange,
 } from '../submit-helpers'
 import {
+  getOpenCodeModelIdsForSubmit,
   getOpenCodeStaticModelsForPreset,
   isOpenCodePresetKey,
+  resolveOpenCodeDefaultModels,
 } from '../opencode-models'
 import { pickTierDefaults, resolveTierModels } from '../tier-models'
 
@@ -15,6 +18,15 @@ const MODELS = [
   { id: 'pi/zai-balanced', name: 'Balanced', costInput: 5, costOutput: 10, contextWindow: 200000, reasoning: true },
   { id: 'pi/zai-fast', name: 'Fast', costInput: 1, costOutput: 2, contextWindow: 128000, reasoning: false },
 ]
+
+describe('isMaskedCredential', () => {
+  it('detects display-only masked API keys', () => {
+    expect(isMaskedCredential('sk-neGi••••••••P82w')).toBe(true)
+    expect(isMaskedCredential('••••••••')).toBe(true)
+    expect(isMaskedCredential('sk-real-secret')).toBe(false)
+    expect(isMaskedCredential('')).toBe(false)
+  })
+})
 
 describe('ApiKeyInput tier hydration helpers', () => {
   it('resolveTierModels keeps saved tier selections when all are valid', () => {
@@ -215,5 +227,19 @@ describe('OpenCode model helpers', () => {
     expect(goModels.map(m => m.id)).toContain('minimax-m3')
     expect(zenModels.map(m => m.id)).toContain('claude-sonnet-4-6')
     expect(zenModels.map(m => m.id)).toContain('deepseek-v4-pro')
+  })
+
+  it('keeps the full OpenCode catalog for submit while defaulting to GLM and flash', () => {
+    const models = getOpenCodeStaticModelsForPreset('opencode-go')
+    const defaults = resolveOpenCodeDefaultModels(models)
+    const modelIds = getOpenCodeModelIdsForSubmit(models)
+
+    expect(defaults.best).toBe('glm-5.2')
+    expect(defaults.default_).toBe('glm-5.2')
+    expect(defaults.cheap).toBe('deepseek-v4-flash')
+    expect(modelIds).toContain('glm-5.2')
+    expect(modelIds).toContain('deepseek-v4-flash')
+    expect(modelIds.length).toBeGreaterThan(3)
+    expect(new Set(modelIds).size).toBe(modelIds.length)
   })
 })

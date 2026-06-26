@@ -47,6 +47,9 @@ import { applyBlockAnnotationMarker, clearBlockAnnotationMarkers } from '../anno
 
 export interface AnnotatableMarkdownDocumentProps {
   content: string
+  /** Optional className applied to the inner Markdown so embedding hosts (e.g. the
+   * right-aligned user bubble) can preserve their own text styling. */
+  contentClassName?: string
   messageId: string
   sessionId?: string
   annotations?: AnnotationV1[]
@@ -71,6 +74,7 @@ export interface AnnotatableMarkdownDocumentProps {
 
 export function AnnotatableMarkdownDocument({
   content,
+  contentClassName,
   messageId,
   sessionId,
   annotations,
@@ -734,7 +738,7 @@ export function AnnotatableMarkdownDocument({
         onMouseDown={handleSelectionPointerDown}
         onMouseUp={handleTextSelection}
       >
-        <Markdown mode="minimal" onUrlClick={onOpenUrl} onFileClick={onOpenFile} hideFirstMermaidExpand={false}>
+        <Markdown mode="minimal" className={contentClassName} onUrlClick={onOpenUrl} onFileClick={onOpenFile} hideFirstMermaidExpand={false}>
           {content}
         </Markdown>
 

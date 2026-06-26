@@ -28,10 +28,23 @@ export type PendingFollowUpAnnotation = {
   color?: string
   meta?: Record<string, unknown>
   sourceLabel?: string
+  /** 1-based line (range) of the highlight in the source file — document comments
+   *  only, lets the agent Read the exact location. Undefined when unresolved. */
+  sourceLine?: number
+  sourceEndLine?: number
+  /** Text captured immediately around the highlight (document comments only). */
+  context?: { before: string; after: string }
   resource?: {
     kind: 'file' | 'url'
     target: string
   }
+}
+
+/** ` (line 12)` / ` (lines 12–15)` / `` — appended to a document comment's Source label. */
+function formatSourceLineSuffix(start?: number, end?: number): string {
+  if (!start || !Number.isFinite(start)) return ''
+  if (end && end > start) return ` (lines ${start}–${end})`
+  return ` (line ${start})`
 }
 
 /**
@@ -61,10 +74,17 @@ export function formatFollowUpSection(
 
   const items = followUps.map((followUp, idx) => {
     const quoteText = normalizeFollowUpText(followUp.selectedText)
+    // Document comments: mark the exact highlight with ⟦⟧ inside its captured
+    // surrounding context, and label the source file + line so the agent can Read
+    // the precise location. Chat-message comments stay bare — the full message is
+    // already in the conversation, so no extra context/location is needed.
+    const before = followUp.context?.before ? normalizeFollowUpText(followUp.context.before) : ''
+    const after = followUp.context?.after ? normalizeFollowUpText(followUp.context.after) : ''
+    const markedQuote = before || after ? `${before}⟦${quoteText}⟧${after}` : quoteText
     const quoteLines = followUp.sourceLabel
       ? [
-          `> [#${idx + 1}] Source: \`${followUp.sourceLabel}\``,
-          `> ${quoteText}`,
+          `> [#${idx + 1}] Source: \`${followUp.sourceLabel}\`${formatSourceLineSuffix(followUp.sourceLine, followUp.sourceEndLine)}`,
+          `> ${markedQuote}`,
         ]
       : [`> [#${idx + 1}] ${quoteText}`]
     return [

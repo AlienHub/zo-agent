@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils"
 import { Check, ChevronDown, Eye, EyeOff, Loader2 } from "lucide-react"
 import { pickTierDefaults, resolveTierModels, type PiModelInfo } from "./tier-models"
 import {
+  isMaskedCredential,
   resolveCustomEndpointPayload,
   resolvePiAuthProviderForSubmit,
   resolvePresetStateForBaseUrlChange,
@@ -32,12 +33,11 @@ import {
 } from "./submit-helpers"
 
 import type { CustomEndpointApi, CustomEndpointConfig } from '@config/llm-connections'
-import type { ModelDefinition } from '@craft-agent/shared/config'
 import {
   OPENCODE_ZEN_BASE_URL,
   OPENCODE_GO_BASE_URL,
 } from '@config/opencode-provider'
-import { getOpenCodeStaticModelsForPreset, isOpenCodePresetKey } from './opencode-models'
+import { getOpenCodeModelIdsForSubmit, getOpenCodeStaticModelsForPreset, isOpenCodePresetKey, resolveOpenCodeDefaultModels } from './opencode-models'
 
 export type ApiKeyStatus = 'idle' | 'validating' | 'success' | 'error'
 
@@ -188,40 +188,6 @@ function parseModelList(value: string): string[] {
     .filter(Boolean)
 }
 
-function findOpenCodeModelId(
-  models: ModelDefinition[],
-  preferredIds: string[],
-  fallbackPattern?: RegExp
-): string {
-  const byId = new Map(models.map((model) => [model.id, model]))
-  for (const id of preferredIds) {
-    if (byId.has(id)) return id
-  }
-
-  if (fallbackPattern) {
-    const match = models.find((model) => fallbackPattern.test(`${model.id} ${model.name}`))
-    if (match) return match.id
-  }
-
-  return models[0]?.id ?? ''
-}
-
-function resolveOpenCodeDefaultModels(models: ModelDefinition[]): { best: string; default_: string; cheap: string } {
-  const glm = findOpenCodeModelId(models, ['glm-5.2', 'glm-5.1', 'glm-5'], /\bglm\b/i)
-  const fast = findOpenCodeModelId(
-    models,
-    ['deepseek-v4-flash', 'deepseek-v4-flash-free'],
-    /deepseek.*flash/i
-  )
-  const fallback = models[0]?.id ?? ''
-
-  return {
-    best: glm || fallback,
-    default_: glm || fallback,
-    cheap: fast || glm || fallback,
-  }
-}
-
 // ============================================================
 // Pi model tier selection (for providers with many models)
 // ============================================================
@@ -339,7 +305,7 @@ export function ApiKeyInput({
 
       window.electronAPI.getOpenCodeProviderModels({
         baseUrl: baseUrl.trim(),
-        apiKey: apiKey.trim() || undefined,
+        apiKey: isMaskedCredential(apiKey) ? undefined : apiKey.trim() || undefined,
         piAuthProvider: activePreset,
       }).then((result) => {
         if (requestId !== openCodeModelRequestIdRef.current) return
@@ -427,6 +393,7 @@ export function ApiKeyInput({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    const submittedApiKey = isMaskedCredential(apiKey) ? '' : apiKey.trim()
 
     const effectivePiAuthProvider = isPiApiKeyFlow
       ? resolvePiAuthProviderForSubmit(activePreset, lastNonCustomPreset)
@@ -438,14 +405,14 @@ export function ApiKeyInput({
         setModelError('No OpenCode models are available.')
         return
       }
-      const models: string[] = [defaults.best, defaults.default_, defaults.cheap]
+      const models = getOpenCodeModelIdsForSubmit(openCodeModelOptions)
       onSubmit({
-        apiKey: apiKey.trim(),
+        apiKey: submittedApiKey,
         baseUrl: baseUrl.trim() || undefined,
         connectionDefaultModel: defaults.best,
         models,
         piAuthProvider: activePreset,
-        modelSelectionMode: 'userDefined3Tier',
+        modelSelectionMode: 'automaticallySyncedFromProvider',
       })
       return
     }
@@ -458,7 +425,7 @@ export function ApiKeyInput({
       }
       const models: string[] = [bestModel, defaultModel, cheapModel]
       onSubmit({
-        apiKey: apiKey.trim(),
+        apiKey: submittedApiKey,
         baseUrl: baseUrl.trim() || undefined,
         connectionDefaultModel: bestModel,
         models,
@@ -523,7 +490,7 @@ export function ApiKeyInput({
     })
 
     onSubmit({
-      apiKey: apiKey.trim(),
+      apiKey: submittedApiKey,
       baseUrl: isUsingDefaultEndpoint ? undefined : effectiveBaseUrl,
       connectionDefaultModel: parsedModels[0],
       models: parsedModels.length > 0 ? parsedModels : undefined,
