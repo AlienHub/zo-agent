@@ -588,7 +588,7 @@
   "onboarding.completion.startChat": "Solo inicia un chat y ponte a trabajar.",
   "onboarding.credentials.apiConfiguration": "Configuración de API",
   "onboarding.credentials.apiKeyAnthropicDesc": "Enter your API key. Optionally configure a custom endpoint for OpenRouter, Ollama, or compatible APIs.",
-  "onboarding.credentials.apiKeyPiDesc": "Select a provider preset and enter the API key. For arbitrary Anthropic-compatible endpoints, use Anthropic API Key mode.",
+  "onboarding.credentials.apiKeyPiDesc": "Selecciona un preajuste de proveedor e introduce la clave API. Para endpoints arbitrarios compatibles con Anthropic, usa el modo Clave API de Anthropic.",
   "onboarding.credentials.browserOpenedGitHub": "Debería haberse abierto una ventana del navegador en github.com/login/device",
   "onboarding.credentials.chatGPTConnected": "¡Conectado! Tu suscripción de ChatGPT está lista.",
   "onboarding.credentials.chatGPTInstructions": "Haz clic en el botón de arriba para iniciar sesión con tu cuenta de OpenAI. Se abrirá una ventana del navegador para la autenticación.",

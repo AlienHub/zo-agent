@@ -588,7 +588,7 @@
   "onboarding.completion.startChat": "Csak kezdj egy csevegést, és máris munkához láthatsz.",
   "onboarding.credentials.apiConfiguration": "API-konfiguráció",
   "onboarding.credentials.apiKeyAnthropicDesc": "Enter your API key. Optionally configure a custom endpoint for OpenRouter, Ollama, or compatible APIs.",
-  "onboarding.credentials.apiKeyPiDesc": "Select a provider preset and enter the API key. For arbitrary Anthropic-compatible endpoints, use Anthropic API Key mode.",
+  "onboarding.credentials.apiKeyPiDesc": "Válassz szolgáltató-előbeállítást, és add meg az API-kulcsot. Tetszőleges Anthropic-kompatibilis végpontokhoz használd az Anthropic API-kulcs módot.",
   "onboarding.credentials.browserOpenedGitHub": "Egy böngészőablaknak kellett volna megnyílnia a github.com/login/device oldalon",
   "onboarding.credentials.chatGPTConnected": "Csatlakoztatva! A ChatGPT-előfizetésed készen áll.",
   "onboarding.credentials.chatGPTInstructions": "Kattints a fenti gombra az OpenAI-fiókkal való bejelentkezéshez. Egy böngészőablak nyílik meg a hitelesítéshez.",

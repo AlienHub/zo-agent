@@ -1,5 +1,5 @@
 import { RPC_CHANNELS, type LlmConnectionSetup } from '@craft-agent/shared/protocol'
-import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, getModelsForProviderType, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix, fetchOpenCodeModels } from '@craft-agent/shared/config'
+import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, getModelsForProviderType, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix, fetchOpenCodeModels, OPENCODE_GO_BASE_URL, OPENCODE_ZEN_BASE_URL } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { setSetupDeferred } from '@craft-agent/shared/config/storage'
 import {
@@ -18,6 +18,23 @@ import { CLIENT_OPEN_EXTERNAL } from '@craft-agent/server-core/transport'
 // Local OAuth state
 let copilotOAuthAbort: AbortController | null = null
 
+const OPENCODE_PROVIDER_BASE_URLS: Record<string, string> = {
+  'opencode-go': OPENCODE_GO_BASE_URL,
+  'opencode-zen': OPENCODE_ZEN_BASE_URL,
+}
+
+function normalizeOpenCodeBaseUrl(value: string | undefined): string | null {
+  if (!value?.trim()) return null
+  try {
+    const url = new URL(value.trim())
+    url.hash = ''
+    url.search = ''
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return null
+  }
+}
+
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.llmConnections.LIST,
   RPC_CHANNELS.llmConnections.LIST_WITH_STATUS,
@@ -29,6 +46,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.llmConnections.SET_DEFAULT,
   RPC_CHANNELS.llmConnections.SET_WORKSPACE_DEFAULT,
   RPC_CHANNELS.llmConnections.REFRESH_MODELS,
+  RPC_CHANNELS.llmConnections.GET_OPEN_CODE_MODELS,
   RPC_CHANNELS.chatgpt.START_OAUTH,
   RPC_CHANNELS.chatgpt.COMPLETE_OAUTH,
   RPC_CHANNELS.chatgpt.CANCEL_OAUTH,
@@ -605,6 +623,46 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       const msg = error instanceof Error ? error.message : 'Unknown error'
       deps.platform.logger?.error(`Failed to refresh models for ${slug}: ${msg}`)
       return { success: false, error: msg }
+    }
+  })
+
+  server.handle(RPC_CHANNELS.llmConnections.GET_OPEN_CODE_MODELS, async (_ctx, args: {
+    baseUrl: string
+    apiKey?: string
+    piAuthProvider: string
+  }): Promise<{ models: ReturnType<typeof getModelsForProviderType>; totalCount: number; source: 'live' | 'static' }> => {
+    const staticModels = getModelsForProviderType('pi_compat', args.piAuthProvider)
+    const expectedBaseUrl = OPENCODE_PROVIDER_BASE_URLS[args.piAuthProvider]
+    const normalizedExpectedBaseUrl = normalizeOpenCodeBaseUrl(expectedBaseUrl)
+    const normalizedBaseUrl = normalizeOpenCodeBaseUrl(args.baseUrl)
+
+    if (!normalizedExpectedBaseUrl || normalizedBaseUrl !== normalizedExpectedBaseUrl) {
+      deps.platform.logger?.warn(`Skipped OpenCode model fetch for unsupported provider/base URL: ${args.piAuthProvider}`)
+      return {
+        models: staticModels,
+        totalCount: staticModels.length,
+        source: 'static',
+      }
+    }
+
+    try {
+      const result = await fetchOpenCodeModels({
+        baseUrl: normalizedBaseUrl,
+        apiKey: args.apiKey,
+      })
+      const models = result.models.length > 0 ? result.models : staticModels
+      return {
+        models,
+        totalCount: models.length,
+        source: result.models.length > 0 ? 'live' : 'static',
+      }
+    } catch (error) {
+      deps.platform.logger?.warn(`Failed to fetch OpenCode models for ${args.piAuthProvider}: ${error instanceof Error ? error.message : error}`)
+      return {
+        models: staticModels,
+        totalCount: staticModels.length,
+        source: 'static',
+      }
     }
   })
 

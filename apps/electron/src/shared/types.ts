@@ -68,7 +68,7 @@ import type { ExportResourcesOptions, ExportResult, ResourceImportMode, Resource
 export type { ExportResourcesOptions, ExportResult, ResourceImportMode, ResourceBundle, ResourceImportResult };
 
 // LLM connection types
-import type { LlmConnection, LlmConnectionWithStatus, LlmAuthType, LlmProviderType, NetworkProxySettings } from '@craft-agent/shared/config';
+import type { LlmConnection, LlmConnectionWithStatus, LlmAuthType, LlmProviderType, ModelDefinition, NetworkProxySettings } from '@craft-agent/shared/config';
 import type { SensitiveContextProtectionSettings } from '@craft-agent/shared/config';
 export type { LlmConnection, LlmConnectionWithStatus, LlmAuthType, LlmProviderType, NetworkProxySettings, SensitiveContextProtectionSettings };
 
@@ -435,6 +435,7 @@ export interface ElectronAPI {
   getPiApiKeyProviders(): Promise<Array<{ key: string; label: string; placeholder: string }>>
   getPiProviderBaseUrl(provider: string): Promise<string | undefined>
   getPiProviderModels(provider: string): Promise<{ models: Array<{ id: string; name: string; costInput: number; costOutput: number; contextWindow: number; reasoning: boolean }>; totalCount: number }>
+  getOpenCodeProviderModels(args: { baseUrl: string; apiKey?: string; piAuthProvider: string }): Promise<{ models: ModelDefinition[]; totalCount: number; source: 'live' | 'static' }>
 
   // Session-specific model (overrides global)
   getSessionModel(sessionId: string, workspaceId: string): Promise<string | null>

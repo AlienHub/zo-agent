@@ -32,11 +32,10 @@ import {
 } from "./submit-helpers"
 
 import type { CustomEndpointApi, CustomEndpointConfig } from '@config/llm-connections'
+import type { ModelDefinition } from '@craft-agent/shared/config'
 import {
   OPENCODE_ZEN_BASE_URL,
   OPENCODE_GO_BASE_URL,
-  getOpenCodeZenModels,
-  getOpenCodeGoModels,
 } from '@config/opencode-provider'
 import { getOpenCodeStaticModelsForPreset, isOpenCodePresetKey } from './opencode-models'
 
@@ -189,6 +188,40 @@ function parseModelList(value: string): string[] {
     .filter(Boolean)
 }
 
+function findOpenCodeModelId(
+  models: ModelDefinition[],
+  preferredIds: string[],
+  fallbackPattern?: RegExp
+): string {
+  const byId = new Map(models.map((model) => [model.id, model]))
+  for (const id of preferredIds) {
+    if (byId.has(id)) return id
+  }
+
+  if (fallbackPattern) {
+    const match = models.find((model) => fallbackPattern.test(`${model.id} ${model.name}`))
+    if (match) return match.id
+  }
+
+  return models[0]?.id ?? ''
+}
+
+function resolveOpenCodeDefaultModels(models: ModelDefinition[]): { best: string; default_: string; cheap: string } {
+  const glm = findOpenCodeModelId(models, ['glm-5.2', 'glm-5.1', 'glm-5'], /\bglm\b/i)
+  const fast = findOpenCodeModelId(
+    models,
+    ['deepseek-v4-flash', 'deepseek-v4-flash-free'],
+    /deepseek.*flash/i
+  )
+  const fallback = models[0]?.id ?? ''
+
+  return {
+    best: glm || fallback,
+    default_: glm || fallback,
+    cheap: fast || glm || fallback,
+  }
+}
+
 // ============================================================
 // Pi model tier selection (for providers with many models)
 // ============================================================
@@ -219,16 +252,9 @@ export function ApiKeyInput({
     initialPreset !== 'custom' ? initialPreset : defaultPreset.key
   )
   const [connectionDefaultModel, setConnectionDefaultModel] = useState(initialValues?.connectionDefaultModel ?? '')
-  const [openCodeModel, setOpenCodeModel] = useState(initialValues?.connectionDefaultModel ?? '')
   const [openCodeModels, setOpenCodeModels] = useState(() => getOpenCodeStaticModelsForPreset(initialPreset))
-  const [openCodeModelsLoading, setOpenCodeModelsLoading] = useState(false)
-  const [openCodeModelsSource, setOpenCodeModelsSource] = useState<'live' | 'static'>('static')
-  const [openCodeModelOpen, setOpenCodeModelOpen] = useState(false)
-  const [openCodeModelFilter, setOpenCodeModelFilter] = useState('')
-  const [openCodeDropdownPosition, setOpenCodeDropdownPosition] = useState<{ top: number; left: number; width: number } | null>(null)
   const [customApi, setCustomApi] = useState<CustomEndpointApi>(initialValues?.customApi ?? 'openai-completions')
   const [modelError, setModelError] = useState<string | null>(null)
-  const openCodeModelRef = useRef(openCodeModel)
 
   // Bedrock auth state
   const [bedrockAuthMethod, setBedrockAuthMethod] = useState<'iam_credentials' | 'environment'>('iam_credentials')
@@ -249,7 +275,6 @@ export function ApiKeyInput({
   const tierFilterInputRef = useRef<HTMLInputElement>(null)
   const hydratedTierProviderRef = useRef<string | null>(null)
   const openCodeModelRequestIdRef = useRef(0)
-  const openCodeModelFilterInputRef = useRef<HTMLInputElement>(null)
 
   const isDisabled = disabled || status === 'validating'
 
@@ -302,24 +327,38 @@ export function ApiKeyInput({
   }, [activePreset, loadPiModels])
 
   useEffect(() => {
-    openCodeModelRef.current = openCodeModel
-  }, [openCodeModel])
-
-  useEffect(() => {
     if (!isOpenCodePreset) {
       setOpenCodeModels([])
-      setOpenCodeModelsLoading(false)
-      setOpenCodeModelsSource('static')
-      setOpenCodeModelOpen(false)
-      setOpenCodeModelFilter('')
-      setOpenCodeDropdownPosition(null)
       return
     }
 
     setOpenCodeModels(openCodeStaticModels)
-    setOpenCodeModelsSource('static')
-    setOpenCodeModelsLoading(false)
-  }, [activePreset, isOpenCodePreset, openCodeStaticModels])
+
+    const timeout = setTimeout(() => {
+      const requestId = ++openCodeModelRequestIdRef.current
+
+      window.electronAPI.getOpenCodeProviderModels({
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim() || undefined,
+        piAuthProvider: activePreset,
+      }).then((result) => {
+        if (requestId !== openCodeModelRequestIdRef.current) return
+        const liveModels = result.models.length > 0 ? result.models : openCodeStaticModels
+        setOpenCodeModels(liveModels)
+        setModelError(null)
+      }).catch((err) => {
+        if (requestId !== openCodeModelRequestIdRef.current) return
+        console.error('[ApiKeyInput] Failed to load OpenCode models for', activePreset, err)
+        setOpenCodeModels(openCodeStaticModels)
+        setModelError(null)
+      })
+    }, 300)
+
+    return () => {
+      clearTimeout(timeout)
+      openCodeModelRequestIdRef.current += 1
+    }
+  }, [activePreset, apiKey, baseUrl, isOpenCodePreset, openCodeStaticModels])
 
   // Whether to show 3 tier dropdowns instead of text input
   const hasPiModels = isPiApiKeyFlow && piModels.length > 0 && !isDefaultProviderPreset && activePreset !== 'custom' && !isBedrock
@@ -350,14 +389,11 @@ export function ApiKeyInput({
     } else if (isOpenCodePresetKey(preset.key)) {
       setConnectionDefaultModel('')
       const models = getOpenCodeStaticModelsForPreset(preset.key)
-      setOpenCodeModel(initialValues?.connectionDefaultModel ?? models[0]?.id ?? '')
       setOpenCodeModels(models)
     } else if (preset.key === 'custom' || OPENAI_COMPAT_CUSTOM_URL_PRESETS.has(preset.key)) {
       setConnectionDefaultModel(providerType === 'openai' ? COMPAT_OPENAI_DEFAULTS : COMPAT_ANTHROPIC_DEFAULTS)
-      setOpenCodeModel('')
     } else {
       setConnectionDefaultModel('')
-      setOpenCodeModel('')
     }
   }
 
@@ -395,6 +431,24 @@ export function ApiKeyInput({
     const effectivePiAuthProvider = isPiApiKeyFlow
       ? resolvePiAuthProviderForSubmit(activePreset, lastNonCustomPreset)
       : undefined
+
+    if (isOpenCodePreset) {
+      const defaults = resolveOpenCodeDefaultModels(openCodeModelOptions)
+      if (!defaults.best || !defaults.default_ || !defaults.cheap) {
+        setModelError('No OpenCode models are available.')
+        return
+      }
+      const models: string[] = [defaults.best, defaults.default_, defaults.cheap]
+      onSubmit({
+        apiKey: apiKey.trim(),
+        baseUrl: baseUrl.trim() || undefined,
+        connectionDefaultModel: defaults.best,
+        models,
+        piAuthProvider: activePreset,
+        modelSelectionMode: 'userDefined3Tier',
+      })
+      return
+    }
 
     // Pi API key flow with tier dropdowns — submit selected models
     if (hasPiModels) {
@@ -445,26 +499,6 @@ export function ApiKeyInput({
     }
 
     const effectiveBaseUrl = baseUrl.trim()
-
-    if (isOpenCodePreset) {
-      const selectedOpenCodeModel = openCodeModel.trim()
-      const models = openCodeModelOptions.map(m => m.id)
-      if (!selectedOpenCodeModel) {
-        setModelError('Default model is required for OpenCode presets.')
-        return
-      }
-
-      onSubmit({
-        apiKey: apiKey.trim(),
-        baseUrl: isDefaultProviderPreset ? undefined : effectiveBaseUrl,
-        connectionDefaultModel: selectedOpenCodeModel,
-        models: models.length > 0 ? models : undefined,
-        piAuthProvider: activePreset,
-        modelSelectionMode: 'automaticallySyncedFromProvider',
-        customEndpoint: {},
-      })
-      return
-    }
 
     const parsedModels = parseModelList(connectionDefaultModel)
 
@@ -755,118 +789,8 @@ export function ApiKeyInput({
         </>
       )}
 
-      {/* Model Selection — OpenCode live picker, 3-tier Pi dropdowns, or text input for custom/compat */}
-      {isOpenCodePreset ? (
-        <div className="space-y-3">
-          {openCodeModelsLoading && (
-            <div className="flex items-center gap-2 py-3 text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" />
-              <span className="text-xs">{t("apiSetup.loadingModels")}</span>
-            </div>
-          )}
-          <div className="space-y-1.5">
-            <Label className="text-muted-foreground font-normal text-xs">
-              Default Model <span className="text-foreground/30">· required</span>
-            </Label>
-            <button
-              type="button"
-              disabled={isDisabled}
-              onClick={(e) => {
-                if (openCodeModelOpen) {
-                  setOpenCodeModelOpen(false)
-                  setOpenCodeModelFilter('')
-                  setOpenCodeDropdownPosition(null)
-                } else {
-                  const rect = e.currentTarget.getBoundingClientRect()
-                  setOpenCodeDropdownPosition({ top: rect.bottom + 4, left: rect.left, width: rect.width })
-                  setOpenCodeModelOpen(true)
-                  setOpenCodeModelFilter('')
-                  setTimeout(() => openCodeModelFilterInputRef.current?.focus(), 0)
-                }
-              }}
-              className={cn(
-                "flex h-9 w-full items-center justify-between rounded-md px-3 text-sm",
-                "bg-foreground-2 shadow-minimal transition-colors",
-                "hover:bg-background focus:outline-none focus:bg-background",
-                isDisabled && "opacity-50 pointer-events-none"
-              )}
-            >
-              <span className="truncate text-foreground">
-                {openCodeModelOptions.find(m => m.id === openCodeModel)?.name ?? 'Select model...'}
-              </span>
-              <ChevronDown className="size-3 opacity-50 shrink-0" />
-            </button>
-          </div>
-          {openCodeModelOpen && openCodeDropdownPosition && (
-            <>
-              <div
-                className="fixed inset-0 z-floating-backdrop"
-                onClick={() => {
-                  setOpenCodeModelOpen(false)
-                  setOpenCodeModelFilter('')
-                  setOpenCodeDropdownPosition(null)
-                }}
-              />
-              <div
-                className="fixed z-floating-menu min-w-[220px] overflow-hidden rounded-[8px] bg-background text-foreground shadow-modal-small"
-                style={{
-                  top: openCodeDropdownPosition.top,
-                  left: openCodeDropdownPosition.left,
-                  width: openCodeDropdownPosition.width,
-                }}
-              >
-                <CommandPrimitive className="min-w-[220px]" shouldFilter={false}>
-                  <div className="border-b border-border/50 px-3 py-2">
-                    <CommandPrimitive.Input
-                      ref={openCodeModelFilterInputRef}
-                      value={openCodeModelFilter}
-                      onValueChange={setOpenCodeModelFilter}
-                      placeholder={t("apiSetup.searchModels")}
-                      autoFocus
-                      className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground placeholder:select-none"
-                    />
-                  </div>
-                  <CommandPrimitive.List className="max-h-[280px] overflow-y-auto p-1">
-                    {openCodeModelOptions
-                      .filter(model => `${model.name} ${model.id}`.toLowerCase().includes(openCodeModelFilter.toLowerCase()))
-                      .map((model) => (
-                        <CommandPrimitive.Item
-                          key={model.id}
-                          value={model.id}
-                          onSelect={() => {
-                            setOpenCodeModel(model.id)
-                            setOpenCodeModelOpen(false)
-                            setOpenCodeModelFilter('')
-                            setOpenCodeDropdownPosition(null)
-                            setModelError(null)
-                          }}
-                          className={cn(
-                            "flex cursor-pointer select-none items-center justify-between gap-3 rounded-[6px] px-3 py-2 text-[13px]",
-                            "outline-none data-[selected=true]:bg-foreground/5"
-                          )}
-                        >
-                          <div className="flex min-w-0 flex-col">
-                            <span className="truncate">{model.name}</span>
-                            <span className="truncate text-[11px] text-foreground/30">{model.id}</span>
-                          </div>
-                          <Check className={cn("size-3 shrink-0", openCodeModel === model.id ? "opacity-100" : "opacity-0")} />
-                        </CommandPrimitive.Item>
-                      ))}
-                  </CommandPrimitive.List>
-                </CommandPrimitive>
-              </div>
-            </>
-          )}
-          <p className="text-xs text-foreground/30">
-            {openCodeModelsSource === 'live'
-              ? `Live model list from OpenCode (${openCodeModelOptions.length} models)`
-              : `Using the seeded OpenCode catalog (${openCodeModelOptions.length} models)`}
-          </p>
-          {modelError && (
-            <p className="text-xs text-destructive">{modelError}</p>
-          )}
-        </div>
-      ) : hasPiModels ? (
+      {/* Model Selection — 3-tier dropdowns for model catalogs, or text input for custom/compat */}
+      {hasPiModels ? (
         <div className="space-y-3">
           {piModelsLoading ? (
             <div className="flex items-center gap-2 py-3 text-muted-foreground">
@@ -940,7 +864,7 @@ export function ApiKeyInput({
                       </div>
                       <CommandPrimitive.List className="max-h-[240px] overflow-y-auto p-1">
                         {piModels
-                          .filter(m => m.name.toLowerCase().includes(tierFilter.toLowerCase()))
+                          .filter(m => `${m.name} ${m.id}`.toLowerCase().includes(tierFilter.toLowerCase()))
                           .map((model) => (
                             <CommandPrimitive.Item
                               key={model.id}

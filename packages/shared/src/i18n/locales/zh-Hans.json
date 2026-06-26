@@ -588,7 +588,7 @@
   "onboarding.completion.startChat": "开始聊天，开始工作。",
   "onboarding.credentials.apiConfiguration": "API 配置",
   "onboarding.credentials.apiKeyAnthropicDesc": "Enter your API key. Optionally configure a custom endpoint for OpenRouter, Ollama, or compatible APIs.",
-  "onboarding.credentials.apiKeyPiDesc": "Select a provider preset and enter the API key. For arbitrary Anthropic-compatible endpoints, use Anthropic API Key mode.",
+  "onboarding.credentials.apiKeyPiDesc": "选择提供商预设并输入 API 密钥。任意 Anthropic 兼容端点请使用 Anthropic API 密钥模式。",
   "onboarding.credentials.browserOpenedGitHub": "浏览器应已打开 github.com/login/device",
   "onboarding.credentials.chatGPTConnected": "已连接! ChatGPT 订阅已就绪。",
   "onboarding.credentials.chatGPTInstructions": "点击上方按钮使用 OpenAI 账号登录。将打开浏览器窗口进行认证。",

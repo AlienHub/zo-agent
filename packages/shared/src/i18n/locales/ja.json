@@ -588,7 +588,7 @@
   "onboarding.completion.startChat": "チャットを始めてすぐに作業できます。",
   "onboarding.credentials.apiConfiguration": "APIの設定",
   "onboarding.credentials.apiKeyAnthropicDesc": "Enter your API key. Optionally configure a custom endpoint for OpenRouter, Ollama, or compatible APIs.",
-  "onboarding.credentials.apiKeyPiDesc": "Select a provider preset and enter the API key. For arbitrary Anthropic-compatible endpoints, use Anthropic API Key mode.",
+  "onboarding.credentials.apiKeyPiDesc": "プロバイダープリセットを選択し、APIキーを入力してください。任意のAnthropic互換エンドポイントにはAnthropic APIキーモードを使用してください。",
   "onboarding.credentials.browserOpenedGitHub": "github.com/login/deviceへのブラウザウィンドウが開いているはずです",
   "onboarding.credentials.chatGPTConnected": "接続しました！ChatGPTサブスクリプションが利用可能です。",
   "onboarding.credentials.chatGPTInstructions": "上のボタンをクリックしてOpenAIアカウントでサインインしてください。認証のためブラウザウィンドウが開きます。",

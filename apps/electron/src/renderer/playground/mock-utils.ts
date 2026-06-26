@@ -439,6 +439,13 @@ export const mockElectronAPI = {
     const MOCK_TOTAL_COUNTS: Record<string, number> = { 'openrouter': 233, 'vercel-ai-gateway': 129, 'amazon-bedrock': 79 }
     return { models, totalCount: MOCK_TOTAL_COUNTS[provider] ?? models.length }
   },
+  getOpenCodeProviderModels: async ({ piAuthProvider }: { baseUrl: string; apiKey?: string; piAuthProvider: string }) => {
+    const { getOpenCodeGoModels, getOpenCodeZenModels } = await import('@config/opencode-provider')
+    const models = piAuthProvider === 'opencode-go'
+      ? getOpenCodeGoModels()
+      : getOpenCodeZenModels()
+    return { models, totalCount: models.length, source: 'static' as const }
+  },
 
   // ------------------------------------------------------------------
   // Messaging Gateway (Telegram + WhatsApp)
