@@ -11,19 +11,24 @@
  */
 
 import type { ModelFetcherMap, ModelFetcherCredentials, FetchableProvider } from '@craft-agent/shared/config'
-import type { ModelDefinition } from '@craft-agent/shared/config'
+import type { ModelDefinition, LlmConnection } from '@craft-agent/shared/config'
 import {
   getLlmConnections,
   getLlmConnection,
   updateLlmConnection,
   isCompatProvider,
   getModelsForProviderType,
+  isOpenCodePiAuthProvider,
+  fetchOpenCodeModels,
 } from '@craft-agent/shared/config'
 import { MODEL_FETCHERS } from './registry'
 import { handlerLog } from './runtime'
 
 /** Copilot models are server-managed — refresh every 10 minutes to pick up policy changes. */
 const COPILOT_REFRESH_INTERVAL_MS = 10 * 60 * 1000
+
+/** OpenCode Zen/Go model lineup changes infrequently — refresh every 24h. */
+const OPENCODE_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 // ============================================================
 // Types
@@ -73,7 +78,14 @@ class ModelRefreshService {
       return
     }
 
-    // Skip compat providers — users configure models manually
+    // OpenCode Zen/Go compat connections have their own fetcher
+    // (GET <baseUrl>/models). Falls back to the static catalog if the live fetch fails.
+    if (isCompatProvider(connection.providerType) && isOpenCodePiAuthProvider(connection.piAuthProvider)) {
+      await this._refreshOpenCode(slug, connection)
+      return
+    }
+
+    // Skip other compat providers — users configure models manually
     if (isCompatProvider(connection.providerType)) {
       return
     }
@@ -150,6 +162,64 @@ class ModelRefreshService {
   }
 
   /**
+   * OpenCode Zen/Go refresh — keeps compat providers in the refresh loop
+   * because the live `GET <baseUrl>/models` endpoint is the source of truth
+   * (the static catalog is only the seeded/offline fallback).
+   *
+   * Fallback chain:
+   *   1. Live fetch via fetchOpenCodeModels(baseUrl, apiKey)
+   *   2. Persisted connection.models (keep what we have)
+   *   3. Static OpenCode catalog snapshot
+   */
+  private async _refreshOpenCode(slug: string, connection: LlmConnection): Promise<void> {
+    let newModels: ModelDefinition[] | null = null
+
+    try {
+      const credentials = await this.getCredentials(slug)
+      if (!connection.baseUrl) {
+        throw new Error('OpenCode connection has no baseUrl')
+      }
+      handlerLog.info(`Model refresh [${slug}]: fetching OpenCode models from ${connection.baseUrl}`)
+      const result = await fetchOpenCodeModels({
+        baseUrl: connection.baseUrl,
+        apiKey: credentials.apiKey,
+      })
+      newModels = result.models
+      handlerLog.info(`Model refresh [${slug}]: fetched ${newModels.length} OpenCode models: ${newModels.map(m => m.id).join(', ')}`)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      handlerLog.warn(`Model refresh [${slug}]: OpenCode live fetch failed: ${msg}`)
+    }
+
+    if (!newModels || newModels.length === 0) {
+      if (connection.models && connection.models.length > 0) {
+        handlerLog.warn(`Model refresh [${slug}]: keeping ${connection.models.length} persisted OpenCode models (live fetch failed)`)
+        return
+      }
+      newModels = getModelsForProviderType(connection.providerType, connection.piAuthProvider)
+      if (newModels.length > 0) {
+        handlerLog.info(`Model refresh [${slug}]: using ${newModels.length} models from static OpenCode catalog`)
+      }
+    }
+
+    if (newModels.length === 0) {
+      handlerLog.warn(`Model refresh [${slug}]: no OpenCode models available from any source`)
+      return
+    }
+
+    const currentDefault = connection.defaultModel
+    const stillValid = currentDefault && newModels.some(m => m.id === currentDefault)
+    const newDefault = stillValid
+      ? currentDefault
+      : newModels[0]?.id
+
+    updateLlmConnection(slug, {
+      models: newModels,
+      ...(newDefault && !stillValid ? { defaultModel: newDefault } : {}),
+    })
+  }
+
+  /**
    * Start periodic refresh timers for all existing connections.
    * Also runs an immediate non-blocking fetch for each.
    * Call on app startup after IPC handlers are registered.
@@ -158,7 +228,15 @@ class ModelRefreshService {
     const connections = getLlmConnections()
 
     for (const conn of connections) {
-      if (isCompatProvider(conn.providerType)) continue
+      if (isCompatProvider(conn.providerType)) {
+        if (isOpenCodePiAuthProvider(conn.piAuthProvider)) {
+          this.refreshConnection(conn.slug).catch(err => {
+            handlerLog.warn(`Initial OpenCode model refresh failed for ${conn.slug}: ${err instanceof Error ? err.message : err}`)
+          })
+          this.startTimer(conn.slug, OPENCODE_REFRESH_INTERVAL_MS)
+        }
+        continue
+      }
 
       const providerType = conn.providerType as FetchableProvider
       const fetcher = this.fetchers[providerType]
@@ -202,7 +280,14 @@ class ModelRefreshService {
 
     // Ensure periodic timer is running
     const connection = getLlmConnection(slug)
-    if (!connection || isCompatProvider(connection.providerType)) return
+    if (!connection) return
+
+    if (isCompatProvider(connection.providerType)) {
+      if (isOpenCodePiAuthProvider(connection.piAuthProvider) && !this.timers.has(slug)) {
+        this.startTimer(slug, OPENCODE_REFRESH_INTERVAL_MS)
+      }
+      return
+    }
 
     const providerType = connection.providerType as FetchableProvider
     const fetcher = this.fetchers[providerType]

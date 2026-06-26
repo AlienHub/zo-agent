@@ -74,6 +74,8 @@ import { buildCallLlmRequest, withTimeout, LLM_QUERY_TIMEOUT_MS } from '../../sh
 import type { LLMQueryRequest, LLMQueryResult } from '../../shared/src/agent/llm-tool.ts';
 import { PI_TOOL_NAME_MAP, THINKING_TO_PI } from '../../shared/src/agent/backend/pi/constants.ts';
 import { getDefaultSummarizationModel } from '../../shared/src/config/models.ts';
+import { OPENCODE_MODEL_API_MAP } from '../../shared/src/config/opencode-provider.ts';
+import { isOpenCodePiAuthProvider } from '../../shared/src/config/llm-connections.ts';
 import {
   createSensitiveAuditEntry,
   sensitiveAuditFilePath,
@@ -125,7 +127,7 @@ interface InitMessage {
   branchFromSdkSessionId?: string;
   branchFromSessionPath?: string;
   branchFromSdkTurnId?: string;
-  customEndpoint?: { api: CustomEndpointApi; supportsImages?: boolean };
+  customEndpoint?: { api?: CustomEndpointApi; supportsImages?: boolean };
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
   piAuth?: { provider: string; credential: PiCredential };
 }
@@ -137,7 +139,7 @@ interface RuntimeConfigUpdateMessage {
   providerType?: string;
   authType?: string;
   baseUrl?: string;
-  customEndpoint?: { api: CustomEndpointApi; supportsImages?: boolean };
+  customEndpoint?: { api?: CustomEndpointApi; supportsImages?: boolean };
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
 }
 
@@ -450,7 +452,7 @@ const customModelOverrides = new Map<string, CustomEndpointModelOverrides>();
 
 function registerCustomEndpointModels(
   registry: PiModelRegistry,
-  api: CustomEndpointApi,
+  api: CustomEndpointApi | undefined,
   baseUrl: string,
   models: CustomEndpointModelEntry[],
 ): void {
@@ -464,18 +466,27 @@ function registerCustomEndpointModels(
     }
   }
   const allIds = [...customEndpointModelIds];
-  registry.registerProvider('custom-endpoint', {
-    baseUrl,
-    apiKey: resolveCustomEndpointApiKey(),
-    api,
-    authHeader: true,
-    models: allIds.map(id => buildCustomEndpointModelDef(
+  const modelsWithApi = allIds.map(id => {
+    const modelApi = api ?? OPENCODE_MODEL_API_MAP[id];
+    if (!modelApi) {
+      debugLog(`[custom-endpoint] Warning: no api for model ${id} — skipping`);
+      return null;
+    }
+    return buildCustomEndpointModelDef(
       id,
       { supportsImages: initConfig?.customEndpoint?.supportsImages === true },
       customModelOverrides.get(id),
-    )),
+      modelApi,
+    );
+  }).filter((m): m is ReturnType<typeof buildCustomEndpointModelDef> => m !== null);
+  registry.registerProvider('custom-endpoint', {
+    baseUrl,
+    apiKey: resolveCustomEndpointApiKey(),
+    ...(api ? { api } : {}),
+    authHeader: true,
+    models: modelsWithApi,
   });
-  debugLog(`Registered custom endpoint: ${baseUrl} with ${allIds.length} model(s) [${allIds.join(', ')}], api: ${api}`);
+  debugLog(`Registered custom endpoint: ${baseUrl} with ${modelsWithApi.length} model(s) [${allIds.join(', ')}]${api ? `, api: ${api}` : ', per-model api'}`);
 }
 
 /**

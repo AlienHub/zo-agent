@@ -18,10 +18,8 @@ import {
 } from './models';
 import type { CredentialManager } from '../credentials/manager.ts';
 import {
-  getOpenCodeGoAnthropicModels,
-  getOpenCodeGoOpenAiModels,
-  getOpenCodeZenAnthropicModels,
-  getOpenCodeZenOpenAiModels,
+  getOpenCodeGoModels,
+  getOpenCodeZenModels,
 } from './opencode-provider.ts';
 
 // ============================================================
@@ -50,10 +48,8 @@ export function registerPiModelResolver(resolver: PiModelResolver): void {
  * AuthStorage — they only act as a routing key into our static catalog.
  */
 export const OPENCODE_PI_AUTH_PROVIDERS = [
-  'opencode-go-anthropic',
-  'opencode-go-openai',
-  'opencode-zen-anthropic',
-  'opencode-zen-openai',
+  'opencode-go',
+  'opencode-zen',
 ] as const;
 
 export type OpenCodePiAuthProvider = (typeof OPENCODE_PI_AUTH_PROVIDERS)[number];
@@ -135,7 +131,7 @@ export type CustomEndpointApi = 'openai-completions' | 'anthropic-messages';
  * Set when user configures an arbitrary API endpoint (Ollama, DashScope, vLLM, etc.).
  */
 export interface CustomEndpointConfig {
-  api: CustomEndpointApi;
+  api?: CustomEndpointApi;
   /** Explicit capability hint for arbitrary endpoints — never guessed automatically. */
   supportsImages?: boolean;
 }
@@ -603,10 +599,8 @@ export function getModelsForProviderType(providerType: LlmProviderType, piAuthPr
   if (isCompatProvider(providerType)) {
     if (isOpenCodePiAuthProvider(piAuthProvider)) {
       switch (piAuthProvider) {
-        case 'opencode-go-anthropic':  return getOpenCodeGoAnthropicModels();
-        case 'opencode-go-openai':     return getOpenCodeGoOpenAiModels();
-        case 'opencode-zen-anthropic': return getOpenCodeZenAnthropicModels();
-        case 'opencode-zen-openai':    return getOpenCodeZenOpenAiModels();
+        case 'opencode-go':   return getOpenCodeGoModels();
+        case 'opencode-zen':  return getOpenCodeZenModels();
       }
     }
     return [];
@@ -653,6 +647,8 @@ export const PI_PREFERRED_DEFAULTS: Record<string, string[]> = {
   deepseek: ['deepseek-v4-pro', 'deepseek-v4-flash'],
   'github-copilot': ['claude-sonnet-4-6', 'gpt-5', 'o4-mini', 'claude-haiku-4-5'],
   'amazon-bedrock': ['claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+  'opencode-go': ['glm-5.2', 'kimi-k2.7', 'minimax-m3', 'deepseek-v4-pro'],
+  'opencode-zen': ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-fable-5', 'claude-haiku-4-5', 'qwen3.7-max'],
 };
 
 export function getDefaultModelsForConnection(providerType: LlmProviderType, piAuthProvider?: string): Array<ModelDefinition | string> {
@@ -686,10 +682,8 @@ export function getDefaultModelsForConnection(providerType: LlmProviderType, piA
   }
   if (providerType === 'pi_compat' && piAuthProvider) {
     switch (piAuthProvider) {
-      case 'opencode-go-anthropic':  return getOpenCodeGoAnthropicModels();
-      case 'opencode-go-openai':     return getOpenCodeGoOpenAiModels();
-      case 'opencode-zen-anthropic': return getOpenCodeZenAnthropicModels();
-      case 'opencode-zen-openai':    return getOpenCodeZenOpenAiModels();
+      case 'opencode-go':   return getOpenCodeGoModels();
+      case 'opencode-zen':  return getOpenCodeZenModels();
     }
   }
   if (providerType === 'pi_compat') return [];  // Dynamic — user specifies

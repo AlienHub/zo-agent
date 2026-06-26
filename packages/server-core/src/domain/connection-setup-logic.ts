@@ -107,7 +107,7 @@ export function setupTestRequiresApiKey(baseUrl?: string): boolean {
 export function resolveCustomEndpointSetup(input: {
   baseUrl: string | undefined
   credential: string | undefined
-  customEndpointApi: CustomEndpointApi
+  customEndpointApi?: CustomEndpointApi
   /**
    * When provided, overrides the derived piAuthProvider. Used by branded
    * custom-endpoint presets (e.g. OpenCode Zen/Go) that carry their own
@@ -123,10 +123,11 @@ export function resolveCustomEndpointSetup(input: {
   if (isKeylessLoopback) {
     return { authType: 'none', name: 'Local Model' }
   }
-  return {
-    authType: 'api_key_with_endpoint',
-    piAuthProvider: input.piAuthProviderHint ?? (input.customEndpointApi === 'anthropic-messages' ? 'anthropic' : 'openai'),
-  }
+  const derivedPiAuthProvider = input.piAuthProviderHint
+    ?? (input.customEndpointApi
+      ? (input.customEndpointApi === 'anthropic-messages' ? 'anthropic' : 'openai')
+      : undefined)
+  return { authType: 'api_key_with_endpoint', piAuthProvider: derivedPiAuthProvider }
 }
 
 // ============================================================
@@ -172,33 +173,17 @@ export const BUILT_IN_CONNECTION_TEMPLATES: Record<string, {
     authType: 'api_key',
     // piAuthProvider set dynamically from setup.piAuthProvider
   },
-  'opencode-zen-anthropic': {
-    name: 'OpenCode Zen (Claude / Qwen)',
+  'opencode-zen': {
+    name: 'OpenCode Zen',
     providerType: 'pi_compat',
     authType: 'api_key_with_endpoint',
-    piAuthProvider: 'opencode-zen-anthropic',
-    customEndpointApi: 'anthropic-messages',
+    piAuthProvider: 'opencode-zen',
   },
-  'opencode-zen-openai': {
-    name: 'OpenCode Zen (GPT / GLM / Kimi)',
+  'opencode-go': {
+    name: 'OpenCode Go',
     providerType: 'pi_compat',
     authType: 'api_key_with_endpoint',
-    piAuthProvider: 'opencode-zen-openai',
-    customEndpointApi: 'openai-completions',
-  },
-  'opencode-go-anthropic': {
-    name: 'OpenCode Go (MiniMax / Qwen)',
-    providerType: 'pi_compat',
-    authType: 'api_key_with_endpoint',
-    piAuthProvider: 'opencode-go-anthropic',
-    customEndpointApi: 'anthropic-messages',
-  },
-  'opencode-go-openai': {
-    name: 'OpenCode Go (GLM / Kimi / DeepSeek)',
-    providerType: 'pi_compat',
-    authType: 'api_key_with_endpoint',
-    piAuthProvider: 'opencode-go-openai',
-    customEndpointApi: 'openai-completions',
+    piAuthProvider: 'opencode-go',
   },
 }
 
@@ -224,10 +209,8 @@ const PI_AUTH_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   'minimax-cn': 'Minimax CN',
   'kimi-coding': 'Kimi (Coding)',
   'vercel-ai-gateway': 'Vercel AI Gateway',
-  'opencode-zen-anthropic': 'OpenCode Zen',
-  'opencode-zen-openai': 'OpenCode Zen',
-  'opencode-go-anthropic': 'OpenCode Go',
-  'opencode-go-openai': 'OpenCode Go',
+  'opencode-zen': 'OpenCode Zen',
+  'opencode-go': 'OpenCode Go',
 }
 
 /** Get a human-readable display name for a Pi auth provider key */
