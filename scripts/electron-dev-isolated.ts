@@ -224,21 +224,20 @@ function ensureConfig(configDir: string, workspace: WorkspaceEntry): void {
   const configPath = join(configDir, "config.json");
   const existing = readJson<StoredConfig>(configPath);
   if (existing) {
-    const workspaces = Array.isArray(existing.workspaces) ? existing.workspaces : [];
-    const index = workspaces.findIndex((entry) => entry.rootPath === workspace.rootPath);
-    if (index >= 0) {
-      workspaces[index] = {
-        ...workspaces[index],
-        name: workspace.name,
-        slug: workspace.slug,
-        rootPath: workspace.rootPath,
-      };
-      existing.activeWorkspaceId = existing.activeWorkspaceId || workspaces[index]!.id;
-    } else {
-      workspaces.push(workspace);
-      existing.activeWorkspaceId = existing.activeWorkspaceId || workspace.id;
-    }
-    existing.workspaces = workspaces;
+    const prior = Array.isArray(existing.workspaces) ? existing.workspaces : [];
+    // Dedup by the stable, deterministic id — NOT rootPath. This launcher writes
+    // an absolute rootPath, but the app re-persists it in ~-tilde form, so a
+    // raw rootPath comparison never matched and a fresh copy was appended on
+    // every launch (same id, N rows in the UI). Collapse any prior copies of
+    // this workspace (by id OR either rootPath form) and re-add a single entry,
+    // preserving app-added fields from the first match.
+    const match = prior.find((e) => e.id === workspace.id || e.rootPath === workspace.rootPath);
+    const others = prior.filter((e) => e.id !== workspace.id && e.rootPath !== workspace.rootPath);
+    const merged = match
+      ? { ...match, name: workspace.name, slug: workspace.slug, rootPath: workspace.rootPath }
+      : workspace;
+    existing.workspaces = [...others, merged];
+    existing.activeWorkspaceId = existing.activeWorkspaceId || merged.id;
     existing.activeSessionId = existing.activeSessionId ?? null;
     writeJson(configPath, existing);
     return;

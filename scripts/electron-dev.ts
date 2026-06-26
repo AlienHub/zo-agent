@@ -6,6 +6,7 @@
 import { spawn, type Subprocess } from "bun";
 import { existsSync, rmSync, cpSync, readFileSync, statSync, mkdirSync } from "fs";
 import { join, basename } from "path";
+import { homedir } from "os";
 import * as esbuild from "esbuild";
 import { downloadUv, type Platform, type Arch } from "./build/common";
 
@@ -92,6 +93,25 @@ function detectInstance(): void {
     process.env.CRAFT_DEEPLINK_SCHEME = `craftagents${instanceNum}`;
     console.log(`🔢 Instance ${instanceNum} detected: port=${process.env.CRAFT_VITE_PORT}, config=${process.env.CRAFT_CONFIG_DIR}`);
   }
+}
+
+// Isolate the dev client's config/credentials/sessions from the packaged
+// production app BY DEFAULT. Both the packaged app and a bare `electron:dev`
+// otherwise fall back to ~/.craft-agent (see packages/shared/src/config/paths.ts),
+// so without this a dev run silently reads AND writes your real connections,
+// workspaces, and sessions. Default dev to a separate ~/.craft-agent-dev unless
+// the caller already chose a config dir (instance detection above, or an explicit
+// CRAFT_CONFIG_DIR) or deliberately opts back into prod via CRAFT_SHARE_PROD_CONFIG=1.
+function applyDevConfigIsolationDefault(): void {
+  if (process.env.CRAFT_CONFIG_DIR) return; // instance-detected or caller-provided
+  if (process.env.CRAFT_SHARE_PROD_CONFIG === "1") {
+    console.log("⚠️  CRAFT_SHARE_PROD_CONFIG=1 — dev is sharing the production config dir (~/.craft-agent)");
+    return;
+  }
+  const devConfigDir = join(process.env.HOME || homedir(), ".craft-agent-dev");
+  process.env.CRAFT_CONFIG_DIR = devConfigDir;
+  console.log(`🔒 Dev config isolated from production: ${devConfigDir}`);
+  console.log("   (set CRAFT_SHARE_PROD_CONFIG=1 to share ~/.craft-agent with the packaged app)");
 }
 
 // Load .env file if it exists
@@ -427,6 +447,7 @@ async function main(): Promise<void> {
 
   // Setup
   detectInstance();
+  applyDevConfigIsolationDefault();
   loadEnvFile();
   cleanViteCache();
 
