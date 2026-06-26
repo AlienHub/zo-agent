@@ -567,6 +567,27 @@ function createComponents(
 }
 
 /**
+ * Normalize `<excalidraw>{...}</excalidraw>` HTML-tag blocks into the canonical
+ * fenced ```excalidraw form so the existing excalidraw preview path renders them.
+ *
+ * The system prompt asks the model for a fenced block, but some models (e.g.
+ * MiniMax) wrap the same `{"src":...}` descriptor in an HTML tag instead, which
+ * rehype-raw renders as inert text — the canvas "stops rendering". Converting
+ * the tag to a fence reuses the whole fenced pipeline (preview gating, streaming
+ * protection, MarkdownExcalidrawBlock). MUST run before `preprocessLinks` so the
+ * file path inside lands in a code range and is not turned into a link. Only
+ * complete tag pairs convert, so a partial block mid-stream is left untouched
+ * until its closing tag arrives.
+ */
+function normalizeExcalidrawTags(text: string): string {
+  if (!text.includes('<excalidraw')) return text
+  return text.replace(
+    /<excalidraw\b[^>]*>\s*([\s\S]*?)\s*<\/excalidraw>/gi,
+    (_match, inner: string) => `\n\`\`\`excalidraw\n${inner.trim()}\n\`\`\`\n`
+  )
+}
+
+/**
  * Markdown - Customizable markdown renderer with multiple render modes
  *
  * Features:
@@ -608,9 +629,11 @@ export function Markdown({
     [mode, onUrlClick, onFileClick, collapsible, collapsibleContext, hideFirstMermaidExpand, disablePreviewBlocks]
   )
 
-  // Preprocess to convert raw URLs and file paths to markdown links
+  // Preprocess to convert raw URLs and file paths to markdown links.
+  // normalizeExcalidrawTags runs first so a model's `<excalidraw>` tag becomes a
+  // fenced block BEFORE link preprocessing (which then skips the path inside it).
   const processedContent = React.useMemo(
-    () => preprocessLinks(children),
+    () => preprocessLinks(normalizeExcalidrawTags(children)),
     [children]
   )
 
