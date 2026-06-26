@@ -11,6 +11,8 @@
   "apiSetup.modelTier.bestDesc": "leistungsstärkste",
   "apiSetup.modelTier.fast": "Schnell",
   "apiSetup.modelTier.fastDesc": "Zusammenfassung & Hilfsfunktionen",
+  "apiSetup.opencodeGo": "OpenCode Go",
+  "apiSetup.opencodeZen": "OpenCode Zen",
   "apiSetup.pasteAuthCode": "Autorisierungscode hier einfügen",
   "apiSetup.searchModels": "Modelle suchen...",
   "apiSetup.secretAccessKey": "Geheimer Zugriffsschlüssel",

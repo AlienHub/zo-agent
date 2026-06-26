@@ -11,6 +11,8 @@
   "apiSetup.modelTier.bestDesc": "legnagyobb tudású",
   "apiSetup.modelTier.fast": "Gyors",
   "apiSetup.modelTier.fastDesc": "összefoglalás & segédeszköz",
+  "apiSetup.opencodeGo": "OpenCode Go",
+  "apiSetup.opencodeZen": "OpenCode Zen",
   "apiSetup.pasteAuthCode": "Ide illessze be az engedélyezési kódját",
   "apiSetup.searchModels": "Modellek keresése...",
   "apiSetup.secretAccessKey": "A titkos hozzáférési kulcsa",

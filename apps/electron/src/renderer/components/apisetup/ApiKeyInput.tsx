@@ -93,6 +93,7 @@ export interface ApiKeyInputProps {
 interface Preset {
   key: PresetKey
   label: string
+  labelKey?: string
   url: string
   placeholder?: string
 }
@@ -120,8 +121,8 @@ const ANTHROPIC_PRESETS: Preset[] = [
   { key: 'kimi-coding', label: 'Kimi (Coding)', url: 'https://api.kimi.com/coding', placeholder: 'sk-kimi-...' },
   { key: 'vercel-ai-gateway', label: 'Vercel AI Gateway', url: 'https://ai-gateway.vercel.sh', placeholder: 'Paste your key here...' },
   { key: 'manifest', label: 'Manifest', url: 'https://app.manifest.build/v1', placeholder: 'mnfst_...' },
-  { key: 'opencode-zen', label: 'OpenCode Zen', url: OPENCODE_ZEN_BASE_URL, placeholder: 'Paste your key here...' },
-  { key: 'opencode-go', label: 'OpenCode Go', url: OPENCODE_GO_BASE_URL, placeholder: 'Paste your key here...' },
+  { key: 'opencode-zen', label: 'OpenCode Zen', labelKey: 'apiSetup.opencodeZen', url: OPENCODE_ZEN_BASE_URL, placeholder: 'Paste your key here...' },
+  { key: 'opencode-go', label: 'OpenCode Go', labelKey: 'apiSetup.opencodeGo', url: OPENCODE_GO_BASE_URL, placeholder: 'Paste your key here...' },
   { key: 'custom', label: 'Custom', url: '', placeholder: 'Paste your key here...' },
 ]
 
@@ -554,7 +555,10 @@ export function ApiKeyInput({
               disabled={isDisabled}
               className="flex h-6 items-center gap-1 rounded-[6px] bg-background shadow-minimal pl-2.5 pr-2 text-[12px] font-medium text-foreground/50 hover:bg-foreground/5 hover:text-foreground focus:outline-none"
             >
-              {presets.find(p => p.key === activePreset)?.label}
+              {(() => {
+                const p = presets.find(p => p.key === activePreset)
+                return p?.labelKey ? t(p.labelKey) : p?.label
+              })()}
               <ChevronDown className="size-2.5 opacity-50" />
             </DropdownMenuTrigger>
             <StyledDropdownMenuContent align="end" className="z-floating-menu">
@@ -564,7 +568,7 @@ export function ApiKeyInput({
                   onClick={() => handlePresetSelect(preset)}
                   className="justify-between"
                 >
-                  {preset.label}
+                  {preset.labelKey ? t(preset.labelKey) : preset.label}
                   <Check className={cn("size-3", activePreset === preset.key ? "opacity-100" : "opacity-0")} />
                 </StyledDropdownMenuItem>
               ))}

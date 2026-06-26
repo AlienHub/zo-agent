@@ -11,6 +11,8 @@
   "apiSetup.modelTier.bestDesc": "最も高性能",
   "apiSetup.modelTier.fast": "高速",
   "apiSetup.modelTier.fastDesc": "要約・ユーティリティ向け",
+  "apiSetup.opencodeGo": "OpenCode Go",
+  "apiSetup.opencodeZen": "OpenCode Zen",
   "apiSetup.pasteAuthCode": "認証コードをここに貼り付けてください",
   "apiSetup.searchModels": "モデルを検索...",
   "apiSetup.secretAccessKey": "シークレットアクセスキー",

@@ -11,6 +11,8 @@
   "apiSetup.modelTier.bestDesc": "能力最强",
   "apiSetup.modelTier.fast": "快速",
   "apiSetup.modelTier.fastDesc": "摘要和工具",
+  "apiSetup.opencodeGo": "OpenCode Go",
+  "apiSetup.opencodeZen": "OpenCode Zen",
   "apiSetup.pasteAuthCode": "在此粘贴授权码",
   "apiSetup.searchModels": "搜索模型...",
   "apiSetup.secretAccessKey": "密钥",
