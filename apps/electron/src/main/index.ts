@@ -642,6 +642,7 @@ app.whenReady().then(async () => {
             onSessionStarted,
             onSessionStopped,
             materializeCanvas: (graph) => getExcalidrawMaterializerService().materializeCanvas(graph),
+            materializeScene: (scene) => getExcalidrawMaterializerService().materializeScene(scene),
             captureException: (error, context) => {
               Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
                 tags: {

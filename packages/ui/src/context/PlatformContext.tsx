@@ -89,6 +89,12 @@ export interface PlatformActions {
   onReadFile?: (path: string) => Promise<string>
 
   /**
+   * Write UTF-8 content to a file (Electron: fs.writeFile via IPC)
+   * Used by editable file-backed blocks such as Excalidraw canvases.
+   */
+  onWriteFile?: (path: string, content: string) => Promise<unknown>
+
+  /**
    * Read a file as data URL (Electron: fs.readFile via IPC + base64 encode)
    * Used by image-preview blocks and image overlays
    */

@@ -531,9 +531,12 @@ Use the browser as an **alternative/fallback** path when source setup is fragile
   // can't consume (and which the send-time attachment gate doesn't cover, since
   // it only filters user attachments, not tool results), wasting a tool round-trip.
   // Gate on the same predicate that decides whether image attachments are sent.
+  // Applies to both set_graph and set_scene — both return previewPngPath. If the
+  // path is missing or the Read fails, fall back to structural review and ask the
+  // user to open the canvas to confirm the visual layout.
   const excalidrawReviewGuidance = modelSupportsImages
-    ? `\`excalidraw_set_graph\` returns a \`previewPngPath\`. **Open that path with the Read tool to actually view the rendered diagram** (don't just trust the path), then judge whether it is clear, non-overlapping, and accurate. If the preview shows overlapping boxes, cut-off labels, tangled edges, or wrong structure, fix the graph (rename/regroup nodes, adjust edges, or change \`direction\` between \`"TB"\` and \`"LR"\`) and call \`excalidraw_set_graph\` again.`
-    : `\`excalidraw_set_graph\` returns a \`previewPngPath\`, but **this model has no image input — do NOT Read that PNG** (you can't see it, and the attempt just wastes a tool round-trip). Instead verify the graph structurally: re-check the self-check rules above and call \`excalidraw_describe_canvas\` to confirm the nodes, edges, and \`direction\` match your intent. If the structure is wrong, fix the graph (rename/regroup nodes, adjust edges, or change \`direction\` between \`"TB"\` and \`"LR"\`) and call \`excalidraw_set_graph\` again. Tell the user to open the canvas to review the visual layout.`;
+    ? `Both \`excalidraw_set_graph\` and \`excalidraw_set_scene\` return a \`previewPngPath\`. **Open that path with the Read tool to actually view the rendered canvas** (don't just trust the path), then judge whether it is clear, non-overlapping, and accurate. For \`set_graph\`: if the preview shows overlapping boxes, cut-off labels, tangled edges, or wrong structure, fix the graph (rename/regroup nodes, adjust edges, or change \`direction\` between \`"TB"\` and \`"LR"\`) and call it again. For \`set_scene\`: if elements are misaligned, overlapping, or wrongly positioned, fix the coordinates/sizes and call it again. **If \`previewPngPath\` is missing or the Read fails**, fall back to structural review: re-check the self-check rules above and call \`excalidraw_describe_canvas\` to confirm the stored model matches your intent, then tell the user to open the canvas to confirm the visual layout.`
+    : `Both \`excalidraw_set_graph\` and \`excalidraw_set_scene\` return a \`previewPngPath\`, but **this model has no image input — do NOT Read that PNG** (you can't see it, and the attempt just wastes a tool round-trip). Instead verify structurally: re-check the self-check rules above and call \`excalidraw_describe_canvas\` to confirm the stored model matches your intent. If the structure is wrong, fix and call the tool again. **If \`previewPngPath\` is missing**, that is expected for this path — proceed with structural review. Tell the user to open the canvas to review the visual layout.`;
 
   return `${environmentMarker}
 
@@ -943,10 +946,16 @@ graph LR
 
 ## Excalidraw Canvas Files
 
-When the user asks for an editable architecture diagram, flow chart, system map, or canvas-like diagram, generate a file-backed Excalidraw canvas instead of inline JSON:
+When the user asks for an editable diagram or canvas, generate a file-backed Excalidraw canvas instead of inline JSON. **Pick the right tool for the request**:
 
+- **\`excalidraw_set_graph\`** — for **architecture/flow/system maps and mind maps**. You describe only nodes, edges, labels, and \`direction\`; the backend auto-layouts with Dagre and applies the Graphite design language. Never provide coordinates.
+- **\`excalidraw_set_scene\`** — for **image/screenshot recreation, whiteboard/poster layouts, and coordinate-sensitive canvases**. You provide explicit \`nodes\` with \`x\`/\`y\`/\`width\`/\`height\` plus \`arrows\` with absolute waypoint \`points\`; the backend materializes them as-is. No auto-layout.
+
+**Workflow:**
 1. Call \`excalidraw_create_canvas({ title? })\`.
-2. Call \`excalidraw_set_graph({ canvasId, nodes, edges, direction? })\` with the full graph structure. Describe only nodes, edges, labels, and \`direction\` (\`"TB"\` or \`"LR"\`), plus the **Graphite** semantics below. Never calculate or provide x/y coordinates, widths, heights, colors, or raw Excalidraw elements — the backend lays out and styles the graph.
+2. Call \`excalidraw_set_graph\` **or** \`excalidraw_set_scene\` with the full structure (full replacement, not incremental):
+
+   **\`set_graph\` path** — provide only nodes, edges, labels, and \`direction\` (\`"TB"\` or \`"LR"\`), plus the **Graphite** semantics below. Never calculate or provide x/y coordinates, widths, heights, colors, or raw Excalidraw elements — the backend lays out and styles the graph.
 
    **Graphite design language** (the diagram look is ink-line: neutral gray base, accent color only where it carries meaning, crisp lines). Make these judgments per element:
    - **role** (color = information, not decoration): \`default\` gray for the vast majority; \`accent\` for **at most 1–2** focus/hub/entry/key-decision nodes per graph; \`alert\` for error/reject/risk paths; \`muted\` for secondary/background nodes. When unsure, use \`default\`. Do **not** color nodes just to distinguish categories.
@@ -954,6 +963,8 @@ When the user asks for an editable architecture diagram, flow chart, system map,
    - **edge kind** (one main kind per graph, don't mix): \`branch\` for architecture/flow/tree (crisp, trackable); \`curve\` for mind maps / associative relations (soft, radial). Set \`dashed: true\` for async/weak dependencies; \`arrow: false\` to drop arrowheads (common in mind maps). Add a \`label\` only when the relationship isn't self-evident.
 
    Self-check before finishing: ≤2 accent nodes; color carries only focus/alert; type expressed via shape; one main edge kind; async is dashed; no overlaps or tangled edges.
+
+   **\`set_scene\` path** — provide coordinate scene \`nodes\` (rectangles/cards, freestanding text, simple icon labels) with explicit \`x\`/\`y\`/\`width\`/\`height\`, and \`arrows\` with absolute waypoint \`points\`. Give nodes stable \`id\` values so arrows can bind via \`start\`/\`end\`. Use \`role: "alert"\` for orange callout arrows or emphasized cards. You own the spatial layout — there is no Dagre auto-layout. Use this when the user wants to recreate an image, build a poster/whiteboard layout, or needs pixel-accurate placement.
 3. In your reply, emit an Excalidraw file reference block using the returned absolute path:
 
 \`\`\`excalidraw
@@ -962,7 +973,7 @@ When the user asks for an editable architecture diagram, flow chart, system map,
 
 The \`readonly:false\` flag lets the fullscreen canvas expose its Edit toggle. Never inline .excalidraw scene JSON in the response. The renderer loads the referenced file and will automatically reload after tool updates.
 
-${excalidrawReviewGuidance} If it returns a terminal error after 3 consecutive failures, stop retrying and tell the user: \`画布生成失败，请调整需求或稍后再试\`.
+${excalidrawReviewGuidance} If a tool returns a terminal error after 3 consecutive failures, stop retrying and tell the user: \`画布生成失败，请调整需求或稍后再试\`.
 
 ## HTML Preview
 

@@ -25,11 +25,13 @@ export type { MermaidValidateArgs } from './mermaid-validate.ts';
 export {
   handleExcalidrawCreateCanvas,
   handleExcalidrawSetGraph,
+  handleExcalidrawSetScene,
   handleExcalidrawDescribeCanvas,
 } from './excalidraw-canvas.ts';
 export type {
   ExcalidrawCreateCanvasArgs,
   ExcalidrawSetGraphArgs,
+  ExcalidrawSetSceneArgs,
   ExcalidrawDescribeCanvasArgs,
 } from './excalidraw-canvas.ts';
 

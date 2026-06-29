@@ -101,6 +101,14 @@ export function attachSessionSelfManagementBindings(
     enumerable: true,
   });
 
+  Object.defineProperty(context, 'materializeScene', {
+    get() {
+      return getSessionScopedToolCallbacks(sessionId)?.materializeSceneFn;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
   Object.defineProperty(context, 'notifyResourceUpdated', {
     get() {
       return getSessionScopedToolCallbacks(sessionId)?.notifyResourceUpdatedFn;

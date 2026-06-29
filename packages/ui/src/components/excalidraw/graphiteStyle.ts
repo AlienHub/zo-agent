@@ -138,7 +138,8 @@ export function shapeType(shape: Shape): { type: 'rectangle' | 'ellipse' | 'diam
  */
 export type GraphiteTag =
   | { kind: 'node'; role: Role; shape: Shape }
-  | { kind: 'edge'; edgeKind: EdgeKind; dashed?: boolean }
+  | { kind: 'edge'; edgeKind: EdgeKind; dashed?: boolean; role?: Role }
+  | { kind: 'edgeLabel'; role?: Role }
   | { kind: 'group' }
   | { kind: 'title' }
 
@@ -188,6 +189,7 @@ export function nodeElement(n: NodeSpec, mode: Mode): Record<string, unknown> {
 export interface EdgeStyleOptions {
   dashed?: boolean
   arrow?: boolean
+  role?: Role
 }
 
 /**
@@ -198,9 +200,15 @@ export interface EdgeStyleOptions {
  */
 export function edgeStyle(kind: EdgeKind, mode: Mode, opts: EdgeStyleOptions = {}): Record<string, unknown> {
   const t = theme(mode)
-  const tag: GraphiteTag = { kind: 'edge', edgeKind: kind, ...(opts.dashed ? { dashed: true } : {}) }
+  const role = opts.role ?? 'default'
+  const tag: GraphiteTag = {
+    kind: 'edge',
+    edgeKind: kind,
+    ...(opts.dashed ? { dashed: true } : {}),
+    ...(role !== 'default' ? { role } : {}),
+  }
   return {
-    strokeColor: t.edge,
+    strokeColor: role === 'default' ? t.edge : roleStyle(role, mode).stroke,
     strokeWidth: 1.3,
     roughness: 0,
     strokeStyle: opts.dashed ? 'dashed' : 'solid',
@@ -304,7 +312,7 @@ export function applyGraphiteTheme<T>(elements: readonly T[], mode: Mode): T[] {
       return { ...element, strokeColor: r.stroke, backgroundColor: r.fill, strokeWidth: r.strokeWidth }
     }
     if (tag?.kind === 'edge') {
-      return { ...element, strokeColor: t.edge }
+      return { ...element, strokeColor: tag.role ? roleStyle(tag.role, mode).stroke : t.edge }
     }
     if (tag?.kind === 'group') {
       return { ...element, strokeColor: t.groupStroke }
@@ -312,12 +320,15 @@ export function applyGraphiteTheme<T>(elements: readonly T[], mode: Mode): T[] {
     if (tag?.kind === 'title') {
       return { ...element, strokeColor: t.labelText }
     }
+    if (tag?.kind === 'edgeLabel') {
+      return { ...element, strokeColor: tag.role ? roleStyle(tag.role, mode).text : t.labelText }
+    }
 
     // Bound text labels: recolor by their container's channel.
     if (el.type === 'text' && el.containerId) {
       const owner = containerTag.get(el.containerId)
       if (owner?.kind === 'node') return { ...element, strokeColor: roleStyle(owner.role, mode).text }
-      if (owner?.kind === 'edge') return { ...element, strokeColor: t.labelText }
+      if (owner?.kind === 'edge') return { ...element, strokeColor: owner.role ? roleStyle(owner.role, mode).text : t.labelText }
     }
     return element
   })

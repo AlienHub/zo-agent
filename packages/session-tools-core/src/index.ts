@@ -136,6 +136,10 @@ export type {
   ExcalidrawGraphNode,
   ExcalidrawGraphEdge,
   ExcalidrawGraph,
+  ExcalidrawSceneNodeType,
+  ExcalidrawSceneNode,
+  ExcalidrawSceneArrow,
+  ExcalidrawScene,
   ExcalidrawMaterializeError,
   ExcalidrawMaterializeResult,
 } from './context.ts';
@@ -155,6 +159,7 @@ export {
   // Excalidraw Canvas
   handleExcalidrawCreateCanvas,
   handleExcalidrawSetGraph,
+  handleExcalidrawSetScene,
   handleExcalidrawDescribeCanvas,
   // Source Test
   handleSourceTest,
@@ -184,6 +189,7 @@ export type {
   MermaidValidateArgs,
   ExcalidrawCreateCanvasArgs,
   ExcalidrawSetGraphArgs,
+  ExcalidrawSetSceneArgs,
   ExcalidrawDescribeCanvasArgs,
   SourceTestArgs,
   SourceOAuthTriggerArgs,
@@ -210,6 +216,9 @@ export {
   ExcalidrawGraphNodeSchema,
   ExcalidrawGraphEdgeSchema,
   ExcalidrawSetGraphSchema,
+  ExcalidrawSceneNodeSchema,
+  ExcalidrawSceneArrowSchema,
+  ExcalidrawSetSceneSchema,
   ExcalidrawDescribeCanvasSchema,
   SourceTestSchema,
   SourceOAuthTriggerSchema,

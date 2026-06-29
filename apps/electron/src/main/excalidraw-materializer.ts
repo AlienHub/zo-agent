@@ -1,7 +1,7 @@
 import { BrowserWindow, app, ipcMain } from 'electron'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import type { ExcalidrawGraph, ExcalidrawMaterializeResult } from '@craft-agent/session-tools-core'
+import type { ExcalidrawGraph, ExcalidrawMaterializeResult, ExcalidrawScene } from '@craft-agent/session-tools-core'
 import { mainLog } from './logger'
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
@@ -83,6 +83,48 @@ export class ExcalidrawMaterializerService {
 
       this.pending.set(requestId, { resolve, timeout })
       window.webContents.send(CHANNELS.request, { requestId, graph })
+    })
+  }
+
+  async materializeScene(scene: ExcalidrawScene): Promise<ExcalidrawMaterializeResult> {
+    let window: BrowserWindow
+    try {
+      window = await this.ensureWindow()
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          reason: 'window_load_failed',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }
+    }
+
+    if (window.isDestroyed()) {
+      return {
+        ok: false,
+        error: {
+          reason: 'window_destroyed',
+          message: 'Excalidraw materializer window was destroyed before the request could run.',
+        },
+      }
+    }
+
+    const requestId = randomUUID()
+    return new Promise<ExcalidrawMaterializeResult>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pending.delete(requestId)
+        resolve({
+          ok: false,
+          error: {
+            reason: 'timeout',
+            message: 'Excalidraw scene materialization timed out.',
+          },
+        })
+      }, 10000)
+
+      this.pending.set(requestId, { resolve, timeout })
+      window.webContents.send(CHANNELS.request, { requestId, scene })
     })
   }
 

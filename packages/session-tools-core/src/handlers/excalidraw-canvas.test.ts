@@ -7,6 +7,7 @@ import {
   handleExcalidrawCreateCanvas,
   handleExcalidrawDescribeCanvas,
   handleExcalidrawSetGraph,
+  handleExcalidrawSetScene,
   resetExcalidrawFailureCountsForTest,
 } from './excalidraw-canvas.ts';
 
@@ -62,6 +63,21 @@ describe('excalidraw canvas tools', () => {
           version: 2,
           source: 'craft-agent',
           elements: graph.nodes.map((node, index) => ({ ...node, id: node.id ?? `e${index}` })),
+          appState: {},
+          files: {},
+        },
+      }),
+      materializeScene: async (scene) => ({
+        ok: true,
+        previewPng: 'data:image/png;base64,c2NlbmU=',
+        scene: {
+          type: 'excalidraw',
+          version: 2,
+          source: 'craft-agent',
+          elements: [
+            ...scene.nodes.map((node) => ({ ...node, id: node.id })),
+            ...scene.arrows.map((arrow) => ({ ...arrow, id: arrow.id, type: 'arrow' })),
+          ],
           appState: {},
           files: {},
         },
@@ -165,5 +181,90 @@ describe('excalidraw canvas tools', () => {
     expect(thirdResult.isError).toBe(true);
     expect(third.terminal).toBe(true);
     expect(third.message).toContain('画布生成失败，请调整需求或稍后再试');
+  });
+
+  it('sets a coordinate scene, stores the scene model, and writes the renderable excalidraw file', async () => {
+    const created = parseResult(await handleExcalidrawCreateCanvas(ctx(), { title: 'Visual map' }));
+    const result = await handleExcalidrawSetScene(ctx(), {
+      canvasId: created.canvasId,
+      title: 'Visual map',
+      nodes: [
+        { id: 'title', type: 'text', x: 40, y: 20, width: 320, height: 40, label: 'Everything you need to know' },
+        { id: 'loops', type: 'rectangle', x: 40, y: 90, width: 220, height: 100, label: 'LOOPS', role: 'accent', icon: 'bolt' },
+        { id: 'card', type: 'rectangle', x: 320, y: 90, width: 260, height: 100, label: 'Section card' },
+      ],
+      arrows: [{
+        id: 'orange-arrow',
+        points: [{ x: 260, y: 140 }, { x: 320, y: 140 }],
+        start: 'loops',
+        end: 'card',
+        role: 'alert',
+      }],
+    });
+    const body = parseResult(result);
+    const sceneDoc = JSON.parse(readFileSync(body.sceneModelPath, 'utf-8'));
+    const renderDoc = JSON.parse(readFileSync(body.path, 'utf-8'));
+
+    expect(result.isError).not.toBe(true);
+    expect(body.path).toEndWith(`${created.canvasId}.excalidraw`);
+    expect(body.sceneModelPath).toEndWith(`${created.canvasId}.scene.json`);
+    expect(body.nodeCount).toBe(3);
+    expect(body.arrowCount).toBe(1);
+    expect(sceneDoc.scene.arrows[0].role).toBe('alert');
+    expect(renderDoc.type).toBe('excalidraw');
+    expect(renderDoc.elements).toHaveLength(4);
+    expect(updatedPaths).toEqual([created.path]);
+  });
+
+  it('rejects coordinate scenes with invalid arrow references', async () => {
+    const created = parseResult(await handleExcalidrawCreateCanvas(ctx(), {}));
+    const result = await handleExcalidrawSetScene(ctx(), {
+      canvasId: created.canvasId,
+      nodes: [{ id: 'a', type: 'rectangle', x: 0, y: 0, width: 100, height: 50, label: 'A' }],
+      arrows: [{
+        id: 'bad',
+        points: [{ x: 0, y: 0 }, { x: 100, y: 0 }],
+        start: 'a',
+        end: 'missing',
+      }],
+    });
+    const body = parseResult(result);
+
+    expect(result.isError).toBe(true);
+    expect(body.reason).toBe('invalid_scene');
+    expect(body.errors).toEqual(['arrow "bad" references unknown end node "missing"']);
+  });
+
+  it('requires materializeScene for coordinate scene generation', async () => {
+    const created = parseResult(await handleExcalidrawCreateCanvas(ctx(), {}));
+    const result = await handleExcalidrawSetScene(ctx({ materializeScene: undefined }), {
+      canvasId: created.canvasId,
+      nodes: [],
+      arrows: [],
+    });
+    const body = parseResult(result);
+
+    expect(result.isError).toBe(true);
+    expect(body.reason).toBe('missing_capability');
+    expect(body.message).toContain('materializeScene');
+  });
+
+  it('describes the stored coordinate scene when present', async () => {
+    const created = parseResult(await handleExcalidrawCreateCanvas(ctx(), {}));
+    await handleExcalidrawSetScene(ctx(), {
+      canvasId: created.canvasId,
+      nodes: [{ id: 'note', type: 'text', x: 12, y: 34, width: 160, height: 32, label: 'Free text' }],
+      arrows: [],
+    });
+
+    const result = await handleExcalidrawDescribeCanvas(ctx(), { canvasId: created.canvasId });
+    const body = parseResult(result);
+
+    expect(body.graph).toEqual({ nodes: [], edges: [] });
+    expect(body.sceneModelPath).toEndWith(`${created.canvasId}.scene.json`);
+    expect(body.scene).toEqual({
+      nodes: [{ id: 'note', type: 'text', x: 12, y: 34, width: 160, height: 32, label: 'Free text' }],
+      arrows: [],
+    });
   });
 });

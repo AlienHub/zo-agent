@@ -72,20 +72,22 @@ describe('applyGraphiteTheme (display recolor)', () => {
     { id: 'box', type: 'rectangle', strokeColor: '#000', backgroundColor: '#fff', strokeWidth: 1, customData: { graphite: { kind: 'node', role: 'accent', shape: 'rect' } } },
     { id: 'lbl', type: 'text', containerId: 'box', strokeColor: '#000' },
     { id: 'e0', type: 'arrow', strokeColor: '#000', customData: { graphite: { kind: 'edge', edgeKind: 'branch' } } },
+    { id: 'e0-label', type: 'text', strokeColor: '#000', customData: { graphite: { kind: 'edgeLabel' } } },
     { id: 'plain', type: 'rectangle', strokeColor: '#123456' },
   ]
 
   it('re-derives node + bound-label + edge colors for the active mode', () => {
-    const [box, lbl, edge] = applyGraphiteTheme(scene, 'dark') as typeof scene
+    const [box, lbl, edge, edgeLabel] = applyGraphiteTheme(scene, 'dark') as typeof scene
     expect(box?.strokeColor).toBe(roleStyle('accent', 'dark').stroke)
     expect(box?.backgroundColor).toBe(roleStyle('accent', 'dark').fill)
     expect(lbl?.strokeColor).toBe(roleStyle('accent', 'dark').text)
     expect(edge?.strokeColor).toBe(theme('dark').edge)
+    expect(edgeLabel?.strokeColor).toBe(theme('dark').labelText)
   })
 
   it('leaves untagged elements untouched and detects graphite scenes', () => {
     const dark = applyGraphiteTheme(scene, 'dark') as typeof scene
-    expect(dark[3]?.strokeColor).toBe('#123456')
+    expect(dark[4]?.strokeColor).toBe('#123456')
     expect(hasGraphiteElements(scene)).toBe(true)
     expect(hasGraphiteElements([{ id: 'x', type: 'rectangle' }])).toBe(false)
   })

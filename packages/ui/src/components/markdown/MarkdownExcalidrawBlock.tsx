@@ -115,8 +115,19 @@ function clampHeight(value: unknown, fallback: number) {
   return Math.min(Math.max(typeof value === 'number' ? value : fallback, 220), 720)
 }
 
+export function serializeExcalidrawSceneForFile(scene: CanvasScene): string {
+  return JSON.stringify({
+    type: 'excalidraw',
+    version: scene.version ?? 2,
+    source: scene.source ?? 'agent',
+    elements: scene.elements ?? [],
+    appState: scene.appState ?? {},
+    files: scene.files ?? {},
+  }, null, 2)
+}
+
 export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawBlockProps) {
-  const { onReadFile, onResourceUpdated } = usePlatform()
+  const { onReadFile, onWriteFile, onResourceUpdated } = usePlatform()
   const isDarkMode = useDocumentDarkMode()
   const [isFullscreenOpen, setIsFullscreenOpen] = React.useState(false)
   const [fullscreenMode, setFullscreenMode] = React.useState<'view' | 'edit'>('view')
@@ -124,12 +135,20 @@ export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawB
   const [loading, setLoading] = React.useState(false)
   const [loadError, setLoadError] = React.useState<string | null>(null)
   const [reloadNonce, setReloadNonce] = React.useState(0)
+  const suppressedResourceUpdatesRef = React.useRef(0)
+  const suppressResetTimerRef = React.useRef<number | null>(null)
+  const latestSerializedSceneRef = React.useRef<string | null>(null)
+  const lastPersistedSerializedSceneRef = React.useRef<string | null>(null)
+  const isFullscreenOpenRef = React.useRef(false)
+  const saveSequenceRef = React.useRef(0)
+  const saveChainRef = React.useRef<Promise<unknown>>(Promise.resolve())
 
   const specResult = React.useMemo(() => parseSpec(code), [code])
   const src = specResult.kind === 'file' ? specResult.spec.src : undefined
 
   // Fullscreen opens read-only every time; the user clicks Edit to edit.
   React.useEffect(() => {
+    isFullscreenOpenRef.current = isFullscreenOpen
     if (!isFullscreenOpen) setFullscreenMode('view')
   }, [isFullscreenOpen])
 
@@ -149,14 +168,80 @@ export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawB
   // Reload when the file changes on disk (e.g. agent updated it).
   React.useEffect(() => {
     if (!src || !onResourceUpdated) return
-    return onResourceUpdated(src, () => setReloadNonce(previous => previous + 1))
+    return onResourceUpdated(src, () => {
+      if (suppressedResourceUpdatesRef.current > 0) {
+        suppressedResourceUpdatesRef.current -= 1
+        if (suppressedResourceUpdatesRef.current === 0 && suppressResetTimerRef.current) {
+          window.clearTimeout(suppressResetTimerRef.current)
+          suppressResetTimerRef.current = null
+        }
+        return
+      }
+      setReloadNonce(previous => previous + 1)
+    })
   }, [src, onResourceUpdated])
+
+  React.useEffect(() => () => {
+    if (suppressResetTimerRef.current) {
+      window.clearTimeout(suppressResetTimerRef.current)
+      suppressResetTimerRef.current = null
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (isFullscreenOpen) return
+    if (lastPersistedSerializedSceneRef.current == null) return
+    const persisted = lastPersistedSerializedSceneRef.current
+    setContent(persisted)
+    lastPersistedSerializedSceneRef.current = null
+    if (latestSerializedSceneRef.current === persisted) {
+      latestSerializedSceneRef.current = null
+    }
+  }, [isFullscreenOpen])
 
   const reload = React.useCallback(() => {
     setContent(null)
     setLoadError(null)
     setReloadNonce(previous => previous + 1)
   }, [])
+
+  const handleFullscreenSceneChange = React.useCallback((nextScene: CanvasScene) => {
+    if (!src || !onWriteFile) return
+    const serialized = serializeExcalidrawSceneForFile(nextScene)
+    latestSerializedSceneRef.current = serialized
+    suppressedResourceUpdatesRef.current += 1
+    if (suppressResetTimerRef.current) {
+      window.clearTimeout(suppressResetTimerRef.current)
+    }
+    suppressResetTimerRef.current = window.setTimeout(() => {
+      suppressedResourceUpdatesRef.current = 0
+      suppressResetTimerRef.current = null
+    }, 1000)
+
+    const saveSequence = saveSequenceRef.current + 1
+    saveSequenceRef.current = saveSequence
+    const writePromise = saveChainRef.current
+      .catch(() => undefined)
+      .then(() => onWriteFile(src, serialized))
+    saveChainRef.current = writePromise.catch(() => undefined)
+    void writePromise.then(() => {
+      if (latestSerializedSceneRef.current !== serialized) return
+      lastPersistedSerializedSceneRef.current = serialized
+      if (!isFullscreenOpenRef.current) {
+        setContent(serialized)
+        latestSerializedSceneRef.current = null
+        lastPersistedSerializedSceneRef.current = null
+      }
+    }).catch((err: unknown) => {
+      if (saveSequence !== saveSequenceRef.current) return
+      suppressedResourceUpdatesRef.current = 0
+      if (suppressResetTimerRef.current) {
+        window.clearTimeout(suppressResetTimerRef.current)
+        suppressResetTimerRef.current = null
+      }
+      console.warn('[MarkdownExcalidrawBlock] Save failed:', err)
+    })
+  }, [src, onWriteFile])
 
   const sceneResult = React.useMemo<SceneResult | null>(
     () => (content != null ? parseScene(content) : null),
@@ -222,6 +307,7 @@ export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawB
   const title = spec.title || 'Canvas'
   const readonly = spec.readonly ?? true
   const baseHeight = clampHeight(spec.height, 320)
+  const canEdit = !readonly && Boolean(src && onWriteFile)
 
   const fullscreenScene: CanvasScene = {
     type: 'excalidraw',
@@ -268,7 +354,7 @@ export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawB
       >
         <div className="relative mx-auto h-[calc(100vh-96px)] w-[calc(100vw-48px)] overflow-hidden rounded-[8px] border border-border/50 bg-background shadow-minimal">
           {/* Editing is only offered in fullscreen, and only when the block allows it. */}
-          {!readonly && (
+          {canEdit && (
             <button
               onClick={() => setFullscreenMode(current => (current === 'edit' ? 'view' : 'edit'))}
               className={cn(
@@ -287,7 +373,8 @@ export function MarkdownExcalidrawBlock({ code, className }: MarkdownExcalidrawB
           <EditableExcalidrawCanvas
             scene={fullscreenScene}
             sceneKey={`fullscreen:${sceneKey}`}
-            mode={readonly ? 'view' : fullscreenMode}
+            mode={canEdit ? fullscreenMode : 'view'}
+            onChange={handleFullscreenSceneChange}
             className="h-full w-full"
           />
         </div>

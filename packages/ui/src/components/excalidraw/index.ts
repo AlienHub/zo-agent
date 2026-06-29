@@ -35,4 +35,12 @@ export {
   type CanvasScene,
   type SelectionOverlay,
 } from './canvasScene'
+export {
+  buildSceneSkeleton,
+  resolveSceneIcon,
+  type SceneInput,
+  type SceneNodeInput,
+  type SceneArrowInput,
+  type SceneNodeType,
+} from './sceneSkeleton'
 export * from './graphiteStyle'

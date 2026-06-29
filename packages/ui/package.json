@@ -15,6 +15,7 @@
     "./markdown": "./src/components/markdown/index.ts",
     "./excalidraw": "./src/components/excalidraw/index.ts",
     "./excalidraw/canvasScene": "./src/components/excalidraw/canvasScene.ts",
+    "./excalidraw/sceneSkeleton": "./src/components/excalidraw/sceneSkeleton.ts",
     "./annotations/follow-up-state": "./src/components/annotations/follow-up-state.ts",
     "./ui/drawer": "./src/components/ui/drawer.tsx",
     "./context": "./src/context/index.ts",

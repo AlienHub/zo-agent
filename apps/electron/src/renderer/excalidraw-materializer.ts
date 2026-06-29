@@ -4,7 +4,7 @@ import { graphlib, layout as dagreLayout } from '@dagrejs/dagre'
 import type { AppState, BinaryFiles } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import type { ExcalidrawElementSkeleton } from '@excalidraw/excalidraw/data/transform'
-import type { ExcalidrawGraph, ExcalidrawGraphNode } from '@craft-agent/session-tools-core'
+import type { ExcalidrawGraph, ExcalidrawGraphNode, ExcalidrawScene } from '@craft-agent/session-tools-core'
 import {
   GRAPHITE_FONT,
   GRAPHITE_LAYOUT,
@@ -15,6 +15,7 @@ import {
   type Role,
   type Shape,
 } from '@craft-agent/ui/excalidraw/canvasScene'
+import { buildSceneSkeleton } from '@craft-agent/ui/excalidraw/sceneSkeleton'
 
 declare global {
   interface Window {
@@ -27,7 +28,8 @@ declare global {
 
 interface MaterializeRequest {
   requestId: string
-  graph: ExcalidrawGraph
+  graph?: ExcalidrawGraph
+  scene?: ExcalidrawScene
 }
 
 interface Bounds {
@@ -35,6 +37,13 @@ interface Bounds {
   y: number
   width: number
   height: number
+}
+
+interface GraphBounds {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
 }
 
 interface MeasuredNode extends Bounds {
@@ -195,6 +204,23 @@ function centerOf(bounds: Bounds) {
   }
 }
 
+function boundsOfNodes(nodes: Iterable<Bounds>): GraphBounds {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const node of nodes) {
+    minX = Math.min(minX, node.x)
+    minY = Math.min(minY, node.y)
+    maxX = Math.max(maxX, node.x + node.width)
+    maxY = Math.max(maxY, node.y + node.height)
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return { minX: LAYOUT_MARGIN, minY: LAYOUT_MARGIN, maxX: LAYOUT_MARGIN, maxY: LAYOUT_MARGIN }
+  }
+  return { minX, minY, maxX, maxY }
+}
+
 /**
  * Graphite `branch` routing: a crisp right-angle ("elbow") polyline with a
  * single mid-bend, oriented along the layout's primary axis. Anchors on the
@@ -205,7 +231,7 @@ function centerOf(bounds: Bounds) {
  * case — stay clean; the agent's preview self-review catches the rare long span
  * that would cross an intervening node.
  */
-function orthogonalPoints(source: Bounds, target: Bounds, direction: 'TB' | 'LR') {
+function orthogonalPoints(source: Bounds, target: Bounds, direction: 'TB' | 'LR', graphBounds?: GraphBounds) {
   const s = centerOf(source)
   const t = centerOf(target)
 
@@ -214,6 +240,14 @@ function orthogonalPoints(source: Bounds, target: Bounds, direction: 'TB' | 'LR'
     const endX = t.x >= s.x ? target.x : target.x + target.width
     const start = { x: startX, y: s.y }
     const end = { x: endX, y: t.y }
+    if (t.x < s.x && graphBounds) {
+      const topTrackY = graphBounds.minY - 48
+      const bottomTrackY = graphBounds.maxY + 48
+      const topCost = Math.abs(start.y - topTrackY) + Math.abs(end.y - topTrackY)
+      const bottomCost = Math.abs(start.y - bottomTrackY) + Math.abs(end.y - bottomTrackY)
+      const trackY = topCost <= bottomCost ? topTrackY : bottomTrackY
+      return [start, { x: start.x, y: trackY }, { x: end.x, y: trackY }, end]
+    }
     if (Math.abs(start.y - end.y) < 1) return [start, end]
     const midX = (start.x + end.x) / 2
     return [start, { x: midX, y: start.y }, { x: midX, y: end.y }, end]
@@ -223,16 +257,56 @@ function orthogonalPoints(source: Bounds, target: Bounds, direction: 'TB' | 'LR'
   const endY = t.y >= s.y ? target.y : target.y + target.height
   const start = { x: s.x, y: startY }
   const end = { x: t.x, y: endY }
+  if (t.y < s.y && graphBounds) {
+    const leftTrackX = graphBounds.minX - 48
+    const rightTrackX = graphBounds.maxX + 48
+    const leftCost = Math.abs(start.x - leftTrackX) + Math.abs(end.x - leftTrackX)
+    const rightCost = Math.abs(start.x - rightTrackX) + Math.abs(end.x - rightTrackX)
+    const trackX = leftCost <= rightCost ? leftTrackX : rightTrackX
+    return [start, { x: trackX, y: start.y }, { x: trackX, y: end.y }, end]
+  }
   if (Math.abs(start.x - end.x) < 1) return [start, end]
   const midY = (start.y + end.y) / 2
   return [start, { x: start.x, y: midY }, { x: end.x, y: midY }, end]
 }
 
+function edgeLabelPosition(
+  text: string,
+  points: Array<{ x: number; y: number }>,
+  measure: (value: string, lineHeight: number) => { width: number; height: number },
+  graphBounds?: GraphBounds
+) {
+  const labelSize = measure(text, EDGE_LINE_HEIGHT)
+  let best = { from: points[0]!, to: points[1]!, length: -1 }
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const from = points[index]!
+    const to = points[index + 1]!
+    const length = Math.hypot(to.x - from.x, to.y - from.y)
+    if (length > best.length) best = { from, to, length }
+  }
+  const mid = {
+    x: (best.from.x + best.to.x) / 2,
+    y: (best.from.y + best.to.y) / 2,
+  }
+  const horizontal = Math.abs(best.to.x - best.from.x) >= Math.abs(best.to.y - best.from.y)
+  const labelY = horizontal && graphBounds && mid.y <= graphBounds.minY
+    ? mid.y + 8
+    : mid.y - labelSize.height - 8
+  return {
+    x: Math.round(horizontal ? mid.x - labelSize.width / 2 : mid.x + 12),
+    y: Math.round(horizontal ? labelY : mid.y - labelSize.height / 2),
+    width: labelSize.width,
+    height: labelSize.height,
+  }
+}
+
 function buildOfficialSkeleton(graph: ExcalidrawGraph): ExcalidrawElementSkeleton[] {
   const { nodesById, edgePoints } = layoutGraph(graph)
   const skeleton: ExcalidrawElementSkeleton[] = []
+  const measureEdgeLabel = createTextMeasurer(EDGE_FONT_SIZE)
   const optionalTitle = (graph as ExcalidrawGraph & { title?: unknown }).title
   const layoutDir: 'TB' | 'LR' = graph.direction === 'LR' ? 'LR' : 'TB'
+  const graphBounds = boundsOfNodes(nodesById.values())
 
   for (const graphNode of graph.nodes) {
     const measured = nodesById.get(graphNode.id)
@@ -277,12 +351,12 @@ function buildOfficialSkeleton(graph: ExcalidrawGraph): ExcalidrawElementSkeleto
     const arrow = (edge as { arrow?: unknown }).arrow !== false
     const style = edgeStyle(kind, BAKE_MODE, { dashed, arrow })
     const isBranch = kind === 'branch'
-    // branch = crisp right-angle elbow polyline (orthogonal route, adaptive
-    // rounded corners ≈ Graphite's 9px). curve = dagre's obstacle-avoiding
-    // waypoints smoothed into a bezier (proportional radius).
+    // branch = crisp right-angle elbow polyline (orthogonal route, no
+    // roundness). curve = dagre's obstacle-avoiding waypoints smoothed into a
+    // bezier (proportional radius).
     const routed = edgePoints.get(index)
     const points = isBranch
-      ? orthogonalPoints(source, target, layoutDir)
+      ? orthogonalPoints(source, target, layoutDir, graphBounds)
       : (routed && routed.length >= 2 ? routed : [centerOf(source), centerOf(target)])
     const origin = points[0]
     skeleton.push({
@@ -292,14 +366,29 @@ function buildOfficialSkeleton(graph: ExcalidrawGraph): ExcalidrawElementSkeleto
       x: origin.x,
       y: origin.y,
       points: points.map((point) => [point.x - origin.x, point.y - origin.y] as [number, number]),
-      roundness: { type: isBranch ? ROUNDNESS.ADAPTIVE_RADIUS : ROUNDNESS.PROPORTIONAL_RADIUS },
+      roundness: isBranch ? null : { type: ROUNDNESS.PROPORTIONAL_RADIUS },
       customData: { ...(style.customData as object), productGeneratedLine: true },
       start: { id: edge.from },
       end: { id: edge.to },
-      ...(edge.label
-        ? { label: { text: edge.label, fontSize: EDGE_FONT_SIZE, fontFamily: FONT_FAMILY.Helvetica, strokeColor: graphiteTheme(BAKE_MODE).labelText } }
-        : {}),
     } as ExcalidrawElementSkeleton)
+    if (edge.label) {
+      const label = edgeLabelPosition(edge.label, points, measureEdgeLabel, graphBounds)
+      skeleton.push({
+        type: 'text',
+        id: `edge-label-${index}-${edge.from}-${edge.to}`,
+        x: label.x,
+        y: label.y,
+        width: label.width,
+        height: label.height,
+        text: edge.label,
+        fontSize: EDGE_FONT_SIZE,
+        fontFamily: FONT_FAMILY.Helvetica,
+        strokeColor: graphiteTheme(BAKE_MODE).labelText,
+        backgroundColor: 'transparent',
+        roughness: 0,
+        customData: { graphite: { kind: 'edgeLabel' } },
+      } as ExcalidrawElementSkeleton)
+    }
   })
 
   return skeleton
@@ -358,11 +447,46 @@ async function materialize(graph: ExcalidrawGraph) {
   return { scene, previewPng }
 }
 
+function buildSceneFromSpec(spec: ExcalidrawScene) {
+  const skeleton = buildSceneSkeleton(spec, BAKE_MODE) as ExcalidrawElementSkeleton[]
+  const materialized = convertToExcalidrawElements(skeleton, { regenerateIds: false }) as ExcalidrawElement[]
+
+  const renderable = materialized.filter((element) => !element.isDeleted)
+  if (spec.nodes.length > 0 && renderable.length === 0) {
+    throw new Error(`Materialization produced 0 elements for ${spec.nodes.length} node(s); the canvas would be blank.`)
+  }
+
+  return {
+    type: 'excalidraw' as const,
+    version: 2,
+    source: 'craft-agent',
+    elements: materialized,
+    appState: {
+      currentItemFontFamily: FONT_FAMILY.Helvetica,
+      gridModeEnabled: false,
+      viewBackgroundColor: 'transparent',
+    } as Partial<AppState>,
+    files: {} as BinaryFiles,
+  }
+}
+
+async function materializeScene(spec: ExcalidrawScene) {
+  const scene = buildSceneFromSpec(spec)
+  const previewPng = await exportPreviewPng(scene)
+  return { scene, previewPng }
+}
+
 window.addEventListener('craft:excalidraw-materialize', (event) => {
   const detail = (event as CustomEvent<MaterializeRequest>).detail
-  materialize(detail.graph && Array.isArray(detail.graph.nodes) && Array.isArray(detail.graph.edges)
-    ? detail.graph
-    : { nodes: [], edges: [] })
+  let work: Promise<{ scene: ReturnType<typeof buildScene>; previewPng: string }>
+  if (detail.scene && Array.isArray(detail.scene.nodes) && Array.isArray(detail.scene.arrows)) {
+    work = materializeScene(detail.scene)
+  } else {
+    work = materialize(detail.graph && Array.isArray(detail.graph.nodes) && Array.isArray(detail.graph.edges)
+      ? detail.graph
+      : { nodes: [], edges: [] })
+  }
+  work
     .then(({ scene, previewPng }) => {
       window.__excalidrawMaterializerBridge?.respond({
         requestId: detail.requestId,

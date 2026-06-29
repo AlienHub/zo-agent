@@ -1889,6 +1889,8 @@ export default function App() {
     onOpenFileExternal: linkInterceptor.openFileExternal,
     // Read file contents as UTF-8 string (used by datatable/spreadsheet/html-preview src fields)
     onReadFile: (path: string) => window.electronAPI.readFile(path),
+    // Write file contents as UTF-8 string (used by editable Excalidraw src blocks)
+    onWriteFile: (path: string, content: string) => window.electronAPI.writeFile(path, content),
     // Read file as data URL (used by image-preview blocks)
     onReadFileDataUrl: (path: string) => window.electronAPI.readFileDataUrl(path),
     // Read file as binary Uint8Array (used by PDF preview blocks)

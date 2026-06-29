@@ -302,6 +302,7 @@ export interface ElectronAPI {
 
   // File operations
   readFile(path: string): Promise<string>
+  writeFile(path: string, content: string): Promise<{ ok: true }>
   /** Read a file as binary data (Uint8Array) */
   readFileBinary(path: string): Promise<Uint8Array>
   /** Read a file as a data URL (data:{mime};base64,...) for binary preview (images, PDFs) */

@@ -83,6 +83,10 @@ export interface SessionScopedToolCallbacks {
   materializeCanvasFn?: (
     graph: import('@craft-agent/session-tools-core').ExcalidrawGraph
   ) => Promise<import('@craft-agent/session-tools-core').ExcalidrawMaterializeResult>;
+  /** Materialize a coordinate Excalidraw scene (absolute positions) in a DOM-capable backend. */
+  materializeSceneFn?: (
+    scene: import('@craft-agent/session-tools-core').ExcalidrawScene
+  ) => Promise<import('@craft-agent/session-tools-core').ExcalidrawMaterializeResult>;
   /** Notify renderers that a session-owned resource file changed. */
   notifyResourceUpdatedFn?: (path: string) => void | Promise<void>;
 }

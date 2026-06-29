@@ -80,6 +80,7 @@ export const RPC_CHANNELS = {
   },
   file: {
     READ: 'file:read',
+    WRITE: 'file:write',
     READ_DATA_URL: 'file:readDataUrl',
     READ_PREVIEW_DATA_URL: 'file:readPreviewDataUrl',
     READ_BINARY: 'file:readBinary',

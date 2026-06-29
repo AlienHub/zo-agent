@@ -300,6 +300,15 @@ export interface SessionToolContext {
   materializeCanvas?(graph: ExcalidrawGraph): Promise<ExcalidrawMaterializeResult>;
 
   /**
+   * Materialize a coordinate scene (absolute positions, no layout) into a legal
+   * .excalidraw scene. Same DOM-renderer path as materializeCanvas, but the
+   * caller provides exact coordinates instead of a graph to be auto-laid-out.
+   * Arrows carry absolute waypoints (converted to relative Excalidraw points)
+   * and may be free-floating (no node bindings).
+   */
+  materializeScene?(scene: ExcalidrawScene): Promise<ExcalidrawMaterializeResult>;
+
+  /**
    * Notify renderers that a session-owned resource file changed.
    */
   notifyResourceUpdated?(path: string): void | Promise<void>;
@@ -469,6 +478,69 @@ export interface ExcalidrawGraph {
   nodes: ExcalidrawGraphNode[];
   edges: ExcalidrawGraphEdge[];
   direction?: 'TB' | 'LR';
+}
+
+// ============================================================
+// Excalidraw Coordinate Scene (materializeScene input)
+// ============================================================
+
+/** Shape of a coordinate-scene node. `text` = freestanding text (no container). */
+export type ExcalidrawSceneNodeType = 'rectangle' | 'ellipse' | 'diamond' | 'text';
+
+/**
+ * A positioned node in a coordinate scene. Coordinates are absolute canvas
+ * positions (top-left origin); the materializer places elements verbatim
+ * without running a layout engine.
+ */
+export interface ExcalidrawSceneNode {
+  id: string;
+  type: ExcalidrawSceneNodeType;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  label?: string;
+  /** Graphite role drives color (same semantics as graph nodes). */
+  role?: ExcalidrawNodeRole;
+  /**
+   * v1 icon: a name from a small whitelist, rendered as a text symbol
+   * prepended to the label (or standalone when no label is given).
+   * Unknown names are dropped silently.
+   */
+  icon?: string;
+}
+
+/**
+ * An arrow with absolute waypoints. The materializer converts these to
+ * relative Excalidraw points (origin = first point). Arrows may be
+ * free-floating — omit `start`/`end` to leave them unbound to any node.
+ */
+export interface ExcalidrawSceneArrow {
+  id: string;
+  /** Absolute canvas waypoints (≥2 required). */
+  points: Array<{ x: number; y: number }>;
+  label?: string;
+  /** Optional binding to a node by id; omitted = free-floating. */
+  start?: string;
+  /** Optional binding to a node by id; omitted = free-floating. */
+  end?: string;
+  /** Async / weak relationship — rendered dashed. */
+  dashed?: boolean;
+  /** Set false to drop the arrowhead. */
+  arrow?: boolean;
+  /** Optional color role. Use alert for orange callout arrows. */
+  role?: ExcalidrawNodeRole;
+}
+
+/**
+ * Coordinate scene input for materializeScene. Unlike ExcalidrawGraph (which
+ * is laid out by dagre), a scene carries absolute positions and explicit
+ * arrow waypoints — the materializer renders them verbatim.
+ */
+export interface ExcalidrawScene {
+  nodes: ExcalidrawSceneNode[];
+  arrows: ExcalidrawSceneArrow[];
+  title?: string;
 }
 
 export interface ExcalidrawMaterializeError {

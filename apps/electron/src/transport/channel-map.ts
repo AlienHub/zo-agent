@@ -71,6 +71,7 @@ export const CHANNEL_MAP = {
 
   // File operations
   readFile: invoke(RPC_CHANNELS.file.READ),
+  writeFile: invoke(RPC_CHANNELS.file.WRITE),
   readFileDataUrl: invoke(RPC_CHANNELS.file.READ_DATA_URL),
   readFilePreviewDataUrl: invoke(RPC_CHANNELS.file.READ_PREVIEW_DATA_URL),
   readFileBinary: invoke(RPC_CHANNELS.file.READ_BINARY),

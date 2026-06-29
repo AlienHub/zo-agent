@@ -125,6 +125,7 @@ interface SessionRuntimeHooks {
   onSessionStarted: () => void
   onSessionStopped: () => void
   materializeCanvas?: (graph: import('@craft-agent/session-tools-core').ExcalidrawGraph) => Promise<import('@craft-agent/session-tools-core').ExcalidrawMaterializeResult>
+  materializeScene?: (scene: import('@craft-agent/session-tools-core').ExcalidrawScene) => Promise<import('@craft-agent/session-tools-core').ExcalidrawMaterializeResult>
 }
 
 const defaultSessionRuntimeHooks: SessionRuntimeHooks = {
@@ -4145,6 +4146,7 @@ export class SessionManager implements ISessionManager {
       // Wire up session self-management tools (set_session_labels, set_session_status, etc.)
       mergeSessionScopedToolCallbacks(managed.id, {
         materializeCanvasFn: sessionRuntimeHooks.materializeCanvas,
+        materializeSceneFn: sessionRuntimeHooks.materializeScene,
         notifyResourceUpdatedFn: async (path: string) => {
           this.notifyResourceUpdated(managed.id, path)
         },

@@ -38,6 +38,7 @@ import {
   handleExcalidrawCreateCanvas,
   handleExcalidrawDescribeCanvas,
   handleExcalidrawSetGraph,
+  handleExcalidrawSetScene,
 } from './handlers/excalidraw-canvas.ts';
 import { handleSetSessionLabels } from './handlers/set-session-labels.ts';
 import { handleSetSessionStatus } from './handlers/set-session-status.ts';
@@ -136,6 +137,40 @@ export const ExcalidrawSetGraphSchema = z.object({
   nodes: z.array(ExcalidrawGraphNodeSchema).describe('Full replacement list of graph nodes. Set role/shape per Graphite semantics. Do not include coordinates or sizes.'),
   edges: z.array(ExcalidrawGraphEdgeSchema).describe('Full replacement list of graph edges. Reference nodes by id; pick one main kind per graph.'),
   direction: z.enum(['TB', 'LR']).optional().describe('Preferred layout direction: top-to-bottom or left-to-right'),
+});
+
+export const ExcalidrawSceneNodeSchema = z.object({
+  id: z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Stable scene node id; arrows may reference it with start/end'),
+  type: z.enum(['rectangle', 'ellipse', 'diamond', 'text']).describe('Scene node type. Use text for freestanding labels/headings; rectangles for section cards.'),
+  x: z.number().describe('Absolute canvas x coordinate'),
+  y: z.number().describe('Absolute canvas y coordinate'),
+  width: z.number().positive().describe('Element width'),
+  height: z.number().positive().describe('Element height'),
+  label: z.string().optional().describe('Visible text. For type=text this is the text content.'),
+  role: z.enum(['default', 'accent', 'alert', 'muted']).optional()
+    .describe('Graphite role. Use alert for orange-highlighted section cards or emphasis; use accent sparingly.'),
+  icon: z.enum(['check', 'cross', 'warning', 'info', 'star', 'arrow', 'circle', 'square', 'triangle', 'diamond', 'flag', 'bolt']).optional()
+    .describe('Optional simple icon rendered as a text symbol before the label.'),
+});
+
+export const ExcalidrawSceneArrowSchema = z.object({
+  id: z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Stable arrow id'),
+  points: z.array(z.object({ x: z.number(), y: z.number() })).min(2)
+    .describe('Absolute canvas waypoints. The first point is the arrow origin; subsequent points are converted to relative Excalidraw points.'),
+  label: z.string().optional().describe('Optional arrow label'),
+  start: z.string().regex(/^[A-Za-z0-9_-]+$/).optional().describe('Optional id of the node the arrow starts from'),
+  end: z.string().regex(/^[A-Za-z0-9_-]+$/).optional().describe('Optional id of the node the arrow ends at'),
+  dashed: z.boolean().optional().describe('Async / weak relationship — rendered dashed.'),
+  arrow: z.boolean().optional().describe('Set false to drop the arrowhead.'),
+  role: z.enum(['default', 'accent', 'alert', 'muted']).optional()
+    .describe('Optional arrow color role. Use alert for orange callout arrows.'),
+});
+
+export const ExcalidrawSetSceneSchema = z.object({
+  canvasId: z.string().describe('Canvas id returned by excalidraw_create_canvas'),
+  nodes: z.array(ExcalidrawSceneNodeSchema).describe('Full replacement list of coordinate-based scene nodes (section cards, text, icons/simple elements). You provide x/y/width/height — there is no auto-layout.'),
+  arrows: z.array(ExcalidrawSceneArrowSchema).describe('Full replacement list of coordinate-based arrows. Use role=alert for orange callout arrows.'),
+  title: z.string().optional().describe('Optional display title override for this scene'),
 });
 
 export const ExcalidrawDescribeCanvasSchema = z.object({
@@ -355,9 +390,11 @@ Use this before generating architecture diagrams, flow charts, or other editable
 - {sessionDir}/canvases/{canvasId}.graph.json as your coordinate-free work model
 - {sessionDir}/canvases/{canvasId}.excalidraw as the renderable file
 
-After creating, call excalidraw_set_graph with a full replacement graph.`,
+After creating, call excalidraw_set_graph for auto-laid-out diagrams, or excalidraw_set_scene for coordinate-based visual layouts.`,
 
   excalidraw_set_graph: `Replace the coordinate-free graph for a session-scoped Excalidraw canvas.
+
+Use this for **architecture/flow/system maps and mind maps** — the backend auto-layouts with Dagre and applies the Graphite design language. For image recreation, whiteboard/poster layouts, or coordinate-sensitive canvases where pixel placement matters, use \`excalidraw_set_scene\` instead.
 
 Provide only nodes, edges, per-node role/shape, per-edge kind/dashed, and an optional direction. Do not calculate x/y coordinates, sizes, colors, or raw Excalidraw JSON yourself.
 The backend measures text, lays out the graph with dagre, applies the Graphite design language (graphiteStyle), materializes it via @excalidraw/excalidraw in a DOM renderer, writes the .excalidraw file, saves a preview PNG, and broadcasts a resource update. Colors are derived from role and re-themed for light/dark at view time — never hard-code hex.
@@ -366,9 +403,19 @@ Graphite rules: most nodes are role "default"; use "accent" for at most 1–2 fo
 
 Use the returned previewPngPath to inspect clarity and accuracy. If validation or preview review fails, fix the graph and retry. After 3 consecutive failures for the same canvas, the tool returns a terminal error and you must stop retrying and tell the user: 画布生成失败，请调整需求或稍后再试`,
 
-  excalidraw_describe_canvas: `Describe a session-scoped Excalidraw canvas from its stored graph model.
+  excalidraw_set_scene: `Replace the coordinate-based scene for a session-scoped Excalidraw canvas.
 
-Use this to inspect existing generated nodes and edges before answering follow-up questions or regenerating the full canvas.`,
+Use this for **image/screenshot recreation, whiteboard/poster layouts, and coordinate-sensitive canvases** where you need explicit control over element positions. For architecture/flow/system maps or mind maps, use \`excalidraw_set_graph\` instead — it auto-layouts with Dagre and applies the Graphite design language so you never manage coordinates.
+
+Provide scene nodes (rectangles/cards, freestanding text, simple icon labels) with explicit x/y/width/height and arrows with absolute waypoint lists. The backend materializes them via @excalidraw/excalidraw in a DOM renderer, writes the .excalidraw file, saves a preview PNG, and broadcasts a resource update. There is no Dagre layout — you own the coordinates, sizes, and spatial relationships.
+
+Arrows may reference nodes by id via \`start\`/\`end\`. Give rectangle/text nodes stable ids so arrows can bind to them. Use \`role: "alert"\` for orange callout arrows.
+
+Use the returned previewPngPath to inspect layout and accuracy. If validation or preview review fails, fix the scene and retry. After 3 consecutive failures for the same canvas, the tool returns a terminal error and you must stop retrying and tell the user: 画布生成失败，请调整需求或稍后再试`,
+
+  excalidraw_describe_canvas: `Describe a session-scoped Excalidraw canvas from its stored graph and coordinate-scene models.
+
+Use this to inspect existing generated graph nodes/edges and, when present, the coordinate scene model before answering follow-up questions or regenerating the full canvas.`,
 
   source_test: `Validate, test, and (by default) activate a source configuration.
 
@@ -634,6 +681,7 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'mermaid_validate', description: TOOL_DESCRIPTIONS.mermaid_validate, inputSchema: MermaidValidateSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleMermaidValidate },
   { name: 'excalidraw_create_canvas', description: TOOL_DESCRIPTIONS.excalidraw_create_canvas, inputSchema: ExcalidrawCreateCanvasSchema, executionMode: 'registry', safeMode: 'allow', handler: handleExcalidrawCreateCanvas },
   { name: 'excalidraw_set_graph', description: TOOL_DESCRIPTIONS.excalidraw_set_graph, inputSchema: ExcalidrawSetGraphSchema, executionMode: 'registry', safeMode: 'allow', handler: handleExcalidrawSetGraph },
+  { name: 'excalidraw_set_scene', description: TOOL_DESCRIPTIONS.excalidraw_set_scene, inputSchema: ExcalidrawSetSceneSchema, executionMode: 'registry', safeMode: 'allow', handler: handleExcalidrawSetScene },
   { name: 'excalidraw_describe_canvas', description: TOOL_DESCRIPTIONS.excalidraw_describe_canvas, inputSchema: ExcalidrawDescribeCanvasSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleExcalidrawDescribeCanvas },
   { name: 'source_test', description: TOOL_DESCRIPTIONS.source_test, inputSchema: SourceTestSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSourceTest },
   { name: 'source_oauth_trigger', description: TOOL_DESCRIPTIONS.source_oauth_trigger, inputSchema: SourceOAuthTriggerSchema, executionMode: 'registry', safeMode: 'block', handler: handleSourceOAuthTrigger },
