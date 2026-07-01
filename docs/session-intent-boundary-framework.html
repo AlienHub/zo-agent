@@ -1,0 +1,1276 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Session Intent Boundary Intelligence · 产品需求文档 (PRD)</title>
+  <style>
+    :root {
+      --bg: #f5f2ea;
+      --paper: #fffdf7;
+      --ink: #1f2320;
+      --muted: #62685f;
+      --line: #d8d1c2;
+      --line-strong: #b8ad99;
+      --accent: #126b68;
+      --accent-2: #a64b2a;
+      --accent-3: #335c81;
+      --ok: #2d6a4f;
+      --warn: #9a5b13;
+      --risk: #8f2d38;
+      --soft-accent: #e3f0ec;
+      --soft-warn: #f5ead6;
+      --soft-risk: #f5dddd;
+      --shadow: 0 18px 48px rgba(39, 35, 25, 0.12);
+      --radius: 8px;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: Georgia, "Times New Roman", "Songti SC", serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(31, 35, 32, 0.035) 1px, transparent 1px) 0 0 / 28px 28px,
+        linear-gradient(rgba(31, 35, 32, 0.025) 1px, transparent 1px) 0 0 / 28px 28px,
+        var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      line-height: 1.62;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(210px, 280px) minmax(0, 1fr);
+      gap: 28px;
+      width: min(1360px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 28px 0 44px;
+    }
+
+    .toc {
+      position: sticky;
+      top: 18px;
+      height: calc(100vh - 36px);
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 253, 247, 0.88);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 12px 32px rgba(39, 35, 25, 0.08);
+      overflow: auto;
+    }
+
+    .toc .mark {
+      font-family: var(--serif);
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0;
+      margin-bottom: 10px;
+    }
+
+    .toc p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .toc a {
+      display: block;
+      padding: 7px 8px;
+      border-radius: 6px;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    .toc a:hover,
+    .toc a:focus {
+      background: var(--soft-accent);
+      outline: none;
+    }
+
+    main {
+      min-width: 0;
+    }
+
+    .hero {
+      min-height: 440px;
+      display: grid;
+      align-content: end;
+      padding: clamp(26px, 5vw, 64px);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background:
+        radial-gradient(circle at 78% 18%, rgba(18, 107, 104, 0.12), transparent 22%),
+        linear-gradient(135deg, rgba(255, 253, 247, 0.96), rgba(239, 232, 219, 0.92)),
+        var(--paper);
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 22px;
+      border: 1px solid rgba(31, 35, 32, 0.12);
+      border-radius: 6px;
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      width: fit-content;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 9px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      color: var(--accent);
+      background: rgba(255, 253, 247, 0.76);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    h1,
+    h2,
+    h3 {
+      letter-spacing: 0;
+      line-height: 1.14;
+    }
+
+    h1 {
+      max-width: 880px;
+      margin: 18px 0 16px;
+      font-family: var(--serif);
+      font-size: clamp(38px, 6vw, 72px);
+      font-weight: 700;
+    }
+
+    .hero .subhead {
+      max-width: 850px;
+      margin: 0;
+      color: var(--muted);
+      font-size: clamp(17px, 2vw, 22px);
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 34px;
+    }
+
+    .hero-metric {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 253, 247, 0.78);
+    }
+
+    .hero-metric b {
+      display: block;
+      font-size: 15px;
+    }
+
+    .hero-metric span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .meta-bar {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0;
+      margin-top: 26px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: rgba(255, 253, 247, 0.86);
+    }
+
+    .meta-bar div {
+      padding: 12px 14px;
+      border-right: 1px solid var(--line);
+    }
+
+    .meta-bar div:last-child {
+      border-right: 0;
+    }
+
+    .meta-bar b {
+      display: block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 3px;
+    }
+
+    .meta-bar span {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    section {
+      margin-top: 24px;
+      padding: clamp(22px, 3vw, 34px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 253, 247, 0.92);
+      box-shadow: 0 10px 30px rgba(39, 35, 25, 0.06);
+    }
+
+    section h2 {
+      margin: 0 0 12px;
+      font-family: var(--serif);
+      font-size: clamp(26px, 3vw, 38px);
+    }
+
+    section h2 .num {
+      color: var(--accent);
+      font-size: 0.62em;
+      vertical-align: middle;
+      margin-right: 10px;
+      font-family: var(--mono);
+    }
+
+    section > p {
+      max-width: 880px;
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 18px;
+    }
+
+    .callout {
+      padding: 18px;
+      border-left: 4px solid var(--accent);
+      border-radius: 0 var(--radius) var(--radius) 0;
+      background: var(--soft-accent);
+      color: #163b39;
+      font-size: 15px;
+    }
+
+    .warning {
+      border-left-color: var(--accent-2);
+      background: var(--soft-warn);
+      color: #543107;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .grid.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid.three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fffefa;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .req {
+      border-left: 4px solid var(--accent);
+    }
+
+    .req h3 {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .req .rid {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .ac {
+      margin: 12px 0 0;
+      padding: 12px 14px;
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--radius);
+      background: #fbf7ed;
+    }
+
+    .ac b {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--soft-accent);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .tag.warn {
+      background: var(--soft-warn);
+      color: var(--warn);
+    }
+
+    .tag.risk {
+      background: var(--soft-risk);
+      color: var(--risk);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 0;
+    }
+
+    .pill.p0 { background: var(--soft-risk); color: var(--risk); }
+    .pill.p1 { background: var(--soft-warn); color: var(--warn); }
+    .pill.p2 { background: var(--soft-accent); color: var(--accent); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      font-size: 14px;
+      background: #fffefa;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    th,
+    td {
+      padding: 12px 13px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eee7d8;
+      color: #2a2d29;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    code,
+    pre {
+      font-family: var(--mono);
+    }
+
+    pre {
+      margin: 16px 0 0;
+      padding: 18px;
+      border: 1px solid #cfc6b5;
+      border-radius: var(--radius);
+      background: #20251f;
+      color: #eef3e8;
+      overflow: auto;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .flow {
+      width: 100%;
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbf7ed;
+    }
+
+    .flow svg {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .sequence {
+      display: grid;
+      gap: 10px;
+      counter-reset: step;
+      margin-top: 16px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fffefa;
+    }
+
+    .step::before {
+      counter-increment: step;
+      content: counter(step);
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      font-weight: 800;
+    }
+
+    .step p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .decision {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .compact-list {
+      margin: 10px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+    }
+
+    .compact-list li {
+      margin: 6px 0;
+    }
+
+    .status-ok {
+      color: var(--ok);
+      font-weight: 700;
+    }
+
+    .status-partial {
+      color: var(--warn);
+      font-weight: 700;
+    }
+
+    .status-missing {
+      color: var(--risk);
+      font-weight: 700;
+    }
+
+    .footer {
+      margin-top: 24px;
+      padding: 18px 0 4px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: right;
+    }
+
+    @media (max-width: 900px) {
+      .shell {
+        grid-template-columns: 1fr;
+        width: min(100% - 24px, 780px);
+        padding-top: 12px;
+      }
+
+      .toc {
+        position: relative;
+        top: auto;
+        height: auto;
+      }
+
+      .toc nav {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 4px;
+      }
+
+      .hero {
+        min-height: auto;
+      }
+
+      .hero-grid,
+      .meta-bar,
+      .grid.two,
+      .grid.three,
+      .decision {
+        grid-template-columns: 1fr;
+      }
+
+      .meta-bar div {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 560px) {
+      .toc nav {
+        grid-template-columns: 1fr;
+      }
+
+      section,
+      .hero {
+        padding: 20px;
+      }
+
+      th,
+      td {
+        padding: 10px;
+      }
+    }
+
+    @media print {
+      body {
+        background: white;
+      }
+
+      .shell {
+        display: block;
+        width: 100%;
+        padding: 0;
+      }
+
+      .toc {
+        display: none;
+      }
+
+      section,
+      .hero {
+        break-inside: avoid;
+        box-shadow: none;
+        background: white;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="toc" aria-label="文档目录">
+      <div class="mark">PRD · Session OS</div>
+      <p>把「偏离提醒」升级为完整的任务边界智能能力的产品需求文档。</p>
+      <nav>
+        <a href="#background">1 · 背景与问题</a>
+        <a href="#positioning">2 · 产品定位</a>
+        <a href="#goals">3 · 目标与非目标</a>
+        <a href="#users">4 · 用户与场景</a>
+        <a href="#concepts">5 · 核心概念与判定</a>
+        <a href="#architecture">6 · 能力架构</a>
+        <a href="#requirements">7 · 功能需求</a>
+        <a href="#ux">8 · 交互与体验</a>
+        <a href="#tech">9 · 技术方案与准备度</a>
+        <a href="#roadmap">10 · 分阶段路线图</a>
+        <a href="#metrics">11 · 成功指标</a>
+        <a href="#risks">12 · 风险与对策</a>
+        <a href="#open">13 · 开放问题</a>
+      </nav>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <span class="eyebrow">Product Requirements Document</span>
+        <h1>Session Intent Boundary Intelligence</h1>
+        <p class="subhead">把 session 从「长聊天记录」升级为「可维护的任务容器」：在一句真正属于另一个任务的输入混入、造成不可逆的会话污染之前，用模型判断边界，并自动组织 fork、handoff 或 compact context。</p>
+        <div class="hero-grid" aria-label="一句话价值">
+          <div class="hero-metric">
+            <b>防止不可逆污染</b>
+            <span>真切换混入后，session 注意力被带偏，无法复用，只能整条抛弃。</span>
+          </div>
+          <div class="hero-metric">
+            <b>必须使用模型</b>
+            <span>任务边界是语义判断，不是关键词规则。</span>
+          </div>
+          <div class="hero-metric">
+            <b>原生感的兑现</b>
+            <span>不是变现点，是 Zo「帮你管理工作流」心智的一次具体落地。</span>
+          </div>
+        </div>
+        <div class="meta-bar" aria-label="文档信息">
+          <div><b>状态</b><span>Draft · 待评审</span></div>
+          <div><b>版本</b><span>v0.2</span></div>
+          <div><b>最后更新</b><span>2026-06-30</span></div>
+          <div><b>关联材料</b><span>ZooAI/user-research</span></div>
+        </div>
+      </header>
+
+      <section id="background">
+        <h2><span class="num">01</span>背景与问题</h2>
+        <p>在一个 session 里推进任务 A 时，用户常会被一个真正无关的任务 B 打断——「突然发现一个 bug」「对了顺便算一下另一个功能的 ROI」。如果顺手在当前 session 里问了 B，问题虽然解决了，但会话被搞脏了：模型注意力被 B 带偏，A 的上下文被稀释。</p>
+        <div class="callout warning">
+          <strong>核心问题是「不可逆」。</strong>一旦真切换的内容进入 session，这条 session 的纯度就回不来了——compact 也救不回，因为污染已经进了历史、影响后续每一轮的注意力分布。用户最终只能把整条 session 抛弃，重新开一条、再手动把 A 的上下文带过去。这是一次<strong>真实发生的损失</strong>，不是一个理论上的洁癖。
+        </div>
+        <div class="grid two" style="margin-top:16px;">
+          <article class="card">
+            <span class="tag">用户研究证据</span>
+            <h3>大需求方向已被验证</h3>
+            <p>用户研究（n=2，<code>ZooAI/user-research</code>）印证「上下文 / 记忆的可寻址性」是 2/2 出现的真需求：用户在手动复制上下文、手搓 CLAUDE.md 来绕过。本能力是这一需求的一个特定子问题——让属于另一个任务的输入不要污染当前主线。</p>
+          </article>
+          <article class="card">
+            <span class="tag risk">证据等级要诚实</span>
+            <h3>具体切口仍是强假设</h3>
+            <p>「分流主线、防止不可逆污染」这一具体切口目前主要来自创始人自身真实体感，属待证伪假设。同一研究还有两条硬约束：用户「为模型付费、为体验忍耐」，痛点「能忍、非 hair-on-fire」——意味着用户不会主动呼唤它，对打断的耐受度更低。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="positioning">
+        <h2><span class="num">02</span>产品定位</h2>
+        <p>这个能力不是「偏题检测」。偏题检测把系统摆在纠正用户的位置，容易冒犯，也容易退化成烦人的确认弹窗。它真正防的不是「跑题」，而是<strong>一次不可逆的会话损坏</strong>。这一点决定了它的两条设计约束：</p>
+        <div class="grid two" style="margin-bottom:16px;">
+          <article class="card">
+            <span class="tag">约束 A · 时机</span>
+            <h3>必须在发送前拦截</h3>
+            <p>因为损坏不可逆，正确的介入时机是消息进入 session <strong>之前</strong>那一瞬，而不是事后提醒——消息一旦发出、被模型看到，损坏已经发生，再弹窗毫无意义。pending message 先进判别器，再决定是否进主 session。</p>
+          </article>
+          <article class="card">
+            <span class="tag">约束 B · 误判不对称</span>
+            <h3>漏拦远比误拦贵</h3>
+            <p>漏拦一次（false negative），用户损失一整条 session；误拦一次（false positive）在「发送前」这个时机下只是多问一句「要不要单独开」，用户一秒可消除，且什么都没被损坏。生死线不在「要不要拦」，而在判别器能否分清下面两件事。</p>
+          </article>
+        </div>
+        <div class="callout">
+          推荐命名：<strong>Session Intent Boundary Intelligence</strong>。它属于 Session OS 的一层能力，负责在不可逆污染发生前识别任务边界、保护主线上下文、生成跨 session 交接，并把复杂的 context engineering 从用户手里拿走。
+        </div>
+        <div class="callout warning" style="margin-top:14px;">
+          <strong>它是护城河拼图，不是变现点。</strong>Zo 是开源 Agent、本身就是编排层，模型能力依赖外部，主力用户是非研发的日常 / 创作 / PM / 设计师。这类用户不会自己做 context engineering（研发才会写 CLAUDE.md、手动 fork），他们只会模糊地觉得「这个 AI 后来怎么不好用了」然后弃掉、甚至怪到模型头上。Zo 替他们在那一瞬挡掉，正是「原生感」的具体兑现——它和自动命名、并行面板、自动 handoff 是同一类能力：把研发用户手动做的 context 管理，替非研发用户默默做掉。它本质是已有能力（Compact / Branch / Session 创建）之上的<strong>产品层编排</strong>，不是第六个新功能，迁移成本近乎零。
+        </div>
+      </section>
+
+      <section id="goals">
+        <h2><span class="num">03</span>目标与非目标</h2>
+        <div class="grid two">
+          <article class="card">
+            <span class="tag">Goals · 目标</span>
+            <ul class="compact-list">
+              <li>在「真切换」输入进入 session 前识别它，避免不可逆污染。</li>
+              <li>当用户接受分流时，自动生成高质量 handoff，让 fork 后比留在原会话<strong>更省事</strong>。</li>
+              <li>后台持续维护一份可追溯的 Session Task Brief，作为边界判断与交接的事实来源。</li>
+              <li>复用已有 Compact / Branch / Session 创建能力，以产品层编排呈现，而非新增独立功能。</li>
+              <li>把每一次系统介入做成「惊喜」而非「负担」——用户的反应应是「它怎么知道」，不是「它又来问我了」。</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="tag risk">Non-Goals · 非目标</span>
+            <ul class="compact-list">
+              <li>不做「偏题检测 / 纠正用户」式的体验，文案不审判用户。</li>
+              <li>不靠关键词、相似度等启发式冒充语义判断。</li>
+              <li>不在事后（消息已发送后）弹窗提醒——那既无法阻止污染，又最伤信任。</li>
+              <li>不把本能力当作独立的付费 / 变现卖点来承诺商业指标。</li>
+              <li>不拦截「自然漂移」（主线内的追问、确认、试错），不制造高频打断。</li>
+              <li>不判别 / 推荐 branch（回到历史节点探索替代路线）：判别器只看一句前向的待发送输入，无法可靠反推用户想回到哪个历史节点，强行纳入会扩大判别空间、拉低准确度。branch 仍是用户主动触发的已有机制，不在本能力范围内。</li>
+              <li>第一阶段不追求覆盖全部动作分支，先打通最小闭环（见路线图）。</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section id="users">
+        <h2><span class="num">04</span>目标用户与典型场景</h2>
+        <p>主力用户是非研发的日常 / 创作 / PM / 设计师。他们不会自己做 context 管理，因此本能力对他们更应「无感」：不需要他们理解「为什么要 fork」这个概念，事情顺、该分开的自动分开、该带的上下文自动在那。</p>
+        <table>
+          <thead>
+            <tr>
+              <th>画像</th>
+              <th>真切换场景（应拦截）</th>
+              <th>对用户的价值</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>研发</strong>（理念原型）</td>
+              <td>在一个 session 里开发需求 A，中途撞见无关 bug B，顺手在同会话问 B。</td>
+              <td>避免 A 的会话被 B 污染、事后还得重开会话重新带上下文。</td>
+            </tr>
+            <tr>
+              <td><strong>产品经理</strong></td>
+              <td>正在写 A 需求的 PRD，突然「对了，帮我算下另一个功能的 ROI」。</td>
+              <td>PRD 的上下文不被打断，ROI 在独立 session 里更专注。</td>
+            </tr>
+            <tr>
+              <td><strong>设计师</strong></td>
+              <td>正在调 A 页面的视觉，突然「顺便给我出一版完全不同产品的 logo」。</td>
+              <td>A 的视觉语境不被另一产品的需求稀释。</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="callout" style="margin-top:16px;">
+          三个场景的共同指纹完全一致：<strong>对象变了 + 完成它不会推进主线 + 它有独立的生命周期</strong>。判据可在研发 / 非研发间平移，说明这不是研发专属能力。
+        </div>
+      </section>
+
+      <section id="concepts">
+        <h2><span class="num">05</span>核心概念与判定标准</h2>
+        <p>判别器要对齐的靶子，是精准区分「会造成不可逆污染的真切换」与「主线内的自然漂移」。这是整个能力的生死线。</p>
+        <div class="grid two">
+          <article class="card">
+            <span class="tag">真切换 · 应当拦截</span>
+            <h3>会造成不可逆污染</h3>
+            <ul class="compact-list">
+              <li><strong>对象变了</strong>：不是 A 的子步骤、不是对 A 的追问。</li>
+              <li><strong>做完不推进 A</strong>：解决它之后，A 的进度一格没动。</li>
+              <li><strong>有独立生命周期</strong>：它自己就能成为一个完整 session，不依赖 A 的上下文。</li>
+              <li><strong>触发是「撞见」</strong>：常由「突然发现」「对了顺便」「另外有个问题」引出。</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="tag warn">自然漂移 · 不应拦截</span>
+            <h3>是主线的自然推进</h3>
+            <ul class="compact-list">
+              <li>追问 A 的某个细节（「这个边界 case 要不要写进 PRD」）。</li>
+              <li>确认 A 的一个判断（「那这里应该怎么处理」）。</li>
+              <li>A 内部的一次重试或纠错。</li>
+              <li><strong>共同点</strong>：做完都让 A 前进，且离开当前上下文就不成立。</li>
+            </ul>
+          </article>
+        </div>
+        <div class="callout warning" style="margin-top:16px;">
+          <strong>最硬的单条判据：</strong>自然漂移做完会让主线前进，真切换做完主线原地不动。判别器宁可漏报（放过一次可疑的真切换），不可在自然漂移上误报到产生高频打断。
+        </div>
+      </section>
+
+      <section id="architecture">
+        <h2><span class="num">06</span>能力架构</h2>
+        <p>完整框架包含六个模块：Session Task Brief、Intent Boundary Classifier、Boundary Policy Engine、Action Orchestrator、Handoff Generator、Artifact Ledger。它们把用户输入从「直接追加到当前聊天」变成「先在发送前理解边界，再选择合适的工作流动作」。</p>
+
+        <div class="flow" role="img" aria-label="Session Intent Boundary Intelligence 架构图">
+          <svg viewBox="0 0 1120 330" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#126b68"></path>
+              </marker>
+            </defs>
+            <rect x="30" y="42" width="210" height="86" rx="8" fill="#fffdf7" stroke="#b8ad99"></rect>
+            <foreignObject x="46" y="58" width="178" height="54">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font: 700 16px system-ui; color:#1f2320;">用户新输入<br><span style="font-weight:400;color:#62685f;font-size:13px;">pending message（发送前）</span></div>
+            </foreignObject>
+
+            <rect x="30" y="205" width="210" height="96" rx="8" fill="#fffdf7" stroke="#b8ad99"></rect>
+            <foreignObject x="46" y="222" width="178" height="62">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font: 700 16px system-ui; color:#1f2320;">Session Task Brief<br><span style="font-weight:400;color:#62685f;font-size:13px;">主线、决定、成果、排除项</span></div>
+            </foreignObject>
+
+            <rect x="310" y="120" width="250" height="120" rx="8" fill="#e3f0ec" stroke="#126b68"></rect>
+            <foreignObject x="328" y="140" width="214" height="82">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font: 700 17px system-ui; color:#123f3d;">Intent Boundary Classifier<br><span style="font-weight:400;color:#315f5d;font-size:13px;">高级模型 + 专属 system prompt + 结构化输出</span></div>
+            </foreignObject>
+
+            <rect x="630" y="120" width="230" height="120" rx="8" fill="#fffdf7" stroke="#b8ad99"></rect>
+            <foreignObject x="648" y="140" width="194" height="82">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font: 700 17px system-ui; color:#1f2320;">Boundary Policy Engine<br><span style="font-weight:400;color:#62685f;font-size:13px;">阈值、用户偏好、风险等级、干预频率</span></div>
+            </foreignObject>
+
+            <rect x="920" y="38" width="170" height="72" rx="8" fill="#fffdf7" stroke="#b8ad99"></rect>
+            <foreignObject x="936" y="54" width="138" height="42">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font: 700 15px system-ui; color:#1f2320;">continue</div>
+            </foreignObject>
+
+            <rect x="920" y="128" width="170" height="72" rx="8" fill="#f5ead6" stroke="#9a5b13"></rect>
+            <foreignObject x="936" y="144" width="138" height="42">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font: 700 15px system-ui; color:#543107;">compact_context</div>
+            </foreignObject>
+
+            <rect x="920" y="218" width="170" height="72" rx="8" fill="#e3f0ec" stroke="#126b68"></rect>
+            <foreignObject x="936" y="234" width="138" height="42">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font: 700 15px system-ui; color:#123f3d;">fork_with_handoff</div>
+            </foreignObject>
+
+            <path d="M 240 85 C 270 86, 278 128, 310 150" fill="none" stroke="#126b68" stroke-width="2.5" marker-end="url(#arrow)"></path>
+            <path d="M 240 253 C 280 250, 280 210, 310 198" fill="none" stroke="#126b68" stroke-width="2.5" marker-end="url(#arrow)"></path>
+            <path d="M 560 180 L 630 180" fill="none" stroke="#126b68" stroke-width="2.5" marker-end="url(#arrow)"></path>
+            <path d="M 860 180 C 900 180, 885 74, 920 74" fill="none" stroke="#126b68" stroke-width="2.5" marker-end="url(#arrow)"></path>
+            <path d="M 860 180 C 892 180, 890 164, 920 164" fill="none" stroke="#126b68" stroke-width="2.5" marker-end="url(#arrow)"></path>
+            <path d="M 860 180 C 900 180, 886 254, 920 254" fill="none" stroke="#126b68" stroke-width="2.5" marker-end="url(#arrow)"></path>
+          </svg>
+        </div>
+      </section>
+
+      <section id="requirements">
+        <h2><span class="num">07</span>功能需求</h2>
+        <p>下列需求按模块编号（FR-x），每条给出关键需求点与验收标准（AC）。优先级 <span class="pill p0">P0</span> 第一阶段必做、<span class="pill p1">P1</span> 第二阶段、<span class="pill p2">P2</span> 后续。</p>
+
+        <div class="grid" style="gap:16px; margin-top:8px;">
+          <article class="card req">
+            <h3><span class="rid">FR-1</span> Session Task Brief（任务简报） <span class="pill p0">P0</span></h3>
+            <p><strong>它到底是什么：</strong>一份后台维护的、结构化的「任务快照」。不是聊天记录的摘要，也不是给用户看的状态标签，而是判别器（FR-2）和 handoff（FR-5）唯一依赖的事实来源——回答「这个 session 此刻在做什么、已经定了什么、产出到哪了、什么不要再碰」。每个 session 一份，存为本地文件。下面是一个填好的实例，字段即设计：</p>
+            <pre><code>{
+  "session_id": "s_8f2a",
+  "updated_at": "2026-06-30T10:12:00Z",
+
+  // 主线：一句话，当前 session 在解决什么
+  "main_task": "为「批量导出」功能写 PRD",
+
+  // 最近推进：最近几轮实际推进了什么（记录事实，不判断"处于什么阶段"）
+  "recent_progress": [
+    "确定导出范围 = 当前筛选结果",
+    "列出 3 个待定的字段格式问题"
+  ],
+
+  // 已确认判断：用户明确认可 / 否定 / 纠正过的（避免重开已结束的讨论）
+  "confirmed_decisions": [
+    "必须支持 CSV 与 Excel 两种格式",
+    "不做定时导出（已明确砍掉）"
+  ],
+
+  // 已有成果：本 session 产出 / 引用的对象（详见 FR-6 Artifact Ledger）
+  "artifacts": [
+    { "type": "plan", "ref": "export-prd.md", "summary": "PRD 草稿 v0.1" }
+  ],
+
+  // 用户留下的问题：明确提出但未解决（继续追问 = 自然推进，不该被拦）
+  "open_questions": [
+    "导出大文件是否需要异步任务"
+  ],
+
+  // 明确排除：用户说不要的路线（避免被后续模型重新带回来）
+  "excluded_directions": [
+    "不导出敏感字段"
+  ]
+}</code></pre>
+            <ul class="compact-list">
+              <li><strong>更新时机</strong>：每轮对话后由一次轻量模型调用增量更新相关字段，而非每轮重写全文。</li>
+              <li><strong>存储</strong>：每个 session 本地目录一份文件为事实来源；运行时内存缓存，跨重启 / fork / handoff / 调试不丢。</li>
+              <li><strong>与 Artifact Ledger 的关系</strong>：Task Brief 是紧凑的工作快照，<code>artifacts</code> / <code>confirmed_decisions</code> 字段引用 FR-6 两层账本，不在此重复存全量。</li>
+            </ul>
+            <div class="ac">
+              <b>验收标准</b>
+              <ul class="compact-list">
+                <li>session 重启后能从本地文件完整恢复 Task Brief（六字段齐全）。</li>
+                <li>fork / handoff 时能读取该文件作为输入，不依赖完整聊天历史。</li>
+                <li>可解释性：能据此说明系统为何建议 fork / compact。</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="card req">
+            <h3><span class="rid">FR-2</span> Intent Boundary Classifier（边界判别器） <span class="pill p0">P0</span></h3>
+            <p><strong>它到底是什么：</strong>在用户输入进入主 agent <strong>之前</strong>的一次专属模型调用。它不替用户做决定，只回答一个问题——「这句新输入和当前主线是什么关系，继续下去会不会造成不可逆污染」——并把判断输出成结构化结果，交给策略引擎（FR-3）。必须用模型，不得用关键词 / 相似度替代。</p>
+            <p><strong>输入</strong>（从 Task Brief + 最近上下文组装）：<code>main_task</code>、<code>recent_progress</code>、<code>confirmed_decisions</code>、<code>excluded_directions</code>（均来自 FR-1）+ 最近 N 轮对话 + 用户刚输入但<strong>尚未发送</strong>的 pending 消息。</p>
+            <p style="margin-top:12px;"><strong>输出</strong>（结构化，把 §05 三条判据逐条显式化）：</p>
+            <pre><code>{
+  // 关系判定
+  "relation": "same_task | sub_task | adjacent_task | new_task",
+
+  // §05 三信号，逐条给出 —— 判别器的核心
+  "signals": {
+    "object_changed": true,        // 对象变了吗
+    "advances_main_task": false,   // 做完会推进主线吗（最硬的一条）
+    "independent_lifecycle": true  // 能独立成一个 session 吗
+  },
+
+  "pollution_risk": "none | low | medium | high",
+  "confidence": 0.0,               // 0~1，低置信度直接归为 continue（不打扰）
+
+  // 翻译成的建议动作（最终由 Policy Engine 裁决）
+  "recommended_action":
+    "continue | compact_context | fork_with_handoff",
+
+  // 若需提示，给用户看的一句话（克制、可拒绝）；continue 时为空
+  "user_message": "这个问题看起来会开启一个新方向，要我放到新 session 并带上上下文吗？"
+}</code></pre>
+            <p style="margin-top:14px;"><strong>判定映射</strong>（signals → 动作的基本规则，细化由 FR-3 承担）：</p>
+            <table>
+              <thead>
+                <tr><th>relation</th><th>advances_main_task</th><th>典型 risk</th><th>动作</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>same_task / sub_task</td><td>true</td><td>none / low</td><td>continue</td></tr>
+                <tr><td>same_task（上下文压力高）</td><td>true</td><td>—</td><td>compact_context</td></tr>
+                <tr><td>adjacent_task / new_task</td><td>false</td><td>high</td><td>fork_with_handoff</td></tr>
+                <tr><td>任意（confidence 低）</td><td>—</td><td>—</td><td>continue（不打扰）</td></tr>
+              </tbody>
+            </table>
+            <p style="margin-top:14px;"><strong>两个对照样例</strong>（同一主线 <code>main_task =「为批量导出写 PRD」</code>，看判别器如何分开真切换与自然漂移）：</p>
+            <table>
+              <thead>
+                <tr><th>pending 新输入</th><th>relation</th><th>advances</th><th>risk</th><th>动作</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>「顺便帮我看下登录页转化率为什么降了」</td>
+                  <td>new_task</td>
+                  <td>false</td>
+                  <td>high</td>
+                  <td><strong>fork_with_handoff</strong>（对象变了、做完不推进 PRD、能独立成 session）</td>
+                </tr>
+                <tr>
+                  <td>「导出要不要同时支持 CSV 和 Excel」</td>
+                  <td>sub_task</td>
+                  <td>true</td>
+                  <td>none</td>
+                  <td><strong>continue</strong>（追问主线细节、做完推进 PRD、离开上下文不成立）</td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="ac">
+              <b>验收标准</b>
+              <ul class="compact-list">
+                <li>在标注样本集上，自然漂移的误拦率（false positive）低于约定阈值（见 §11 / §13）。</li>
+                <li>输出严格符合上述 schema；模型失败时兜底为 continue（不打断）。</li>
+                <li>判别在发送前完成，延迟在可接受范围内（见 §13 延迟预算）。</li>
+                <li>两个对照样例必须分别判为 fork_with_handoff 与 continue，作为回归基线。</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="card req">
+            <h3><span class="rid">FR-3</span> Boundary Policy Engine（策略引擎） <span class="pill p1">P1</span></h3>
+            <p>把判别器的语义结果翻译成产品动作，并施加阈值、用户偏好、风险等级与干预频率控制。</p>
+            <ul class="compact-list">
+              <li>低置信度不提示；同类场景被拒绝后降低频率。</li>
+              <li>brainstorming / exploratory session 默认更宽松。</li>
+              <li>风险分级：低风险 continue、中风险 compact、高风险建议 fork。</li>
+            </ul>
+            <div class="ac">
+              <b>验收标准</b>
+              <ul class="compact-list">
+                <li>用户「本次不再提醒」「仍在当前 session 发送」等选择能反馈进后续频率控制。</li>
+                <li>同一 session 内不出现高频重复提示。</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="card req">
+            <h3><span class="rid">FR-4</span> Action Orchestrator（动作编排） <span class="pill p0">P0</span></h3>
+            <p>根据策略结果执行具体动作。底层动作复用已有能力，本模块只做编排。</p>
+            <table>
+              <thead>
+                <tr><th>动作</th><th>场景</th><th>前台行为</th><th>底层动作</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>continue</strong></td><td>同一任务，边界清晰。</td><td>不打扰。</td><td>正常发送到当前 session。</td></tr>
+                <tr><td><strong>compact_context</strong></td><td>同一任务，但上下文压力高、历史噪声重。</td><td>默认后台整理，必要时轻提示。</td><td>调用已有 Compact，继续当前 session。</td></tr>
+                <tr><td><strong>fork_with_handoff</strong></td><td>真切换，继续会污染主线。</td><td>展示克制建议，用户确认后创建新 session。</td><td>生成 handoff → 创建 session → 发送新问题。</td></tr>
+              </tbody>
+            </table>
+            <div class="ac">
+              <b>验收标准</b>
+              <ul class="compact-list">
+                <li>compact_context 默认后台执行，不退化成新弹窗。</li>
+                <li>fork_with_handoff 在用户确认前不创建任何 session。</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="card req">
+            <h3><span class="rid">FR-5</span> Handoff Generator（交接生成） <span class="pill p0">P0</span></h3>
+            <p>fork 能否被接受，关键在 fork 后是否省事。Handoff 必须像一个高质量的任务启动包，明确带什么、不带什么。</p>
+            <pre><code># New Session Context
+
+## Source Session Goal
+...
+
+## Relevant Decisions
+...
+
+## Relevant Artifacts
+...
+
+## What To Ignore
+...
+
+## New User Request
+...</code></pre>
+            <div class="ac">
+              <b>验收标准</b>
+              <ul class="compact-list">
+                <li>handoff 只带必要成果与决策，不塞整段聊天历史。</li>
+                <li>明确列出「What To Ignore」，避免把旧尝试 / 已否定方向带入新 session。</li>
+                <li>新 session 凭 handoff 即可启动，无需用户再手动补上下文。</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="card req">
+            <h3><span class="rid">FR-6</span> Artifact Ledger（产物账本） <span class="pill p1">P1</span></h3>
+            <p>区分「约束」与「产物」：约束是用户确认过、后续判断必须遵守的边界；产物是 session 过程中形成或引用的对象。边界判断需要同时知道二者。</p>
+            <ul class="compact-list">
+              <li><code>accepted_constraints</code>：用户确认过的原则、范围、禁区。</li>
+              <li><code>decisions</code>：已定下的产品 / 技术判断。</li>
+              <li><code>artifacts</code>：plans、files、reports、test_results、downloads。</li>
+              <li><code>unverified_claims</code>：未验证但可能影响后续判断的信息。</li>
+            </ul>
+            <div class="ac">
+              <b>验收标准</b>
+              <ul class="compact-list">
+                <li>约束与产物分两层存储，可分别被判别器与 handoff 引用。</li>
+                <li>handoff 生成时能据 ledger 决定「带哪些产物 / 守哪些约束」。</li>
+              </ul>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="ux">
+        <h2><span class="num">08</span>交互与体验需求</h2>
+        <p>前台体验极度克制。多数情况下系统在后台维护状态；只有当 fork 会明显避免不可逆污染时，才在发送前用一次轻确认介入。判据：每次介入应让用户「欸，它怎么知道」（惊喜），而非「它又来问我了」（负担）。</p>
+        <div class="grid two">
+          <article class="card">
+            <span class="tag">推荐文案</span>
+            <h3>岔路口的轻确认</h3>
+            <p>这个问题看起来会开启一个新的工作方向。为了保留当前 session 的主线，我可以把它放到一个新 session，并自动带上必要上下文。</p>
+            <ul class="compact-list">
+              <li>Fork 并继续（自动带 handoff）</li>
+              <li>仍在当前 session 发送</li>
+              <li>本次不再提醒</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="tag risk">避免文案</span>
+            <h3>不要审判用户</h3>
+            <p>避免「你偏离了主题」「这不是当前会话内容」「请开启新 session」这类表达。用户不是被纠正，而是被帮助组织工作流。</p>
+          </article>
+        </div>
+        <div class="sequence">
+          <div class="step">
+            <div>
+              <h3>用户发送新输入</h3>
+              <p>输入不立刻进入主 agent，而是先进入发送前的边界判断。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>判别器读取 Session Intent Context</h3>
+              <p>读取主目标、进展摘要、产物、健康信号和最近消息。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>Policy Engine 选择动作</h3>
+              <p>低风险继续，中风险 compact，高风险建议 fork。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>Action Orchestrator 执行</h3>
+              <p>执行 continue / compact_context / fork_with_handoff。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tech">
+        <h2><span class="num">09</span>技术方案与现有准备度</h2>
+        <p>系统已有很多原料，但尚未形成稳定的 Session Task Brief 与 Artifact Ledger。结论：模型版能力可建设，但应先补齐任务简报与产物账本，而不是直接上弹窗。</p>
+        <table>
+          <thead>
+            <tr>
+              <th>能力输入</th>
+              <th>准备度</th>
+              <th>当前情况</th>
+              <th>需要补齐</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>当前主目标</td>
+              <td class="status-partial">部分具备</td>
+              <td>已有模型生成的 session title。</td>
+              <td>稳定的「主线目标」记录，不能只依赖标题。</td>
+            </tr>
+            <tr>
+              <td>最近进展摘要</td>
+              <td class="status-partial">部分具备</td>
+              <td>已有 conversation summary，用于 transfer / branch fallback。</td>
+              <td>每轮维护 rolling progress summary。</td>
+            </tr>
+            <tr>
+              <td>关键约束与产物</td>
+              <td class="status-partial">原料具备</td>
+              <td>约束散落在对话与 notes；产物散落在 plans、attachments、downloads、tool events。</td>
+              <td>拆成 Accepted Constraints 与 Artifact Ledger 两层。</td>
+            </tr>
+            <tr>
+              <td>最近几轮用户输入</td>
+              <td class="status-ok">已具备</td>
+              <td>消息完整保存在 session JSONL。</td>
+              <td>抽取窗口策略。</td>
+            </tr>
+            <tr>
+              <td>用户本次新输入</td>
+              <td class="status-ok">已具备</td>
+              <td>sendMessage 入口天然可获得。</td>
+              <td>在主 agent 执行前进入边界判断流程。</td>
+            </tr>
+            <tr>
+              <td>session 健康状态</td>
+              <td class="status-partial">大部分具备</td>
+              <td>有 messageCount、tokenUsage、contextWindow、status、labels。</td>
+              <td>coherence、phase churn、turn drift 等派生指标。</td>
+            </tr>
+            <tr>
+              <td>模型二级调用</td>
+              <td class="status-ok">已具备</td>
+              <td>已有 queryLlm / call_llm，支持 systemPrompt 与结构化输出。</td>
+              <td>产品专属 prompt、schema、失败兜底。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="roadmap">
+        <h2><span class="num">10</span>分阶段路线图</h2>
+        <p>不做所谓 MVP 弹窗。第一阶段也是完整框架中的最小闭环：先建立 Task Brief 与判别能力，再接入已有 Compact / Branch / Session 创建。</p>
+        <table>
+          <thead>
+            <tr><th>阶段</th><th>范围</th><th>包含需求</th><th>出口标准</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>P0 · 最小闭环</strong></td>
+              <td>后台维护 Task Brief；发送前判别真切换；确认后 fork 并自动 handoff。</td>
+              <td>FR-1 / FR-2 / FR-4（continue + fork_with_handoff）/ FR-5</td>
+              <td>真切换可在发送前被拦下；fork 后用户无需手动补上下文；自然漂移不被高频打断。</td>
+            </tr>
+            <tr>
+              <td><strong>P1 · 策略与产物</strong></td>
+              <td>引入策略引擎与产物账本；接入 compact_context（后台自动整理）。</td>
+              <td>FR-3 / FR-6 / FR-4（compact_context）</td>
+              <td>频率控制生效；handoff 能据 ledger 精准取舍；误拦率达标。</td>
+            </tr>
+            <tr>
+              <td><strong>P2 · 增强</strong></td>
+              <td>派生健康指标、企业可审计判断日志、跨 session 关联增强。</td>
+              <td>派生指标 / 审计 / 关联</td>
+              <td>企业模式保留可审计日志；多线管理体验联动。</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="callout" style="margin-top:16px;">
+          第一阶段的不可妥协项：<strong>判断时机必须在发送前</strong>，且默认极度保守（宁可漏报，不可误报到高频打断）。先用「省事」赢得信任，再逐步放开更主动的介入。
+        </div>
+      </section>
+
+      <section id="metrics">
+        <h2><span class="num">11</span>成功指标</h2>
+        <div class="grid two">
+          <article class="card">
+            <span class="tag">Success Metrics</span>
+            <h3>衡量是否真有价值</h3>
+            <ul class="compact-list">
+              <li>fork 建议接受率</li>
+              <li>用户选择「仍在当前 session」的比例</li>
+              <li>fork 后新 session 完成率</li>
+              <li>长 session 中重复解释 / 上下文修复回合减少</li>
+              <li>context pressure 下降</li>
+              <li>用户关闭提醒比例（越低越好）</li>
+              <li>边界判断 false positive 反馈量</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="tag warn">关键护栏指标</span>
+            <h3>准确率是生死线</h3>
+            <ul class="compact-list">
+              <li>自然漂移误拦率（false positive）必须低于约定阈值。</li>
+              <li>真切换漏拦率（false negative）单独追踪——它对应「整条 session 报废」的损失。</li>
+              <li>单 session 内介入频次上限，防止打扰累积。</li>
+              <li>「本次不再提醒 / 永久关闭」触发率作为信任流失预警。</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section id="risks">
+        <h2><span class="num">12</span>风险与对策</h2>
+        <table>
+          <thead>
+            <tr><th>风险</th><th>影响</th><th>对策</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>判别器误拦自然漂移</td>
+              <td>高频打断 → 用户关闭功能 → 功能死亡且不再开启。</td>
+              <td>默认极度保守、低置信度不提示、被拒后降频、exploratory session 更宽松。</td>
+            </tr>
+            <tr>
+              <td>事后介入无法阻止污染</td>
+              <td>损坏已发生，弹窗只剩打扰。</td>
+              <td>判断时机锁定在发送前，作为第一阶段不可妥协项。</td>
+            </tr>
+            <tr>
+              <td>痛点「可忍」，用户不主动呼唤</td>
+              <td>价值难被感知，易被当作多余打扰。</td>
+              <td>以「无感增益」呈现（自动 handoff），让能力先以省事形态出现。</td>
+            </tr>
+            <tr>
+              <td>被误当作变现卖点</td>
+              <td>背上无法兑现的商业指标。</td>
+              <td>定位为护城河拼图 / 原生感兑现，不承诺独立付费转化。</td>
+            </tr>
+            <tr>
+              <td>具体切口仍是创始人体感</td>
+              <td>可能在做一个用户尚未感知的问题。</td>
+              <td>用 §11 护栏指标与下一轮用户研究证伪「分流」切口（见开放问题）。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="open">
+        <h2><span class="num">13</span>开放问题</h2>
+        <ul class="compact-list">
+          <li><strong>误拦率阈值定多少？</strong> FR-2 / §11 的 false positive 上限需要一个具体数值，建议先用内测标注样本集校准。</li>
+          <li><strong>「分流」切口如何证伪？</strong> 当前主要靠创始人体感，需在下一轮用户研究中专门验证非研发用户是否真的感知到「会话被污染、只能弃用」。</li>
+          <li><strong>第一阶段是否完全不主动弹窗？</strong> 已确认时机必须在发送前；待定的是 P0 是否先只做「用户自己 fork 时自动 handoff」的静默增益，还是直接带上发送前轻确认。</li>
+          <li><strong>判别延迟预算？</strong> 发送前的模型调用会引入延迟，需确定可接受上限与降级策略。</li>
+          <li><strong>企业模式审计范围？</strong> 哪些判断日志需要可审计、保留多久。</li>
+          <li><strong>Task Brief 与已有 summary 的关系？</strong> 是复用 conversation summary 扩展，还是独立维护，需在技术设计阶段定。</li>
+        </ul>
+      </section>
+
+      <footer class="footer">
+        Session Intent Boundary Intelligence · PRD v0.2 · Draft · Last updated 2026-06-30 · docs/session-intent-boundary-framework.html
+      </footer>
+    </main>
+  </div>
+</body>
+</html>
