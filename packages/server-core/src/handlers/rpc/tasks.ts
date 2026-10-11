@@ -9,8 +9,8 @@
  *   tasks:get      — spec + (optional) active run-state
  *   tasks:list     — task slugs with a task.yaml
  *
- * The legacy `tasks:getOutput` (background-task remnant) is handled in sessions.ts
- * and intentionally left untouched; retiring it is a separate cleanup.
+ * Background-task output and stop (the composer's task chips) are session channels in sessions.ts
+ * (`sessions:getBackgroundTaskOutput`, `sessions:stopBackgroundTask`).
  */
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import type {

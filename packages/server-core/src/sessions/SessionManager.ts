@@ -87,7 +87,8 @@ import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { CraftMcpClient, McpClientPool, McpPoolServer } from '@craft-agent/shared/mcp'
-import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
+import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type BackgroundTaskOutput, type StopBackgroundTaskResult, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
+import { launchOutputFile, readBackgroundTaskOutput } from './background-task-output'
 import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta, type TokenUsage } from '@craft-agent/core/types'
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
 import { loadAllSkills, loadSkillBySlug, invalidateSkillsCache, type LoadedSkill } from '@craft-agent/shared/skills'
@@ -96,7 +97,7 @@ import { getToolIconsDir, getMiniModel } from '@craft-agent/shared/config'
 import { getDefaultSummarizationModel } from '@craft-agent/shared/config/models'
 import type { SummarizeCallback } from '@craft-agent/shared/sources'
 import { type ThinkingLevel, DEFAULT_THINKING_LEVEL, normalizeThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
-import { evaluateAutoLabels, autoLabelMatchToEntry, type AutoLabelMatch } from '@craft-agent/shared/labels/auto'
+import { evaluateAutoLabels, autoLabelMatchToEntry, newAutoLabelEntries, type AutoLabelMatch } from '@craft-agent/shared/labels/auto'
 import { evaluateSemanticLabelsForMessage } from '../decisions/semantic-labels'
 import { classifyTurnOutcome, TURN_OUTCOME_ATTENTION_STATUS } from '../decisions/turn-outcome'
 import { isSmallTalk, titleNoLongerFits, TITLE_DRIFT_RECENT_MESSAGES } from '../decisions/smart-titles'
@@ -110,7 +111,7 @@ import { buildGuardedModeCheck } from '../decisions/guarded-mode'
 import { assessPermissionRisks } from '../decisions/permission-risks'
 import { checkAutomationCondition } from '../decisions/automation-condition'
 import { listLabels, loadLabelConfig } from '@craft-agent/shared/labels/storage'
-import { extractLabelId, resolveSessionLabels, findTaskItemLabelId, type LabelConfig } from '@craft-agent/shared/labels'
+import { extractLabelId, resolveSessionLabels, findTaskItemLabelId, LabelEntrySet, canonicalizeSessionLabels, foldsValueCase, type LabelConfig } from '@craft-agent/shared/labels'
 import { ensureLabelsExist, ensureTaskItemLabel } from '@craft-agent/shared/labels/crud'
 import { loadStatusConfig } from '@craft-agent/shared/statuses/storage'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot, type PendingPrompt } from '@craft-agent/shared/automations'
@@ -702,6 +703,8 @@ interface RunningBackgroundTask {
   untracked?: boolean
   /** The session's own task, but its launch was not seen: the start time is unknown. */
   startUnknown?: boolean
+  /** The user stopped it from its chip: its `stopped` completion is expected, so it wakes nothing. */
+  stopRequestedAt?: number
 }
 
 interface ManagedSession {
@@ -852,8 +855,6 @@ interface ManagedSession {
   // Original host payloads for backends that can return undelivered text steers.
   // Runtime-only; Pi's native steering does not opt into an acknowledgement protocol.
   acceptedSteers?: Map<string, ManagedSession['messageQueue'][number]>
-  // Map of shellId -> command for killing background shells
-  backgroundShellCommands: Map<string, string>
   // Map of taskId -> output info for background task results
   backgroundTaskOutputs: Map<string, { outputFile: string; summary: string; status: string; completedAt: number }>
   // Registry of background tasks (running + recently-terminal) for this session.
@@ -1088,7 +1089,6 @@ export function createManagedSession(
     processingGeneration: 0,
     isFlagged: (s.isFlagged ?? false) as boolean,
     messageQueue: [],
-    backgroundShellCommands: new Map(),
     backgroundTaskOutputs: new Map(),
     backgroundTaskRegistry: new Map(),
     messagesLoaded: false,
@@ -1277,8 +1277,6 @@ export class SessionManager implements ISessionManager {
   private activeViewingSession: Map<string, string> = new Map()
   /** Coordinates startup initialization waiters from IPC handlers. */
   private initGate = new InitGate()
-  // O(1) index: taskId → sessionId for background task output lookup (avoids O(n) session scan)
-  private taskOutputIndex: Map<string, string> = new Map()
   /**
    * WS2 keep-alive flag (default ON, opt-out via `CRAFT_KEEP_BG_AGENTS_ALIVE=0`).
    * When true, a persistent streaming query keeps the subprocess alive across
@@ -1317,14 +1315,14 @@ export class SessionManager implements ISessionManager {
 
   /**
    * Merge auto-label matches into the session's labels (valued entries as `id::value`,
-   * plain ones as the bare id), persist and broadcast when anything changed.
+   * plain ones as the bare id), persist and broadcast when anything changed. Labels the
+   * session already has by meaning are skipped (`newAutoLabelEntries`), so case variants
+   * and legacy `bug::bug` entries never pile up or fire LabelAdd again.
    */
-  private applyAutoLabelMatches(managed: ManagedSession, matches: AutoLabelMatch[]): void {
+  private applyAutoLabelMatches(managed: ManagedSession, matches: AutoLabelMatch[], labelTree: LabelConfig[]): void {
     if (matches.length === 0) return
     const existingLabels = managed.labels ?? []
-    const newEntries = matches
-      .map(autoLabelMatchToEntry)
-      .filter((entry, index, all) => !existingLabels.includes(entry) && all.indexOf(entry) === index)
+    const newEntries = newAutoLabelEntries(existingLabels, matches, labelTree)
     if (newEntries.length === 0) return
     managed.labels = [...existingLabels, ...newEntries]
     this.persistSession(managed)
@@ -1342,19 +1340,20 @@ export class SessionManager implements ISessionManager {
    * user removed during the round trip is not re-added. Never throws.
    */
   private async applySemanticAutoLabels(managed: ManagedSession, message: string, labelTree: LabelConfig[]): Promise<void> {
-    const labelsAtDispatch = new Set(managed.labels ?? [])
+    const labelsAtDispatch = [...(managed.labels ?? [])]
     try {
       await Promise.resolve()
       const matches = await evaluateSemanticLabelsForMessage(message, labelTree, {
         sessionId: managed.id,
-        existingEntries: [...labelsAtDispatch],
+        existingEntries: labelsAtDispatch,
         log: (line) => sessionLog.info(line),
       })
       if (matches.length === 0) return
       if (this.sessions.get(managed.id) !== managed) return
       // Present at dispatch → either still present (dedupe) or removed by the user since (respect it).
-      const fresh = matches.filter(m => !labelsAtDispatch.has(autoLabelMatchToEntry(m)))
-      this.applyAutoLabelMatches(managed, fresh)
+      const atDispatch = new LabelEntrySet(labelsAtDispatch, foldsValueCase(labelTree))
+      const fresh = matches.filter(m => !atDispatch.has(autoLabelMatchToEntry(m)))
+      this.applyAutoLabelMatches(managed, fresh, labelTree)
     } catch (e) {
       sessionLog.warn(`Semantic auto-label evaluation failed for session ${managed.id}:`, e)
     }
@@ -1992,12 +1991,13 @@ export class SessionManager implements ISessionManager {
     const sessionId = managed.id
     let changed = false
 
-    // Labels
+    // Labels (canonical form: a stale writer's `bug::Bug` must not resurface)
+    const headerLabels = this.canonicalLabels(managed.workspace.rootPath, header.labels)
     const oldLabels = JSON.stringify(managed.labels ?? [])
-    const newLabels = JSON.stringify(header.labels ?? [])
+    const newLabels = JSON.stringify(headerLabels ?? [])
     if (oldLabels !== newLabels) {
-      managed.labels = header.labels
-      this.sendEvent({ type: 'labels_changed', sessionId, labels: header.labels ?? [] }, managed.workspace.id)
+      managed.labels = headerLabels
+      this.sendEvent({ type: 'labels_changed', sessionId, labels: headerLabels ?? [] }, managed.workspace.id)
       changed = true
     }
 
@@ -2189,7 +2189,7 @@ export class SessionManager implements ISessionManager {
         if (automationSystem) {
           automationSystem.updateSessionMetadata(sessionId, {
             permissionMode: header.permissionMode,
-            labels: header.labels,
+            labels: this.canonicalLabels(managed.workspace.rootPath, header.labels),
             isFlagged: header.isFlagged,
             sessionStatus: header.sessionStatus,
             sessionName: header.name,
@@ -2441,6 +2441,9 @@ export class SessionManager implements ISessionManager {
         // Load workspace config once per workspace for default working directory
         const wsConfig = loadWorkspaceConfig(workspaceRootPath)
         const wsDefaultWorkingDir = wsConfig?.defaults?.workingDirectory
+        // Label tree once per workspace: stored labels are read in canonical form (canonicalLabels)
+        let labelTree: LabelConfig[] | undefined
+        try { labelTree = listLabels(workspaceRootPath) } catch (e) { sessionLog.warn(`Could not read labels for ${workspaceRootPath}:`, e) }
 
         for (const meta of sessionMetadata) {
           // Create managed session from metadata only (messages lazy-loaded on demand)
@@ -2454,6 +2457,11 @@ export class SessionManager implements ISessionManager {
             enabledSourceSlugs: meta.enabledSourceSlugs,
             workingDirectory: meta.workingDirectory ?? wsDefaultWorkingDir,
           })
+
+          // Older auto-labelling stored values on plain labels (`bug::bug`, `bug::Bug`) and empty values
+          // (`trip::`). Read them in canonical form before the automation snapshot below, so the cleanup
+          // fires no label events; the canonical list reaches disk with the session's next save.
+          if (labelTree) managed.labels = this.canonicalLabels(workspaceRootPath, managed.labels, labelTree)
 
           // Migration: clear orphaned llmConnection references (e.g., after connection was deleted)
           if (managed.llmConnection) {
@@ -2479,7 +2487,7 @@ export class SessionManager implements ISessionManager {
           if (automationSystem) {
             automationSystem.setInitialSessionMetadata(meta.id, {
               permissionMode: meta.permissionMode,
-              labels: meta.labels,
+              labels: managed.labels,
               isFlagged: meta.isFlagged,
               sessionStatus: meta.sessionStatus,
               sessionName: managed.name,
@@ -2493,6 +2501,22 @@ export class SessionManager implements ISessionManager {
       sessionLog.info(`Loaded ${totalSessions} sessions from disk (metadata only)`)
     } catch (error) {
       sessionLog.error('Failed to load sessions from disk:', error)
+    }
+  }
+
+  /**
+   * A session's labels in canonical form for its workspace's label tree (canonicalizeSessionLabels):
+   * how every label list read from disk or handed in by a writer is stored, so older auto-labelling's
+   * `bug::bug` / `bug::Bug` / `trip::` read as `bug` / `trip` and duplicates never reach the UI,
+   * automations or agents. Unchanged when the label config can't be read.
+   */
+  private canonicalLabels(workspaceRootPath: string, labels: string[] | undefined, labelTree?: LabelConfig[]): string[] | undefined {
+    if (!labels?.length) return labels
+    try {
+      return canonicalizeSessionLabels(labels, labelTree ?? listLabels(workspaceRootPath))
+    } catch (e) {
+      sessionLog.warn('Could not canonicalize session labels:', e)
+      return labels
     }
   }
 
@@ -3361,7 +3385,8 @@ export class SessionManager implements ISessionManager {
       workingDirectory: resolvedWorkingDir,
       hidden: options?.hidden,
       sessionStatus: options?.sessionStatus,
-      labels: options?.labels,
+      // Automations, spawn_session and task flows hand in labels unvalidated: store them canonical
+      labels: this.canonicalLabels(workspaceRootPath, options?.labels),
       isFlagged: options?.isFlagged,
       projectId: resolvedProjectId,
       parentSessionId: options?.parentSessionId,
@@ -4938,7 +4963,8 @@ export class SessionManager implements ISessionManager {
             sessions = sessions.filter(s => s.sessionStatus === options.status)
           }
           if (options?.label) {
-            sessions = sessions.filter(s => s.labels?.includes(options.label!))
+            // By label id: valued entries (`priority::3`) carry the id before the separator
+            sessions = sessions.filter(s => s.labels?.some(entry => entry === options.label || extractLabelId(entry) === options.label))
           }
           if (options?.search) {
             const needle = options.search.toLowerCase()
@@ -6600,7 +6626,7 @@ export class SessionManager implements ISessionManager {
     if (!options?.hidden) {
       try {
         const labelTree = listLabels(managed.workspace.rootPath)
-        this.applyAutoLabelMatches(managed, evaluateAutoLabels(message, labelTree))
+        this.applyAutoLabelMatches(managed, evaluateAutoLabels(message, labelTree, managed.labels ?? []), labelTree)
         void this.applySemanticAutoLabels(managed, message, labelTree)
       } catch (e) {
         sessionLog.warn(`Auto-label evaluation failed for session ${sessionId}:`, e)
@@ -7530,73 +7556,70 @@ export class SessionManager implements ISessionManager {
     })
   }
 
-  async killShell(sessionId: string, shellId: string): Promise<{ success: boolean; error?: string }> {
+  /**
+   * Stop one background task (shell, agent or workflow) through the session's live agent (SDK
+   * `stop_task`). The stopped status arrives as a task_completed event, which resolves the chip.
+   * Without a live query the task cannot still be running: it ended with the subprocess that ran it.
+   * (This replaced a `pgrep -f <command>` + SIGTERM that also killed same-command processes of other
+   * sessions and projects.)
+   */
+  async stopBackgroundTask(sessionId: string, taskId: string): Promise<StopBackgroundTaskResult> {
     const managed = this.sessions.get(sessionId)
-    if (!managed) {
-      return { success: false, error: 'Session not found' }
-    }
-
-    sessionLog.info(`Killing shell ${shellId} for session: ${sessionId}`)
-
-    // Try to kill the actual process using the stored command
-    const command = managed.backgroundShellCommands.get(shellId)
-    if (command) {
-      try {
-        // Use pkill to find and kill processes matching the command
-        // The -f flag matches against the full command line
-        const { exec } = await import('child_process')
-        const { promisify } = await import('util')
-        const execAsync = promisify(exec)
-
-        // Escape the command for use in pkill pattern
-        // We search for the unique command string in process args
-        const escapedCommand = command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
-        sessionLog.info(`Attempting to kill process with command: ${command.slice(0, 100)}...`)
-
-        // Use pgrep first to find the PID, then kill it
-        // This is safer than pkill -f which can match too broadly
-        try {
-          const { stdout } = await execAsync(`pgrep -f "${escapedCommand}"`)
-          const pids = stdout.trim().split('\n').filter(Boolean)
-
-          if (pids.length > 0) {
-            sessionLog.info(`Found ${pids.length} process(es) to kill: ${pids.join(', ')}`)
-            // Kill each process
-            for (const pid of pids) {
-              try {
-                await execAsync(`kill -TERM ${pid}`)
-                sessionLog.info(`Sent SIGTERM to process ${pid}`)
-              } catch (killErr) {
-                // Process may have already exited
-                sessionLog.warn(`Failed to kill process ${pid}: ${killErr}`)
-              }
-            }
-          } else {
-            sessionLog.info(`No processes found matching command`)
-          }
-        } catch (pgrepErr) {
-          // pgrep returns exit code 1 when no processes found, which is fine
-          sessionLog.info(`No matching processes found (pgrep returned no results)`)
-        }
-
-        // Clean up the stored command
-        managed.backgroundShellCommands.delete(shellId)
-      } catch (err) {
-        sessionLog.error(`Error killing shell process: ${err}`)
+    if (!managed) return { success: false, error: 'Session not found' }
+    const entry = managed.backgroundTaskRegistry.get(taskId)
+    // Nothing alive to stop: record it, so status queries agree with the chip
+    const notRunning = (): StopBackgroundTaskResult => {
+      if (entry?.status === 'running') {
+        entry.status = 'stopped'
+        entry.completedAt = Date.now()
       }
-    } else {
-      sessionLog.warn(`No command stored for shell ${shellId}, cannot kill process`)
+      return { success: false, error: 'not-running' }
     }
+    if (entry && entry.status !== 'running') return { success: false, error: 'not-running' }
+    const stop = managed.agent?.stopBackgroundTask
+    if (!stop) return notRunning()
+    if (entry) entry.stopRequestedAt = Date.now()
+    try {
+      const stopped = await stop.call(managed.agent, taskId)
+      sessionLog.info(`[bg-lifecycle] stop requested`, { sessionId, taskId, delivered: stopped })
+      return stopped ? { success: true } : notRunning()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // The CLI no longer knows the task (it finished, or died with an earlier subprocess), or the
+      // query is gone: the task is not running — not a failure to report.
+      if (/no task found|is not running|query closed|not running/i.test(message)) return notRunning()
+      if (entry) entry.stopRequestedAt = undefined
+      sessionLog.warn(`[bg-lifecycle] stop failed for task ${taskId}:`, error)
+      return { success: false, error: 'failed' }
+    }
+  }
 
-    // Always emit shell_killed to remove from UI regardless of process kill success
-    this.sendEvent({
-      type: 'shell_killed',
-      sessionId,
-      shellId,
-    }, managed.workspace.id)
+  /**
+   * What a background task of the session has written so far, digested for the chip's card: a
+   * shell's output tail, or an agent's latest message and recent steps. The file is the one the SDK
+   * reported on completion, else the `<taskId>.output` named in the launching tool call's result
+   * (see launchOutputFile). Null when there is nothing to read yet.
+   */
+  async getBackgroundTaskOutput(sessionId: string, taskId: string, kind?: 'agent' | 'shell' | 'workflow'): Promise<BackgroundTaskOutput | null> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) return null
+    const path = this.backgroundTaskOutputFile(managed, taskId)
+    if (!path) return null
+    try {
+      return await readBackgroundTaskOutput(path, kind)
+    } catch (error) {
+      sessionLog.debug(`[bg-lifecycle] no readable output for task ${taskId} (${path}):`, error)
+      return null
+    }
+  }
 
-    return { success: true }
+  private backgroundTaskOutputFile(managed: ManagedSession, taskId: string): string | undefined {
+    const reported = managed.backgroundTaskOutputs.get(taskId)?.outputFile
+    if (reported) return reported
+    const toolUseId = managed.backgroundTaskRegistry.get(taskId)?.toolUseId
+    if (!toolUseId) return undefined
+    const launch = managed.messages.find(message => message.toolUseId === toolUseId && message.toolResult)
+    return launch?.toolResult ? launchOutputFile(launch.toolResult, taskId) : undefined
   }
 
   /**
@@ -7612,7 +7635,6 @@ export class SessionManager implements ISessionManager {
     for (const [tid, info] of managed.backgroundTaskOutputs) {
       if (now - info.completedAt > ONE_HOUR) {
         managed.backgroundTaskOutputs.delete(tid)
-        this.taskOutputIndex.delete(tid)
       }
     }
     for (const [tid, info] of managed.backgroundTaskRegistry) {
@@ -7666,46 +7688,6 @@ export class SessionManager implements ISessionManager {
     return Array.from(managed.backgroundTaskRegistry.values())
       .map((t) => ({ ...t }))
       .sort((a, b) => b.startTime - a.startTime)
-  }
-
-  /**
-   * Get output from a background task
-   *
-   * Looks up the output file stored when a task_completed event was received,
-   * reads its contents, and returns them. Falls back to the SDK-provided summary
-   * if the file cannot be read.
-   *
-   * @param taskId - The task or shell ID
-   * @returns Task output content, or null if task not found
-   */
-  async getTaskOutput(taskId: string): Promise<string | null> {
-    // O(1) lookup via taskOutputIndex
-    const sessionId = this.taskOutputIndex.get(taskId)
-    if (!sessionId) {
-      sessionLog.info(`No output found for task: ${taskId} (task may still be running)`)
-      return null
-    }
-
-    const managed = this.sessions.get(sessionId)
-    const info = managed?.backgroundTaskOutputs.get(taskId)
-    if (!info) {
-      // Index out of sync — clean up stale entry
-      this.taskOutputIndex.delete(taskId)
-      return null
-    }
-
-    sessionLog.info(`Found output for task ${taskId}: file=${info.outputFile}, status=${info.status}`)
-    try {
-      const content = await readFile(info.outputFile, 'utf-8')
-      // Delete after successful read to prevent memory leak
-      managed!.backgroundTaskOutputs.delete(taskId)
-      this.taskOutputIndex.delete(taskId)
-      return content
-    } catch (err) {
-      sessionLog.error(`Failed to read task output file: ${info.outputFile}`, err)
-      // Fall back to SDK-provided summary
-      return info.summary || null
-    }
   }
 
   /**
@@ -7904,7 +7886,7 @@ export class SessionManager implements ISessionManager {
   async setSessionLabels(sessionId: string, labels: string[]): Promise<void> {
     const managed = this.sessions.get(sessionId)
     if (managed) {
-      managed.labels = labels
+      managed.labels = this.canonicalLabels(managed.workspace.rootPath, labels) ?? []
       this.setMetadataWriteGuard(managed)
 
       this.sendEvent({
@@ -8888,6 +8870,19 @@ export class SessionManager implements ISessionManager {
         }, workspaceId)
         break
 
+      case 'task_activity': {
+        // What a running background task is doing (the chip card's live line). Only tasks with a chip
+        // (registered launches) are forwarded: a foreground subagent reports progress too.
+        const info = managed?.backgroundTaskRegistry.get(event.taskId)
+        if (!info || info.untracked) break
+        info.lastProgressAt = Date.now()
+        this.sendEvent({
+          ...event,
+          sessionId,
+        }, workspaceId)
+        break
+      }
+
       case 'task_progress':
         // Update elapsed/last-progress on the registry entry (best-effort — the
         // async-by-default path may not emit progress; the renderer derives
@@ -8927,7 +8922,7 @@ export class SessionManager implements ISessionManager {
           ? priorEntry.status === 'running' && !priorEntry.untracked
           : event.launchedHere === true
 
-        // Store output for later retrieval via getTaskOutput()
+        // Store the output file for the chip's card (getBackgroundTaskOutput) and the wake-up nudge
         if (managed) {
           managed.backgroundTaskOutputs.set(event.taskId, {
             outputFile: event.outputFile || '',
@@ -8935,8 +8930,6 @@ export class SessionManager implements ISessionManager {
             status: event.status,
             completedAt: Date.now(),
           })
-          // O(1) index for getTaskOutput() — avoids scanning all sessions
-          this.taskOutputIndex.set(event.taskId, sessionId)
 
           // Resolve the running-task registry entry to its terminal status so a
           // later "status?" query reflects reality instead of a stale "running".
@@ -8984,7 +8977,9 @@ export class SessionManager implements ISessionManager {
         // the terminal notification reaches the agent through the live stream, so
         // we skip then. Gated on keep-alive because only that mode delivers this
         // event between turns; guarded against duplicate notifications.
-        if (managed && this.keepBackgroundTasksAlive && !managed.isProcessing && launchedHereAndRunning) {
+        // A stop the user asked for from the chip is not news to report back: it wakes nothing.
+        const stoppedByUser = event.status === 'stopped' && !!priorEntry?.stopRequestedAt
+        if (managed && this.keepBackgroundTasksAlive && !managed.isProcessing && launchedHereAndRunning && !stoppedByUser) {
           const taskIntent = priorEntry?.intent
           const outputFile = event.outputFile || managed.backgroundTaskOutputs.get(event.taskId)?.outputFile
           const label = taskIntent ? `"${taskIntent}"` : `task ${event.taskId}`
@@ -9029,11 +9024,6 @@ export class SessionManager implements ISessionManager {
       }
 
       case 'shell_backgrounded':
-        // Store the command for later process killing
-        if (event.command && managed) {
-          managed.backgroundShellCommands.set(event.shellId, event.command)
-          sessionLog.info(`Stored command for shell ${event.shellId}: ${event.command.slice(0, 50)}...`)
-        }
         // Track the agent's background command like a background agent (its shell id is the task
         // id its completion notification carries): real start time and intent in status queries,
         // and its completion can wake an idle session.
@@ -9686,7 +9676,7 @@ export class SessionManager implements ISessionManager {
       permissionMode: header.permissionMode,
       previousPermissionMode: header.previousPermissionMode,
       sessionStatus: header.sessionStatus,
-      labels: header.labels,
+      labels: this.canonicalLabels(workspaceRootPath, header.labels),
       enabledSourceSlugs: header.enabledSourceSlugs,
       workingDirectory: header.workingDirectory,
       model: header.model,

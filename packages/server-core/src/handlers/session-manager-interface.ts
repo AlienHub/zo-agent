@@ -22,6 +22,8 @@ import type {
   PermissionModeState,
   UnreadSummary,
   ShareResult,
+  BackgroundTaskOutput,
+  StopBackgroundTaskResult,
 } from '@craft-agent/shared/protocol'
 import type { SessionBundle, DispatchMode } from '@craft-agent/shared/sessions'
 import type { EventSink } from '../transport'
@@ -119,8 +121,10 @@ export interface ISessionManager {
     rpcContext?: { callerClientId?: string },
   ): Promise<void>
   cancelProcessing(sessionId: string, silent?: boolean): Promise<void>
-  killShell(sessionId: string, shellId: string): Promise<{ success: boolean; error?: string }>
-  getTaskOutput(taskId: string): Promise<string | null>
+  /** What a background task of the session has written so far, digested; null when there is nothing to read. */
+  getBackgroundTaskOutput(sessionId: string, taskId: string, kind?: 'agent' | 'shell' | 'workflow'): Promise<BackgroundTaskOutput | null>
+  /** Stop one background task (shell, agent or workflow) of the session through its live agent. */
+  stopBackgroundTask(sessionId: string, taskId: string): Promise<StopBackgroundTaskResult>
 
   // --- Tasks Conductor seams (in-process; not renderer events, not agent-facing) ---
   /**

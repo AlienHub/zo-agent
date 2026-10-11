@@ -1,5 +1,5 @@
 import { query, createSdkMcpServer, tool, AbortError, type Query, type SDKMessage, type SDKUserMessage, type SDKAssistantMessageError, type Options } from '@anthropic-ai/claude-agent-sdk';
-import { getDefaultOptions, resetClaudeConfigCheck } from './options.ts';
+import { getDefaultOptions, getTextCompletionOptions, resetClaudeConfigCheck } from './options.ts';
 // Local type for SDK user message content blocks (text, image, document)
 // Replaces import from @anthropic-ai/sdk/resources — keeps SDK as agent-only dependency
 type ContentBlockParam =
@@ -36,7 +36,7 @@ import { PendingSteers } from './backend/claude/pending-steers.ts';
 import type { RedirectMetadata, PendingSteer } from './backend/types.ts';
 import { SourceActivationDrainController } from './source-activation-drain.ts';
 import { resolveKeepBackgroundTasksAlive, createPushableInputStream, type PushableInputStream } from './backend/claude/persistent-input.ts';
-import { classifyClaudeTaskNotification } from './backend/claude/task-notification.ts';
+import { classifyClaudeTaskNotification, classifyClaudeTaskProgress } from './backend/claude/task-notification.ts';
 import {
   getSessionPlansDir,
   getLastPlanFilePath,
@@ -167,11 +167,12 @@ export function resolveClaudeThinkingOptions(args: {
   const isClaude = isClaudeModel(model);
   const effort = THINKING_TO_EFFORT[thinkingLevel];
   const isHaiku = model.toLowerCase().includes('haiku');
-  const supportsAdaptiveThinking = isClaude && !isHaiku;
-  // Always-on adaptive thinking models (Fable/Mythos, Opus 5.5) reject
+  // Always-on adaptive thinking models (Fable/Mythos, the 5.5 family) reject
   // `thinking: { type: 'disabled' }`. There's no way to turn thinking off;
   // the lowest we can go is adaptive + 'low' effort.
   const adaptiveAlwaysOn = isAdaptiveThinkingAlwaysOnModel(model);
+  // Haiku before 5.5 has budget-based thinking only; Haiku 5.5 is adaptive-only.
+  const supportsAdaptiveThinking = isClaude && (!isHaiku || adaptiveAlwaysOn);
 
   if (minimizeThinking || !isClaude || !effort) {
     if (adaptiveAlwaysOn) {
@@ -590,6 +591,8 @@ export class ClaudeAgent extends BaseAgent {
     this.persistentThinkingKey = null;
     this.activeTurnChannel = null;
     this.activeTurnState = null;
+    // A dead query can't stop tasks: stopBackgroundTask must report "not running", not reject
+    this.currentQuery = null;
   }
 
   /**
@@ -716,12 +719,21 @@ export class ClaudeAgent extends BaseAgent {
 
   /**
    * Convert a between-turns background SDK message to an AgentEvent and emit it
-   * via `onBackgroundEvent`. Only terminal task notifications are forwarded (the
-   * important signal — completion/failure); progress ticks between turns are
-   * cosmetic (the UI derives elapsed from startTime). Uses the same notification
-   * classifier as the turn-scoped event adapter so validation cannot drift.
+   * via `onBackgroundEvent`: terminal task notifications (completion/failure) and
+   * the activity of the session's own tasks (what the task-chip card shows while
+   * it runs). Elapsed-time ticks stay dropped: the UI derives elapsed from
+   * startTime. Uses the same classifiers as the turn-scoped event adapter so
+   * validation cannot drift.
    */
   private routeBackgroundMessage(message: SDKMessage): void {
+    const activity = classifyClaudeTaskProgress(message);
+    if (activity) {
+      if (this.eventAdapter?.wasLaunchedByMainAgent(activity.taskId, activity.toolUseId)) {
+        this.onBackgroundEvent?.({ type: 'task_activity', ...activity });
+      }
+      return;
+    }
+
     const classification = classifyClaudeTaskNotification(message);
     if (classification.kind === 'valid') {
       const { taskId, toolUseId } = classification.notification;
@@ -763,6 +775,18 @@ export class ClaudeAgent extends BaseAgent {
   /** Wire the between-turns background-event sink (SessionManager forwards to registry/renderer). */
   setBackgroundEventSink(sink: ((event: AgentEvent) => void) | null): void {
     this.onBackgroundEvent = sink;
+  }
+
+  /**
+   * Stop one background task (shell, agent or workflow) through the live query. The SDK confirms
+   * with a task_notification (status 'stopped'), which resolves the task's chip. False when no query
+   * is alive: the task ended with the subprocess that ran it.
+   */
+  async stopBackgroundTask(taskId: string): Promise<boolean> {
+    const live = this.currentQuery;
+    if (!live) return false;
+    await live.stopTask(taskId);
+    return true;
   }
 
   /**
@@ -1562,6 +1586,11 @@ export class ClaudeAgent extends BaseAgent {
           // Large MCP tool results (external servers, session tools) are saved to a file and
           // summarized or previewed BEFORE the model sees them. API tools (api_*) are guarded in
           // api-tools.ts already and come through unchanged.
+          // No matcher on purpose: a PostToolUse hook that matches a tool also stops the CLI
+          // (>=0.3.287) from detaching that call to the background when the user sends a message
+          // mid-turn. Craft never sees a detached call's late result (it reaches the model as a
+          // queued task notification), so keep every tool attached. The event adapter still
+          // renders a detached placeholder sensibly (`isDetachedToolCallResult`).
           PostToolUse: [{
             hooks: [async (input) => this.guardLargeMcpToolOutput(input)],
           }],
@@ -3184,11 +3213,14 @@ This is a branched conversation. All prior messages in this conversation are par
     const model = this.config.miniModel;
 
     const options = {
-      ...getDefaultOptions(this.config.envOverrides),
+      ...getTextCompletionOptions(this.config.envOverrides),
       model,
       maxTurns: 1,
       systemPrompt: 'Reply with ONLY the requested text. No explanation.', // Minimal - no Claude Code preset
-      thinking: { type: 'disabled' as const },
+      // The mini model can be adaptive-only (Haiku 5.5): those reject `disabled`.
+      ...(isAdaptiveThinkingAlwaysOnModel(model)
+        ? { thinking: { type: 'adaptive' as const }, effort: 'low' as const }
+        : { thinking: { type: 'disabled' as const } }),
     };
 
     let result = '';
@@ -3314,10 +3346,11 @@ This is a branched conversation. All prior messages in this conversation are par
     const model = request.model ?? this.config.miniModel ?? getDefaultSummarizationModel();
 
     const options = {
-      ...getDefaultOptions(this.config.envOverrides),
+      ...getTextCompletionOptions(this.config.envOverrides),
       model,
       // Reasoning-model outputs (Opus extended thinking) can span multiple SDK-counted
-      // turns even with no tools exposed. Tool surface here is empty, so no tool-use loop risk.
+      // turns even with no tools exposed. Tool surface here is empty (only the SDK's own
+      // StructuredOutput tool when outputFormat is set), so no tool-use loop risk.
       maxTurns: 10,
       systemPrompt: request.systemPrompt ?? 'Reply with ONLY the requested text. No explanation.',
       ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),

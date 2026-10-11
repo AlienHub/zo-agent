@@ -236,6 +236,8 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.sessions.SEND_MESSAGE,
   RPC_CHANNELS.sessions.CANCEL,
   RPC_CHANNELS.sessions.KILL_SHELL,
+  RPC_CHANNELS.sessions.GET_BACKGROUND_TASK_OUTPUT,
+  RPC_CHANNELS.sessions.STOP_BACKGROUND_TASK,
   RPC_CHANNELS.sessions.RESPOND_TO_PERMISSION,
   RPC_CHANNELS.sessions.RESPOND_TO_CREDENTIAL,
   RPC_CHANNELS.sessions.COMMAND,
@@ -263,7 +265,6 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.transfer.ABORT,
 
   // tasks — workspace content (Conductor DAG runs on the workspace server)
-  RPC_CHANNELS.tasks.GET_OUTPUT,
   RPC_CHANNELS.tasks.VALIDATE,
   RPC_CHANNELS.tasks.CREATE,
   RPC_CHANNELS.tasks.GENERATE,
@@ -458,6 +459,8 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.pages.PUBLISH,
   RPC_CHANNELS.pages.SET_PUBLICATION_PASSWORD,
   RPC_CHANNELS.pages.UNPUBLISH,
+  // claude.ai artifact: runs Claude Code where the page files and the Claude credential live.
+  RPC_CHANNELS.pages.PUBLISH_CLAUDE_ARTIFACT,
   // Thumbnails: the poster file lives on the workspace server; regeneration is
   // a no-op unless that host injected a capturer (Electron main).
   RPC_CHANNELS.pages.GET_THUMBNAIL,
