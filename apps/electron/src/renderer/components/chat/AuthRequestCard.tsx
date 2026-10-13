@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Key, KeyRound, User, Lock, Eye, EyeOff, CheckCircle2, ShieldCheck, XCircle, type LucideIcon } from 'lucide-react'
 import { Spinner } from '@craft-agent/ui'
@@ -197,8 +197,11 @@ export function AuthRequestCard({ message, onRespondToCredential, sessionId, isI
     }
   }, [isValid, handleSubmit, handleCancel])
 
-  const handleOAuthClick = useCallback(async () => {
-    // Client-driven OAuth: callback server runs locally, server owns tokens
+  // Restarting supersedes the running attempt; only the latest one may end the spinner
+  const oauthAttemptRef = useRef(0)
+  const startOAuth = useCallback(async (restart: boolean) => {
+    // Client-driven OAuth: callback server runs locally, server owns tokens. If another
+    // session is already signing in to this source, this waits for that sign-in instead.
     if (!authRequestId || !authSourceSlug) {
       console.warn('[AuthRequestCard] handleOAuthClick bailed: missing', {
         authRequestId: authRequestId ?? 'MISSING',
@@ -207,12 +210,14 @@ export function AuthRequestCard({ message, onRespondToCredential, sessionId, isI
       })
       return
     }
+    const attempt = ++oauthAttemptRef.current
     setIsSubmitting(true)
     try {
       const result = await window.electronAPI.performOAuth({
         sourceSlug: authSourceSlug,
         sessionId,
         authRequestId,
+        restart,
       })
       if (!result.success) {
         console.warn('[AuthRequestCard] performOAuth returned failure:', result.error)
@@ -220,9 +225,12 @@ export function AuthRequestCard({ message, onRespondToCredential, sessionId, isI
     } catch (error) {
       console.error('[AuthRequestCard] performOAuth threw:', error)
     } finally {
-      setIsSubmitting(false)
+      if (oauthAttemptRef.current === attempt) setIsSubmitting(false)
     }
   }, [sessionId, authRequestId, authSourceSlug])
+  const handleOAuthClick = useCallback(() => startOAuth(false), [startOAuth])
+  // The browser sign-in was closed or lost: replace it with a fresh one
+  const handleRestartOAuth = useCallback(() => startOAuth(true), [startOAuth])
 
   // Get field labels
   const credentialLabel = authLabels?.credential ||
@@ -276,12 +284,10 @@ export function AuthRequestCard({ message, onRespondToCredential, sessionId, isI
     authStatus === 'cancelled' ? t('chat.authCard.cancelled', { name: authSourceName ?? '' }) :
     t('chat.authCard.failed', { name: authSourceName ?? '' })
 
-  // Determine if we need action bar (pending states with forms/buttons)
-  // Show actions when: pending credential form, OR pending OAuth that hasn't started yet
+  // Every pending card has actions: the credential form, the OAuth sign-in button, or
+  // (while the browser sign-in runs) a way to restart it
   const isOAuth = authRequestType && authRequestType !== 'credential'
-  const hasActions = authStatus === 'pending' && (
-    !isOAuth || !isSubmitting
-  )
+  const hasActions = authStatus === 'pending'
 
   // Compact card view for non-interactive terminal states (after user sends message)
   if (!isInteractive && authStatus !== 'pending' && outcomeTone) {
@@ -507,6 +513,22 @@ export function AuthRequestCard({ message, onRespondToCredential, sessionId, isI
   // Render action buttons
   const renderActions = () => {
     if (!hasActions) return null
+
+    // OAuth in progress - the browser sign-in may have been closed or lost
+    if (isOAuth && isSubmitting) {
+      return (
+        <DecisionActions>
+          <Button
+            size="lg"
+            variant="ghost"
+            className={DECISION_ACTION}
+            onClick={handleRestartOAuth}
+          >
+            {t('chat.authCard.restartSignIn')}
+          </Button>
+        </DecisionActions>
+      )
+    }
 
     // OAuth pending - sign in button
     if (isOAuth) {

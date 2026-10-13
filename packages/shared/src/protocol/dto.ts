@@ -426,7 +426,8 @@ export type SessionEvent =
   | { type: 'text_delta'; sessionId: string; delta: string; turnId?: string }
   | { type: 'text_complete'; sessionId: string; text: string; isIntermediate?: boolean; turnId?: string; parentToolUseId?: string; timestamp?: number; messageId?: string }
   | { type: 'tool_start'; sessionId: string; toolName: string; toolUseId: string; toolInput: Record<string, unknown>; toolIntent?: string; toolDisplayName?: string; toolDisplayMeta?: ToolDisplayMeta; turnId?: string; parentToolUseId?: string; timestamp?: number }
-  | { type: 'tool_result'; sessionId: string; toolUseId: string; toolName: string; result: string; turnId?: string; parentToolUseId?: string; isError?: boolean; timestamp?: number }
+  // toolInput: replaces the input sent with tool_start (a browser_tool password fill is redacted once its result is known)
+  | { type: 'tool_result'; sessionId: string; toolUseId: string; toolName: string; result: string; turnId?: string; parentToolUseId?: string; isError?: boolean; timestamp?: number; toolInput?: Record<string, unknown> }
   | { type: 'error'; sessionId: string; error: string; timestamp?: number }
   | { type: 'typed_error'; sessionId: string; error: TypedError; timestamp?: number }
   | { type: 'complete'; sessionId: string; tokenUsage?: Session['tokenUsage']; hasUnread?: boolean; backgroundTasksAlive?: boolean }
@@ -483,6 +484,12 @@ export interface SendMessageOptions {
    * surfacing) that should wake the agent without looking user-authored.
    */
   hidden?: boolean
+  /**
+   * Thinking level for this turn only (and its automatic retries); the session's own level is
+   * unchanged and no adaptive-thinking check runs. Used by app-driven turns with a known shape,
+   * e.g. the tasks:generate authoring turn.
+   */
+  thinkingLevel?: ThinkingLevel
 }
 
 // ---------------------------------------------------------------------------
@@ -883,6 +890,21 @@ export interface BrowserInstanceInfo {
    * and main processes that pre-date the field working unchanged.
    */
   workspaceId?: string | null
+}
+
+/**
+ * Verdict of a security-challenge check on a browser page (Cloudflare interstitial,
+ * captcha challenge, …). Classified in apps/electron/src/main/security-challenge.ts.
+ */
+export interface BrowserSecurityChallenge {
+  /** A blocking challenge from a known provider: the user has to solve it. */
+  detected: boolean
+  /** Provider behind the evidence ('cloudflare', 'google', 'hcaptcha', …), or 'none'. */
+  provider: string
+  /** Evidence seen, including context that never decides a verdict. */
+  signals: string[]
+  /** Evidence too weak for a hand-off, e.g. a visible Turnstile widget: worth a note only. */
+  suspected?: boolean
 }
 
 export interface DeepLinkNavigation {

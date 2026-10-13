@@ -508,8 +508,9 @@ export function formatProjectContextForPrompt(ctx: ProjectPromptContext): string
   }
   lines.push(`<project_memory> is authoritative accumulated knowledge for this project; treat it as`);
   lines.push(`established context. When you learn something durable (a decision, gotcha, convention, or`);
-  lines.push(`project-specific user preference), record it in MEMORY.md at <project_memory_path> via Write/Edit —`);
-  lines.push(`concise, newest/most-important first, kept under ~5000 tokens.`);
+  lines.push(`project-specific user preference), add a short note with the project_memory_append tool. Never`);
+  lines.push(`rewrite MEMORY.md with Write/Edit: other sessions append to it while you work, and <project_memory>`);
+  lines.push(`is a snapshot from when this session started. To correct an outdated note, append the correction.`);
   lines.push(`</project_context>`);
   lines.push('');
   return lines.join('\n');
@@ -669,6 +670,8 @@ Sources are external data connections. Each source has:
 1. Read its \`config.json\` and \`guide.md\` at \`${workspacePath}/sources/{slug}/\`
 2. If it needs auth, trigger the appropriate auth tool
 3. Call its tools directly — do not search the workspace for how to use it
+
+MCP servers can also publish resources (e.g. guides) and prompts (playbooks); \`<sources>\` notes them. Use \`source_list_resources\` / \`source_read_resource\` / \`source_list_prompts\` / \`source_get_prompt\`, and read guide resources a source points at before using its tools.
 
 **Creating a new source** (does not exist yet):
 1. Read \`${DOC_REFS.sources}\` for the setup workflow

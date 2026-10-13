@@ -176,6 +176,8 @@ export interface TransportConnectionState {
   nextRetryInMs?: number
   lastError?: TransportConnectionError
   lastClose?: TransportCloseInfo
+  /** Largest message the connected server accepts (from handshake_ack); absent for older servers */
+  maxMessageBytes?: number
   updatedAt: number
 }
 
@@ -506,8 +508,10 @@ export interface ElectronAPI {
   getDefaultPermissionsConfig(): Promise<{ config: import('@craft-agent/shared/agent').PermissionsConfigFile | null; path: string }>
   getMcpTools(workspaceId: string, sourceSlug: string): Promise<McpToolsResult>
 
-  // OAuth (server-owned credentials, client-orchestrated flow)
-  performOAuth(args: { sourceSlug: string; sessionId?: string; authRequestId?: string }): Promise<{ success: boolean; error?: string; email?: string }>
+  // OAuth (server-owned credentials, client-orchestrated flow). One flow per workspace + source:
+  // a call while another session's sign-in for the source is live waits for that one instead.
+  // `restart` replaces the live sign-in (its browser window was closed or lost).
+  performOAuth(args: { sourceSlug: string; sessionId?: string; authRequestId?: string; restart?: boolean }): Promise<{ success: boolean; error?: string; email?: string }>
   oauthRevoke(sourceSlug: string): Promise<{ success: boolean }>
 
   // Session content search (full-text search via ripgrep)

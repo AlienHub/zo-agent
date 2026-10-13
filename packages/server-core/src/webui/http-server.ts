@@ -22,6 +22,8 @@ import {
 } from './auth'
 import { generateCallbackPage } from '@craft-agent/shared/auth'
 import type { PlatformServices } from '../runtime/platform'
+import type { IOAuthFlowStore } from '../handlers/oauth-flow-store-interface'
+import type { ISessionManager } from '../handlers/session-manager-interface'
 
 // ---------------------------------------------------------------------------
 // MIME types for static file serving
@@ -112,9 +114,9 @@ export function resolveWebSocketUrl(
 
 /** Dependencies for the /api/oauth/callback HTTP route (server-side OAuth completion). */
 export interface OAuthCallbackDeps {
-  flowStore: { getByState: (state: string) => any; remove: (state: string) => void }
+  flowStore: Pick<IOAuthFlowStore, 'getByState' | 'remove'>
   credManager: { exchangeAndStore: (...args: any[]) => Promise<any> }
-  sessionManager: { completeAuthRequest: (...args: any[]) => Promise<void> }
+  sessionManager: Pick<ISessionManager, 'completeAuthRequest' | 'completeAuthRequestsForSource'>
   pushSourcesChanged: (workspaceId: string) => void
 }
 
@@ -294,9 +296,9 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
       const errorDescription = url.searchParams.get('error_description')
 
       if (error) {
-        const flow = state ? options.oauthCallbackDeps.flowStore.getByState(state) : null
-        if (flow && state) options.oauthCallbackDeps.flowStore.remove(state)
         const errorMsg = errorDescription || error
+        // Ending the flow with the provider's reason releases clients that joined it
+        if (state) options.oauthCallbackDeps.flowStore.remove(state, { success: false, error: errorMsg })
         logger.warn(`[webui] OAuth callback error: ${errorMsg}`)
         return new Response(generateCallbackPage({ title: 'Authorization Failed', isSuccess: false, errorDetail: errorMsg }), {
           status: 200,

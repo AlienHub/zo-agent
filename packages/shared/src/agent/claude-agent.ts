@@ -16,6 +16,7 @@ import { mapClaudeSdkAssistantError, type ClaudeSdkApiError } from './claude-sdk
 import { runErrorDiagnostics } from './diagnostics.ts';
 import { loadStoredConfig, loadConfigDefaults, type Workspace, type AuthType, getDefaultLlmConnection, getLlmConnection } from '../config/storage.ts';
 import { getValidClaudeOAuthToken } from '../auth/state.ts';
+import { largePdfNote, shouldInlinePdf } from './pdf-inline.ts';
 import {
   clearClaudeBedrockRoutingEnvVars,
   resolveAuthEnvVars,
@@ -115,6 +116,8 @@ const HANDOFF_TOOL_NAMES = new Set([
 ]);
 /** How long a handoff interrupt waits for the handing-off tool's result before interrupting anyway. */
 const HANDOFF_RESULT_WAIT_MS = 3_000;
+/** A stopped turn the CLI has not ended (with its `result`) by then is hard-stopped after all. */
+const STOPPED_TURN_RESULT_WAIT_MS = 10_000;
 
 // Re-export permission mode functions for application usage
 export {
@@ -135,6 +138,8 @@ export type { AgentEvent };
 
 // Stateless tool matching — pure functions for SDK message → AgentEvent conversion
 import { ToolIndex, parseWorkflowIdFromTranscriptPath } from './tool-matching.ts';
+import { isCanonicalBrowserToolName } from './browser-tool-names.ts';
+import { keepPasswordEntryLines } from './browser-tool-redaction.ts';
 
 // Claude event adapter — extracts SDK message → AgentEvent conversion into testable class
 import { ClaudeEventAdapter, buildWindowsSkillsDirError as buildWindowsSkillsDirErrorFn } from './backend/claude/event-adapter.ts';
@@ -570,6 +575,12 @@ export class ClaudeAgent extends BaseAgent {
   private onBackgroundEvent: ((event: AgentEvent) => void) | null = null;
 
   /**
+   * A turn stopped with `stopTurn` that the CLI has not ended yet. Its leftover messages, up to and
+   * including its `result`, belong to no turn (least of all the next one, already waiting).
+   */
+  private stoppedTurn: { fallback: ReturnType<typeof setTimeout> } | null = null;
+
+  /**
    * Tear down the persistent query. Idempotent, and the single funnel for ALL
    * teardown paths (dispose/destroy, auth-fail, recreate-on-change, clearHistory,
    * consumer exit). Guarantees no subprocess leak: ends the input, returns the
@@ -591,6 +602,8 @@ export class ClaudeAgent extends BaseAgent {
     this.persistentThinkingKey = null;
     this.activeTurnChannel = null;
     this.activeTurnState = null;
+    if (this.stoppedTurn) clearTimeout(this.stoppedTurn.fallback);
+    this.stoppedTurn = null;
     // A dead query can't stop tasks: stopBackgroundTask must report "not running", not reject
     this.currentQuery = null;
   }
@@ -692,6 +705,16 @@ export class ClaudeAgent extends BaseAgent {
           if (done) break;
           // A newer query took over: this one's leftover messages belong to no turn.
           if (this.persistentIterator !== iterator) continue;
+          if (this.stoppedTurn) {
+            // The stopped turn's remains: background notifications still count, the rest is dropped.
+            if ((value as { type?: string } | undefined)?.type === 'result') {
+              clearTimeout(this.stoppedTurn.fallback);
+              this.stoppedTurn = null;
+            } else {
+              this.routeBackgroundMessage(value);
+            }
+            continue;
+          }
           const channel = this.activeTurnChannel;
           if (channel) {
             channel.push(value);
@@ -855,6 +878,8 @@ export class ClaudeAgent extends BaseAgent {
   private toolHandoff: { interrupt: boolean; timer: ReturnType<typeof setTimeout> | null } | null = null;
   /** Test seam for `HANDOFF_RESULT_WAIT_MS`. */
   private handoffResultWaitMs?: number;
+  /** Test seam for STOPPED_TURN_RESULT_WAIT_MS. */
+  private stoppedTurnResultWaitMs?: number;
 
   // Callback when authentication is requested (unified auth flow)
   // This follows the SubmitPlan pattern:
@@ -1905,7 +1930,10 @@ This is a branched conversation. All prior messages in this conversation are par
                 contextWindow: this.usageTracker.getContextWindow(),
               });
               if (guarded) {
-                yield { ...event, result: guarded };
+                // The summary drops the output text; keep its password-entry lines, which the host
+                // needs to redact the stored input.
+                const result = isCanonicalBrowserToolName(event.toolName ?? '') ? keepPasswordEntryLines(event.result, guarded) : guarded;
+                yield { ...event, result };
                 continue;
               }
             }
@@ -2619,14 +2647,19 @@ This is a branched conversation. All prior messages in this conversation are par
             });
           }
         } else if (attachment.type === 'pdf' && attachment.base64) {
-          contentBlocks.push({
-            type: 'document',
-            source: {
-              type: 'base64',
-              media_type: 'application/pdf',
-              data: attachment.base64,
-            },
-          });
+          if (attachment.storedPath && !shouldInlinePdf(attachment)) {
+            // Too big for the request (32 MB API limit, re-sent every turn): read from disk
+            contentBlocks.push({ type: 'text', text: largePdfNote(attachment) });
+          } else {
+            contentBlocks.push({
+              type: 'document',
+              source: {
+                type: 'base64',
+                media_type: 'application/pdf',
+                data: attachment.base64,
+              },
+            });
+          }
         }
         // Text files: path info already added above, agent uses Read tool to access content
       }
@@ -2973,6 +3006,46 @@ This is a branched conversation. All prior messages in this conversation are par
     void this.currentQuery?.interrupt().catch((error) => {
       this.debug(`Claude handoff interrupt failed: ${error instanceof Error ? error.message : String(error)}`);
     });
+  }
+
+  /**
+   * Stop the running turn but keep the persistent query, and with it the session's background
+   * agents, Workflows and shells, alive, like Esc in Claude Code. A Stop used to hard-abort the
+   * query, killing the background agents of a task step the user only meant to steer, so their
+   * work had to be redone (found 2026-10-11).
+   *
+   * The turn ends for the host at once. The CLI is interrupted cooperatively and still finishes
+   * the turn with a `result`, which the consumer drops. If that never comes, or the interrupt
+   * fails, the query is hard-stopped after all. Returns false without a live keep-alive turn: the
+   * caller then uses forceAbort.
+   */
+  stopTurn(): boolean {
+    const query = this.currentQuery;
+    if (!query || !this.persistentInput || !this.activeTurnChannel) return false;
+    this.lastAbortReason = AbortReason.UserStop;
+    if (this.activeTurnState) this.activeTurnState.aborted = true;
+    this.activeTurnChannel.end();
+    this.activeTurnChannel = null;
+    this.activeTurnState = null;
+    this.pendingSteers.pause(); // Retain accepted messages for host recovery.
+    if (this.toolHandoff?.timer) clearTimeout(this.toolHandoff.timer);
+    this.toolHandoff = null;
+
+    if (this.stoppedTurn) clearTimeout(this.stoppedTurn.fallback);
+    const stopped = {
+      fallback: setTimeout(() => {
+        if (this.stoppedTurn !== stopped) return;
+        this.debug('[bg-lifecycle] stopped turn did not end; hard-stopping the query');
+        this.teardownPersistentQuery('stopped-turn-unresponsive');
+      }, this.stoppedTurnResultWaitMs ?? STOPPED_TURN_RESULT_WAIT_MS),
+    };
+    this.stoppedTurn = stopped;
+    void query.interrupt().catch((error) => {
+      if (this.stoppedTurn !== stopped) return;
+      this.debug(`[bg-lifecycle] stop interrupt failed, hard-stopping the query: ${error instanceof Error ? error.message : String(error)}`);
+      this.teardownPersistentQuery('stop-interrupt-failed');
+    });
+    return true;
   }
 
   /**

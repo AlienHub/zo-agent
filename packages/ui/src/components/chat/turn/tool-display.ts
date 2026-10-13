@@ -113,9 +113,14 @@ export function getToolDisplayName(name: string): string {
     'list_sessions': 'List Sessions',
     'archive_session': 'Archive Session',
     'create_task': 'Create Task',
+    'project_memory_append': 'Add Project Note',
     'list_background_tasks': 'List Background Tasks',
     'send_agent_message': 'Send Agent Message',
     'spawn_session': 'Spawn Session',
+    'source_list_resources': 'List Source Resources',
+    'source_read_resource': 'Read Source Resource',
+    'source_list_prompts': 'List Source Prompts',
+    'source_get_prompt': 'Get Source Prompt',
   }
 
   return displayNames[stripped] || stripped

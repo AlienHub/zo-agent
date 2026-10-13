@@ -291,6 +291,7 @@ export abstract class BaseAgent implements AgentBackend {
     // SourceManager: tracks active/inactive sources and formats state for context injection
     this.sourceManager = new SourceManager({
       onDebug: (msg) => this.debug(msg),
+      getSourceFeatures: (slug) => this.config.mcpPool?.getSourceFeatures(slug),
     });
 
     // PromptBuilder: builds context blocks for user messages

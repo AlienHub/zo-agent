@@ -103,6 +103,15 @@ describe('system prompt guidance', () => {
     expect(prompt).toContain('The subtask needs file/shell tools (for example, Read or Bash)')
     expect(prompt).not.toContain('The subtask needs tools (Read, Bash, Grep)')
   })
+
+  it('points at the MCP resource and prompt tools for existing sources on every backend', () => {
+    for (const backend of [undefined, 'Pi']) {
+      const prompt = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace', undefined, backend)
+
+      expect(prompt).toContain('Use `source_list_resources` / `source_read_resource` / `source_list_prompts` / `source_get_prompt`')
+      expect(prompt).toContain('read guide resources a source points at before using its tools')
+    }
+  })
 })
 
 describe('includeCoAuthoredBy handling', () => {
@@ -212,6 +221,14 @@ describe('formatProjectContextForPrompt', () => {
     expect(block).toContain('- spec.pdf (application/pdf, 2.0 KB)')
     expect(block).toContain('- notes.txt (text/plain, 512 B)')
     expect(block).toContain('lists reference files')
+  })
+
+  // Found 2026-10-11: sessions rewrote MEMORY.md from their snapshot and dropped other sessions' notes.
+  it('points memory writes at the append-only tool, never at rewriting the file', () => {
+    const block = formatProjectContextForPrompt(baseCtx())
+    expect(block).toContain('project_memory_append')
+    expect(block).toContain('Never')
+    expect(block).not.toContain('via Write/Edit')
   })
 
   it('omits the manifest entirely when there are no assets', () => {

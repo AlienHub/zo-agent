@@ -32,9 +32,10 @@ import { SkillSelectorPopover } from '@/components/ui/SkillSelectorPopover'
 import { WorkingDirectorySelector } from '../input/WorkingDirectorySelector'
 import type { LoadedSource, LoadedSkill } from '../../../../shared/types'
 
-// Client-side fallback for async generate: a touch longer than the server's GENERATE_TIMEOUT_MS
-// (180s) so the orchestrator's own timeout + result push can land before we give up locally.
-const GENERATE_CLIENT_TIMEOUT_MS = 200_000
+// Client-side fallback for async generate, for a result push that never arrives. The server
+// always pushes one, failing a stalled turn after 90 s without progress and capping each of its
+// two attempts at 5 minutes (rpc/tasks.ts), so this stays above both attempts.
+const GENERATE_CLIENT_TIMEOUT_MS = 620_000
 
 /**
  * TaskEditor — full-pane authoring surface for a Tasks DAG (graduated from the
