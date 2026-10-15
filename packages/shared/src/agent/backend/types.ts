@@ -23,6 +23,7 @@ import type { Workspace } from '../../config/storage.ts';
 import type { SessionConfig as Session } from '../../sessions/storage.ts';
 import type { SourceManager } from '../core/source-manager.ts';
 import type { GuardedModeCheck } from '../core/guarded-mode.ts';
+import type { SubagentModelPicker } from '../core/subagent-model.ts';
 
 // Import AbortReason and RecoveryMessage from core module (single source of truth)
 import { AbortReason, type RecoveryMessage } from '../core/index.ts';
@@ -256,6 +257,9 @@ export interface CoreBackendConfig {
 
   /** Enable 1M context window for current Opus models. Default: true. Set false to use 200K and conserve usage limits. */
   enable1MContext?: boolean;
+
+  /** Claude: auto-compact window in tokens (config.json `autoCompactWindow`). Unset: the SDK default (the model's full window). */
+  autoCompactWindow?: number;
 
   /**
    * Pre-computed source configurations for initial setup.
@@ -629,6 +633,9 @@ export interface AgentBackend {
 
   /** Guarded-mode risk check (decision model): may turn an allowed call into a permission prompt, never the reverse */
   guardedModeCheck: GuardedModeCheck | null;
+
+  /** Subagent model choice (decision model): Claude asks it for Agent calls that name no model; other backends ignore it */
+  subagentModelPicker: SubagentModelPicker | null;
 
   /** Called when agent submits a plan */
   onPlanSubmitted: PlanCallback | null;
