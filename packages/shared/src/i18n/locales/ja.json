@@ -1048,7 +1048,7 @@
   "settings.ai.compactWindowCustomDesc": "100K〜1M トークンの任意のサイズ",
   "settings.ai.compactWindowDefault": "モデルの既定値",
   "settings.ai.compactWindowDefaultDesc": "モデルの最大ウィンドウ（現在の Opus では 1M）",
-  "settings.ai.compactWindowDesc": "会話がこのサイズに達すると Claude が要約します。呼び出しのたびにコンテキスト全体を読み直すため、ウィンドウを小さくすると長いセッションやサブエージェントのコストが下がります。新規および再起動したセッションに適用されます。",
+  "settings.ai.compactWindowDesc": "会話がこのサイズに達するとエージェントが要約します。呼び出しのたびにコンテキスト全体を読み直すため、ウィンドウを小さくすると長いセッションやサブエージェントのコストが下がります。新規および再起動したセッションに適用されます。",
   "settings.ai.compactWindowInvalid": "100,000〜1,000,000 トークンを入力してください（例: 350000 または 350k）。",
   "settings.ai.compactWindowPreset200k": "呼び出しが最も安価、頻繁に圧縮",
   "settings.ai.compactWindowPreset400k": "推奨バランス",

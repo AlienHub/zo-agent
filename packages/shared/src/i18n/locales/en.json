@@ -1048,7 +1048,7 @@
   "settings.ai.compactWindowCustomDesc": "Any size from 100K to 1M tokens",
   "settings.ai.compactWindowDefault": "Model default",
   "settings.ai.compactWindowDefaultDesc": "The model's full window (1M on current Opus)",
-  "settings.ai.compactWindowDesc": "Claude summarizes the conversation once it reaches this size. Every call re-reads the whole context, so a smaller window makes long sessions and subagents cheaper. Applies to new and restarted sessions.",
+  "settings.ai.compactWindowDesc": "The agent summarizes the conversation once it reaches this size. Every call re-reads the whole context, so a smaller window makes long sessions and subagents cheaper. Applies to new and restarted sessions.",
   "settings.ai.compactWindowInvalid": "Enter 100,000 to 1,000,000 tokens, e.g. 350000 or 350k.",
   "settings.ai.compactWindowPreset200k": "Cheapest calls, compacts often",
   "settings.ai.compactWindowPreset400k": "Recommended balance",

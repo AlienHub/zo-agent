@@ -1048,7 +1048,7 @@
   "settings.ai.compactWindowCustomDesc": "100K 到 1M token 之间的任意大小",
   "settings.ai.compactWindowDefault": "模型默认",
   "settings.ai.compactWindowDefaultDesc": "模型的完整窗口（当前 Opus 为 1M）",
-  "settings.ai.compactWindowDesc": "对话达到此大小时，Claude 会进行总结。每次调用都会重新读取整个上下文，因此较小的窗口能降低长会话和子代理的成本。适用于新建和重新启动的会话。",
+  "settings.ai.compactWindowDesc": "对话达到此大小时，代理会进行总结。每次调用都会重新读取整个上下文，因此较小的窗口能降低长会话和子代理的成本。适用于新建和重新启动的会话。",
   "settings.ai.compactWindowInvalid": "请输入 100,000 到 1,000,000 个 token，例如 350000 或 350k。",
   "settings.ai.compactWindowPreset200k": "调用最便宜，压缩频繁",
   "settings.ai.compactWindowPreset400k": "推荐的平衡",

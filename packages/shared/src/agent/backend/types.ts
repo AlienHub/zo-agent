@@ -32,7 +32,7 @@ export { AbortReason, type RecoveryMessage };
 import type { ModelProvider } from '../../config/models.ts';
 
 // Import LLM connection types for auth
-import type { LlmAuthType, LlmProviderType } from '../../config/llm-connections.ts';
+import type { CustomEndpointConfig, LlmAuthType, LlmProviderType } from '../../config/llm-connections.ts';
 export type { LlmAuthType, LlmProviderType } from '../../config/llm-connections.ts';
 
 export interface BackendRuntimeUpdate {
@@ -42,7 +42,7 @@ export interface BackendRuntimeUpdate {
   runtime?: {
     baseUrl?: string;
     piAuthProvider?: string;
-    customEndpoint?: { api: string; supportsImages?: boolean };
+    customEndpoint?: CustomEndpointConfig;
     customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
     [key: string]: unknown;
   };
@@ -258,7 +258,7 @@ export interface CoreBackendConfig {
   /** Enable 1M context window for current Opus models. Default: true. Set false to use 200K and conserve usage limits. */
   enable1MContext?: boolean;
 
-  /** Claude: auto-compact window in tokens (config.json `autoCompactWindow`). Unset: the SDK default (the model's full window). */
+  /** Auto-compact window in tokens (config.json `autoCompactWindow`), honored by Claude and Pi. Unset: each SDK's default (near the model's full window). */
   autoCompactWindow?: number;
 
   /**

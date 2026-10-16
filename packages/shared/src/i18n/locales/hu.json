@@ -1048,7 +1048,7 @@
   "settings.ai.compactWindowCustomDesc": "Bármilyen méret 100K és 1M token között",
   "settings.ai.compactWindowDefault": "Modell alapértelmezése",
   "settings.ai.compactWindowDefaultDesc": "A modell teljes ablaka (jelenlegi Opusnál 1M)",
-  "settings.ai.compactWindowDesc": "Claude összefoglalja a beszélgetést, amikor eléri ezt a méretet. Minden hívás újraolvassa a teljes kontextust, így kisebb ablakkal olcsóbbak a hosszú munkamenetek és az alügynökök. Új és újraindított munkamenetekre érvényes.",
+  "settings.ai.compactWindowDesc": "Az ügynök összefoglalja a beszélgetést, amikor eléri ezt a méretet. Minden hívás újraolvassa a teljes kontextust, így kisebb ablakkal olcsóbbak a hosszú munkamenetek és az alügynökök. Új és újraindított munkamenetekre érvényes.",
   "settings.ai.compactWindowInvalid": "Adj meg 100 000 és 1 000 000 közötti tokenszámot, pl. 350000 vagy 350k.",
   "settings.ai.compactWindowPreset200k": "Legolcsóbb hívások, gyakran tömörít",
   "settings.ai.compactWindowPreset400k": "Ajánlott egyensúly",

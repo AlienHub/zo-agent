@@ -87,7 +87,7 @@ export interface StoredConfig {
   // Prompt caching & context
   extendedPromptCache?: boolean;  // Use 1h prompt cache TTL instead of 5m (default: false)
   enable1MContext?: boolean;  // Enable 1M context window for supported models (default: false — opt-in; requires Anthropic Tier 4+)
-  autoCompactWindow?: number;  // Claude: auto-compact when the context reaches this many tokens (100000–1000000). Unset: the SDK default, the model's full window (1M on Opus 5.5)
+  autoCompactWindow?: number;  // Auto-compact when the context reaches this many tokens (100000–1000000), in Claude and Pi sessions. Unset: each SDK's default, near the model's full window (1M on Opus 5.5)
   subagentModel?: SubagentModel;  // Claude: model for subagents whose call names none (never above the session's model). Unset: same as the session
   // Token optimization
   rtkEnabled?: boolean;  // Route Bash commands through rtk to compress tool output (default: false). https://github.com/rtk-ai/rtk

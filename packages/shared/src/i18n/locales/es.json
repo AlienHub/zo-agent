@@ -1048,7 +1048,7 @@
   "settings.ai.compactWindowCustomDesc": "Cualquier tamaño de 100K a 1M tokens",
   "settings.ai.compactWindowDefault": "Predeterminado del modelo",
   "settings.ai.compactWindowDefaultDesc": "La ventana completa del modelo (1M en Opus actual)",
-  "settings.ai.compactWindowDesc": "Claude resume la conversación cuando alcanza este tamaño. Cada llamada vuelve a leer todo el contexto, así que una ventana más pequeña abarata las sesiones largas y los subagentes. Se aplica a sesiones nuevas y reiniciadas.",
+  "settings.ai.compactWindowDesc": "El agente resume la conversación cuando alcanza este tamaño. Cada llamada vuelve a leer todo el contexto, así que una ventana más pequeña abarata las sesiones largas y los subagentes. Se aplica a sesiones nuevas y reiniciadas.",
   "settings.ai.compactWindowInvalid": "Introduce de 100.000 a 1.000.000 tokens, p. ej. 350000 o 350k.",
   "settings.ai.compactWindowPreset200k": "Llamadas más baratas, compacta a menudo",
   "settings.ai.compactWindowPreset400k": "Equilibrio recomendado",
