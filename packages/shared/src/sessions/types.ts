@@ -36,6 +36,8 @@ export const SESSION_PERSISTENT_FIELDS = [
   'enabledSourceSlugs', 'permissionMode', 'previousPermissionMode', 'workingDirectory',
   // Model/Connection
   'model', 'llmConnection', 'connectionLocked', 'thinkingLevel',
+  // Coding mode (lean coding prompt + tool profile; fixed once the session has messages)
+  'codingMode',
   // Sharing
   'sharedUrl', 'sharedId',
   // Plan execution
@@ -160,6 +162,8 @@ export interface SessionConfig {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
+  codingMode?: boolean;
   /**
    * Pending plan execution state - tracks "Accept & Compact" flow.
    * When set, indicates a plan needs to be executed after compaction completes.
@@ -300,6 +304,8 @@ export interface SessionHeader {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
+  codingMode?: boolean;
   /**
    * Pending plan execution state - tracks "Accept & Compact" flow.
    * When set, indicates a plan needs to be executed after compaction completes.
@@ -411,6 +417,8 @@ export interface SessionMetadata {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
+  codingMode?: boolean;
   /** ID of last message user has read - for unread detection */
   lastReadMessageId?: string;
   /** ID of the last final (non-intermediate) assistant message - for unread detection */

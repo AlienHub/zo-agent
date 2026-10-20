@@ -75,6 +75,8 @@ export interface Session {
   model?: string
   llmConnection?: string
   thinkingLevel?: ThinkingLevel
+  /** Coding mode: lean coding prompt + session-tool profile (fixed once the session has messages) */
+  codingMode?: boolean
   lastMessageRole?: 'user' | 'assistant' | 'plan' | 'tool' | 'error'
   lastFinalMessageId?: string
   isAsyncOperationOngoing?: boolean
@@ -144,6 +146,8 @@ export interface CreateSessionOptions {
   hidden?: boolean
   /** Nobody answers prompts in this session (CLI runs): features that would add a prompt skip it. */
   unattended?: boolean
+  /** Start in coding mode (lean coding prompt + session-tool profile). Falls back to the workspace default. */
+  codingMode?: boolean
   sessionStatus?: SessionStatus
   labels?: string[]
   isFlagged?: boolean
@@ -443,6 +447,7 @@ export type SessionEvent =
   | { type: 'permission_mode_changed'; sessionId: string; permissionMode: PermissionMode; previousPermissionMode?: PermissionMode; transitionDisplay?: string; modeVersion?: number; changedAt?: string; changedBy?: PermissionModeState['changedBy'] }
   | { type: 'plan_submitted'; sessionId: string; message: Message }
   | { type: 'sources_changed'; sessionId: string; enabledSourceSlugs: string[] }
+  | { type: 'coding_mode_changed'; sessionId: string; codingMode: boolean }
   | { type: 'labels_changed'; sessionId: string; labels: string[] }
   | { type: 'project_id_changed'; sessionId: string; projectId: string | null }
   | { type: 'connection_changed'; sessionId: string; connectionSlug: string; supportsBranching?: boolean }
@@ -508,6 +513,9 @@ export type SessionCommand =
   | { type: 'setActiveViewing'; workspaceId: string }
   | { type: 'setPermissionMode'; mode: PermissionMode }
   | { type: 'setThinkingLevel'; level: ThinkingLevel }
+  | { type: 'setCodingMode'; enabled: boolean }
+  /** Coding mode is fixed once a session has messages: continue in a new session with it switched. Returns `{ sessionId }`. */
+  | { type: 'continueInNewSession'; codingMode: boolean }
   | { type: 'updateWorkingDirectory'; dir: string }
   | { type: 'setSources'; sourceSlugs: string[] }
   | { type: 'setLabels'; labels: string[] }
@@ -803,6 +811,8 @@ export interface WorkspaceSettings {
   permissionMode?: PermissionMode
   cyclablePermissionModes?: PermissionMode[]
   thinkingLevel?: ThinkingLevel
+  /** Start new sessions in coding mode */
+  codingMode?: boolean
   workingDirectory?: string
   localMcpEnabled?: boolean
   defaultLlmConnection?: string

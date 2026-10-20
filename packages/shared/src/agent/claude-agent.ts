@@ -1193,7 +1193,11 @@ export class ClaudeAgent extends BaseAgent {
       // Build full MCP servers set first, then filter for mini agents
       const fullMcpServers: Options['mcpServers'] = {
         // Session-scoped tools (SubmitPlan, source_test, update_user_preferences, transform_data, etc.)
-        session: getSessionScopedTools(sessionId, this.workspaceRootPath),
+        session: getSessionScopedTools(sessionId, this.workspaceRootPath, undefined, {
+          profile: this._agentProfile,
+          hasEnabledSources: this.sourceManager.getIntendedSlugs().size > 0,
+          hasProject: !!this.config.session?.projectId,
+        }),
         // Per-source proxy servers from centralized MCP pool (MCP + API sources)
         // Each source gets its own SDK server keyed by slug (e.g., 'linear', 'github', 'gmail')
         // so the SDK produces correct tool names: mcp__{slug}__{toolName}
@@ -1341,6 +1345,7 @@ export class ClaudeAgent extends BaseAgent {
                 undefined, // backendName
                 this.pinnedIncludeCoAuthoredBy ?? undefined,
                 this.pinnedProjectContext ?? undefined,
+                this._agentProfile,
               ),
             },
         // Use sdkCwd for SDK session storage - this is set once at session creation and never changes.
@@ -2594,7 +2599,7 @@ This is a branched conversation. All prior messages in this conversation are par
     )
     const contextParts = this.promptBuilder.buildContextParts(
       { plansFolderPath: getSessionPlansPath(this.workspaceRootPath, this.modeSessionId) },
-      this.sourceManager.formatSourceState()
+      this.sourceManager.formatSourceState({ activeOnly: this._agentProfile === 'coding' })
     );
 
     parts.push(...contextParts);
@@ -2640,7 +2645,7 @@ This is a branched conversation. All prior messages in this conversation are par
     )
     const contextParts = this.promptBuilder.buildContextParts(
       { plansFolderPath: getSessionPlansPath(this.workspaceRootPath, this.modeSessionId) },
-      this.sourceManager.formatSourceState()
+      this.sourceManager.formatSourceState({ activeOnly: this._agentProfile === 'coding' })
     );
 
     for (const part of contextParts) {

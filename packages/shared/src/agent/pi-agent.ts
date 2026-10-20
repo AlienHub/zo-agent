@@ -99,7 +99,7 @@ import { runPreToolUseChecks, type PreToolUseCheckResult, type PreToolUseInput }
 import type { PermissionRemember } from './core/permission-remember.ts';
 import { applyGuardedModeCheck, needsGuardedModeCheck } from './core/guarded-mode.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
-import { getRtkEnabled, getRtkExcludeCommands, getBrowserToolEnabled } from '../config/storage.ts';
+import { getRtkEnabled, getRtkExcludeCommands } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
 
 // Workspace slug extraction for skill qualification
@@ -614,15 +614,13 @@ export class PiAgent extends BaseAgent {
     // These tools (SubmitPlan, config_validate, source auth, call_llm, etc.)
     // are executed in the main process when the LLM calls them.
     this.assertBackendSessionToolParity();
-    let sessionToolDefs = getSessionToolProxyDefs();
-
-    // Mirror Claude's gate: hide `browser_tool` when the user has disabled
-    // the built-in browser tool. Without this filter, Pi would still advertise
-    // `mcp__session__browser_tool` while Claude doesn't — sessions would behave
-    // inconsistently depending on backend.
-    if (!getBrowserToolEnabled()) {
-      sessionToolDefs = sessionToolDefs.filter(d => d.name !== 'mcp__session__browser_tool');
-    }
+    // Same visibility filters as Claude (session-scoped-tools.ts): feature flags, the
+    // "Built-in browser" setting and the agent profile (coding mode).
+    const sessionToolDefs = getSessionToolProxyDefs({
+      profile: this._agentProfile,
+      hasEnabledSources: this.sourceManager.getIntendedSlugs().size > 0,
+      hasProject: !!this.config.session?.projectId,
+    });
 
     // Patch call_llm description with provider-specific model hint
     if (this.config.miniModel) {
@@ -2154,10 +2152,11 @@ export class PiAgent extends BaseAgent {
         'Craft Agents Backend', // backendName
         this.pinnedIncludeCoAuthoredBy ?? undefined,
         this.pinnedProjectContext ?? undefined,
+        this._agentProfile,
       );
 
       // Build context from sources
-      const sourceContext = this.sourceManager.formatSourceState();
+      const sourceContext = this.sourceManager.formatSourceState({ activeOnly: this._agentProfile === 'coding' });
 
       const promptModeDiagnostics = getPermissionModeDiagnostics(this._sessionId)
       this.debug(

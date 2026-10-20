@@ -55,6 +55,9 @@ export interface ISessionManager {
   /** Resolved working directory of a live session (Tasks Conductor uses it so children inherit
    *  the orchestrator's cwd). */
   getSessionWorkingDirectory(sessionId: string): string | undefined
+  /** Calls `listener(sessionId)` each time a session's turn completes; returns an unsubscribe.
+   *  (The PR watcher refetches then: a turn is when pushes and `gh pr create` happen.) */
+  onTurnComplete?(listener: (sessionId: string) => void): () => void
   deleteSession(sessionId: string): Promise<void>
 
   // ---------------------------------------------------------------------------
@@ -79,6 +82,8 @@ export interface ISessionManager {
 
   setSessionPermissionMode(sessionId: string, mode: PermissionMode): void
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void
+  setSessionCodingMode(sessionId: string, enabled: boolean): void
+  continueSessionInNewSession(sessionId: string, codingMode: boolean): Promise<{ sessionId: string }>
   updateWorkingDirectory(sessionId: string, path: string): void
   setSessionSources(sessionId: string, sourceSlugs: string[]): Promise<void>
   setSessionLabels(sessionId: string, labels: string[]): void

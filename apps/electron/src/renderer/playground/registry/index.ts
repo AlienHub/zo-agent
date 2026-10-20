@@ -2,6 +2,7 @@ import type { ComponentEntry, CategoryGroup, Category } from './types'
 import { onboardingComponents } from './onboarding'
 import { chatComponents } from './chat'
 import { chatHeaderComponents } from './chat-header'
+import { chatPanelComponents } from './chat-panel'
 import { turnCardComponents, fullscreenOverlayComponents } from './turn-card'
 import { turnCardModesComponents } from './turn-card-modes'
 import { messagesComponents } from './messages'
@@ -39,6 +40,7 @@ export const componentRegistry: ComponentEntry[] = [
   ...apiKeyInputComponents,
   ...onboardingComponents,
   ...chatHeaderComponents,
+  ...chatPanelComponents,
   ...chatComponents,
   ...turnCardComponents,
   ...turnCardModesComponents,

@@ -275,7 +275,8 @@ export interface ElectronAPI {
 
   // Consolidated session command handler
   sessionCommand(sessionId: string, command: Extract<SessionCommand, { type: 'markPendingPlanExecutionDispatched' }>): Promise<boolean>
-  sessionCommand(sessionId: string, command: Exclude<SessionCommand, { type: 'markPendingPlanExecutionDispatched' }>): Promise<void | ShareResult | RefreshTitleResult | { count: number }>
+  sessionCommand(sessionId: string, command: Extract<SessionCommand, { type: 'continueInNewSession' }>): Promise<{ sessionId: string }>
+  sessionCommand(sessionId: string, command: Exclude<SessionCommand, { type: 'markPendingPlanExecutionDispatched' | 'continueInNewSession' }>): Promise<void | ShareResult | RefreshTitleResult | { count: number }>
 
   // Server info (REMOTE_ELIGIBLE — returns data from whichever server owns the workspace)
   getServerHomeDir(): Promise<string>
@@ -645,6 +646,17 @@ export interface ElectronAPI {
 
   // Git operations
   getGitBranch(dirPath: string): Promise<string | null>
+  /** Coding mode worktree picker: local repos (workspace folder + these recent folders) and `gh repo list` */
+  listCodingRepos(workspaceId: string, recentDirs: string[], options?: { refreshGitHub?: boolean }): Promise<import('@craft-agent/shared/protocol').RepoListing>
+  /** Creates a new session's worktree (cloning a GitHub-only repo first); rejects with git's reason */
+  createCodingWorktree(workspaceId: string, request: import('@craft-agent/shared/protocol').CreateWorktreeRequest, recentDirs: string[]): Promise<import('@craft-agent/shared/protocol').CreateWorktreeResult>
+
+  // PR watcher (Coding mode): subscribe per session, then receive pushes; see protocol/pr-watch.ts
+  prWatchSubscribe(sessionId: string): Promise<{ subscriptionId: string | null; state: import('@craft-agent/shared/protocol').PrWatchState }>
+  prWatchUnsubscribe(subscriptionId: string): Promise<void>
+  prWatchRefresh(sessionId: string): Promise<void>
+  prWatchGetDetails(sessionId: string): Promise<import('@craft-agent/shared/protocol').PrDetails | null>
+  onPrWatchChanged(callback: (sessionId: string, state: import('@craft-agent/shared/protocol').PrWatchState) => void): () => void
 
   // Git Bash (Windows)
   checkGitBash(): Promise<GitBashStatus>

@@ -311,6 +311,7 @@ export {
   SESSION_SAFE_ALLOWED_TOOL_NAMES,
   SESSION_SAFE_BLOCKED_TOOL_NAMES,
   SESSION_TOOL_REGISTRY,
+  CODING_PROFILE_TOOLS,
   // Filtered helper views
   getSessionToolDefs,
   getSessionToolNames,
@@ -333,6 +334,7 @@ export type {
   JsonSchemaToolDef,
   SessionToolFilterOptions,
   SessionToolNameOptions,
+  AgentProfile,
 } from './tool-defs.ts';
 
 // Script runtime resolution + path containment (also used by the shared

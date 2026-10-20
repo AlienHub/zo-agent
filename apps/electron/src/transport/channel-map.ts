@@ -351,6 +351,15 @@ export const CHANNEL_MAP = {
 
   // Git
   getGitBranch: invoke(RPC_CHANNELS.git.GET_BRANCH),
+  listCodingRepos: invoke(RPC_CHANNELS.git.LIST_REPOS),
+  createCodingWorktree: invoke(RPC_CHANNELS.git.CREATE_WORKTREE),
+
+  // PR watcher (Coding mode chat-header chip)
+  prWatchSubscribe: invoke(RPC_CHANNELS.prWatch.SUBSCRIBE),
+  prWatchUnsubscribe: invoke(RPC_CHANNELS.prWatch.UNSUBSCRIBE),
+  prWatchRefresh: invoke(RPC_CHANNELS.prWatch.REFRESH),
+  prWatchGetDetails: invoke(RPC_CHANNELS.prWatch.GET_DETAILS),
+  onPrWatchChanged: listener(RPC_CHANNELS.prWatch.CHANGED),
   checkGitBash: invoke(RPC_CHANNELS.gitbash.CHECK),
   browseForGitBash: invoke(RPC_CHANNELS.gitbash.BROWSE),
   setGitBashPath: invoke(RPC_CHANNELS.gitbash.SET_PATH),

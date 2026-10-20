@@ -802,6 +802,38 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'unbind_messaging_channel', description: TOOL_DESCRIPTIONS.unbind_messaging_channel, inputSchema: UnbindMessagingChannelSchema, executionMode: 'registry', safeMode: 'block', handler: handleUnbindMessagingChannel },
 ];
 
+/**
+ * Agent profile: the prompt and session-tool set a session runs with.
+ * - `default`: the full Craft Agent toolset (desktop workflows, sources, Pages, browser…).
+ * - `coding`: coding mode — a lean prompt and only the tools in {@link CODING_PROFILE_TOOLS}.
+ */
+export type AgentProfile = 'default' | 'coding';
+
+/**
+ * Session tools a `coding` profile keeps, and the condition each one needs. Everything else
+ * (Pages, browser, session self-management, inter-session messaging, config/skill/mermaid
+ * validation, data/template/LLM helpers, preferences) serves desktop workflows and is dropped.
+ * - `always`: kept in every coding session (feature flags still apply)
+ * - `sources`: kept while the session has at least one enabled source (auth + MCP resources)
+ * - `project`: kept while the session is bound to a project
+ */
+export const CODING_PROFILE_TOOLS: Readonly<Record<string, 'always' | 'sources' | 'project'>> = {
+  SubmitPlan: 'always',
+  list_background_tasks: 'always',
+  send_developer_feedback: 'always',
+  project_memory_append: 'project',
+  source_test: 'sources',
+  source_oauth_trigger: 'sources',
+  source_google_oauth_trigger: 'sources',
+  source_slack_oauth_trigger: 'sources',
+  source_microsoft_oauth_trigger: 'sources',
+  source_credential_prompt: 'sources',
+  source_list_resources: 'sources',
+  source_read_resource: 'sources',
+  source_list_prompts: 'sources',
+  source_get_prompt: 'sources',
+};
+
 export interface SessionToolFilterOptions {
   /** Include the experimental send_developer_feedback tool. */
   includeDeveloperFeedback?: boolean;
@@ -811,6 +843,24 @@ export interface SessionToolFilterOptions {
    * forgets the option hides it instead of advertising a tool that cannot run.
    */
   includeDecide?: boolean;
+  /** Include `browser_tool` (the "Built-in browser" setting). Defaults to true. */
+  includeBrowser?: boolean;
+  /** Agent profile. `coding` keeps only {@link CODING_PROFILE_TOOLS}; defaults to `default` (no change). */
+  profile?: AgentProfile;
+  /** Coding profile: the session has at least one enabled source (keeps the `sources` tools). */
+  hasEnabledSources?: boolean;
+  /** Coding profile: the session is bound to a project (keeps the `project` tools). */
+  hasProject?: boolean;
+}
+
+/** Whether a coding-profile session keeps the tool `name` (see {@link CODING_PROFILE_TOOLS}). */
+function keptInCodingProfile(name: string, options: SessionToolFilterOptions | undefined): boolean {
+  switch (CODING_PROFILE_TOOLS[name]) {
+    case 'always': return true;
+    case 'sources': return options?.hasEnabledSources === true;
+    case 'project': return options?.hasProject === true;
+    default: return false;
+  }
 }
 
 /**
@@ -822,12 +872,20 @@ export interface SessionToolFilterOptions {
 export function getSessionToolDefs(options?: SessionToolFilterOptions): SessionToolDef[] {
   const includeDeveloperFeedback = options?.includeDeveloperFeedback ?? true;
   const includeDecide = options?.includeDecide ?? false;
+  const includeBrowser = options?.includeBrowser ?? true;
+  const coding = options?.profile === 'coding';
 
   return SESSION_TOOL_DEFS.filter(def => {
     if (!includeDeveloperFeedback && def.name === 'send_developer_feedback') {
       return false;
     }
     if (!includeDecide && def.name === 'decide') {
+      return false;
+    }
+    if (!includeBrowser && def.name === 'browser_tool') {
+      return false;
+    }
+    if (coding && !keptInCodingProfile(def.name, options)) {
       return false;
     }
     return true;
@@ -935,17 +993,12 @@ export interface JsonSchemaToolDef {
  * Convert session tool definitions to JSON Schema format.
  *
  * @param opts.prefix - Optional prefix for tool names (e.g., 'mcp__session__' for Pi)
- * @param opts.includeDeveloperFeedback - Include experimental feedback tool in output
- * @param opts.includeDecide - Include the decision-layer `decide` tool (default false)
+ * @param opts - Same visibility filters as {@link getSessionToolDefs} (feature flags, profile)
  * @returns Array of tool definitions with JSON Schema inputSchema
  */
-export function getToolDefsAsJsonSchema(opts?: {
-  prefix?: string;
-  includeDeveloperFeedback?: boolean;
-  includeDecide?: boolean;
-}): JsonSchemaToolDef[] {
+export function getToolDefsAsJsonSchema(opts?: SessionToolNameOptions): JsonSchemaToolDef[] {
   const prefix = opts?.prefix || '';
-  const defs = getSessionToolDefs({ includeDeveloperFeedback: opts?.includeDeveloperFeedback, includeDecide: opts?.includeDecide });
+  const defs = getSessionToolDefs(opts);
 
   return defs.map(def => {
     // Explicit `as any` avoids TS2589 ("type instantiation is excessively deep")
