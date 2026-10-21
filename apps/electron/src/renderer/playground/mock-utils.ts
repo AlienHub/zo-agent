@@ -338,6 +338,15 @@ export const mockElectronAPI = {
     alert(`Would reveal in file manager:\n${path}`)
   },
 
+  getHomeDir: async () => '/Users/you',
+
+  testRemoteConnection: async (_url: string, _token: string) => ({ ok: true }),
+
+  removeWorkspace: async (workspaceId: string) => {
+    console.log('[Playground] removeWorkspace called:', workspaceId)
+    return true
+  },
+
   // NavigationProvider subscribes to deep-link IPC on mount; in the playground
   // there is no main process firing these events, so the listener is a no-op.
   onDeepLinkNavigate: (_callback: unknown) => {

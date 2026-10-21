@@ -1,5 +1,6 @@
 import type { ComponentEntry, CategoryGroup, Category } from './types'
 import { onboardingComponents } from './onboarding'
+import { workspaceComponents } from './workspaces'
 import { chatComponents } from './chat'
 import { chatHeaderComponents } from './chat-header'
 import { chatPanelComponents } from './chat-panel'
@@ -39,6 +40,7 @@ export const componentRegistry: ComponentEntry[] = [
   ...mobileWebUIComponents,
   ...apiKeyInputComponents,
   ...onboardingComponents,
+  ...workspaceComponents,
   ...chatHeaderComponents,
   ...chatPanelComponents,
   ...chatComponents,

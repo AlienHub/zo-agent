@@ -289,6 +289,10 @@ export interface ElectronAPI {
   // App lifecycle
   relaunchApp(): Promise<void>
   removeWorkspace(workspaceId: string): Promise<boolean>
+  /** Default zoom for app windows in percent (Electron only; Appearance settings). */
+  getDefaultZoomLevel?(): Promise<number>
+  /** Saves and applies the default zoom; resolves to the stored (snapped) level. */
+  setDefaultZoomLevel?(level: number): Promise<number>
   invokeOnServer(url: string, token: string, channel: string, ...args: any[]): Promise<any>
 
   // Remote session transfer (main-process orchestrated, supports chunked upload)

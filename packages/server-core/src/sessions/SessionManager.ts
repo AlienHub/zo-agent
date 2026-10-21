@@ -2384,7 +2384,7 @@ export class SessionManager implements ISessionManager {
    * Bun's automatic .env loading is disabled in the subprocess (--env-file=/dev/null)
    * to prevent a user's project .env from injecting ANTHROPIC_API_KEY and overriding
    * OAuth auth — Claude Code prioritizes API key over OAuth token when both are set.
-   * See: https://github.com/lukilabs/craft-agents-oss/issues/39
+   * See: https://github.com/craft-ai-agents/craft-agents-oss/issues/39
    */
   /**
    * Reinitialize authentication environment variables.

@@ -60,6 +60,7 @@ Sentry.init({
 import { setupI18n, i18n, SUPPORTED_LANGUAGE_CODES, type LanguageCode } from '@craft-agent/shared/i18n'
 import { getPersistedUiLanguage, setPersistedUiLanguage } from '@craft-agent/shared/config'
 import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
+import { registerDefaultZoomIpc } from './zoom'
 setupI18n()
 const persistedUiLanguage = getPersistedUiLanguage()
 if (persistedUiLanguage) {
@@ -447,6 +448,8 @@ app.whenReady().then(async () => {
   try {
     // Initialize window manager
     windowManager = new WindowManager()
+    const windows = windowManager
+    registerDefaultZoomIpc(() => windows.getAllWindows().map(managed => managed.window))
 
     // Create the application menu (needs windowManager for New Window action)
     createApplicationMenu(windowManager)
