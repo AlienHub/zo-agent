@@ -14,9 +14,8 @@ export interface ZoomControlsProps {
   onZoomToFit: () => void
   onReset: () => void
   resetDisabled: boolean
-  className?: string
-  /** Which way the preset dropdown opens. Default 'down' (control sits at top). */
   dropdownPlacement?: 'down' | 'up'
+  className?: string
 }
 
 function ZoomDropdown({
@@ -25,14 +24,12 @@ function ZoomDropdown({
   zoomPresets,
   onZoomToFit,
   onZoomToPreset,
-  placement = 'down',
 }: {
   zoomPercent: number
   activePreset: number | undefined
   zoomPresets: readonly number[]
   onZoomToFit: () => void
   onZoomToPreset: (preset: number) => void
-  placement?: 'down' | 'up'
 }) {
   const { t } = useTranslation()
   const [isOpen, setIsOpen] = React.useState(false)
@@ -75,10 +72,7 @@ function ZoomDropdown({
       {isOpen && (
         <div
           className={cn(
-            'absolute right-0 min-w-[140px] p-1',
-            placement === 'up' ? 'bottom-full mb-1' : 'top-full mt-1',
-            'bg-background rounded-[8px] shadow-strong border border-border/50',
-            'animate-in fade-in-0 zoom-in-95 duration-100',
+            'popover-styled motion-pop-in absolute top-full right-0 mt-1 min-w-[140px] origin-top-right p-1',
           )}
         >
           <button
@@ -122,7 +116,6 @@ export function ZoomControls({
   onReset,
   resetDisabled,
   className,
-  dropdownPlacement = 'down',
 }: ZoomControlsProps) {
   const { t } = useTranslation()
   const zoomPercent = Math.round(scale * 100)
@@ -157,7 +150,6 @@ export function ZoomControls({
           zoomPresets={zoomPresets}
           onZoomToFit={onZoomToFit}
           onZoomToPreset={onZoomToPreset}
-          placement={dropdownPlacement}
         />
 
         <button

@@ -20,8 +20,10 @@ export interface PreparedOAuthFlow {
   codeVerifier: string       // PKCE verifier (empty string for providers that don't use PKCE)
   tokenEndpoint: string
   clientId: string
-  clientSecret?: string      // Google requires client_secret for Desktop apps
+  clientSecret?: string      // Google requires client_secret for Web application clients
   redirectUri: string        // provider-specific redirect URI used in auth URL + token exchange
+  /** RFC 8707 resource indicator — audience the issued token must be scoped to */
+  resource?: string
   provider: OAuthProvider
 }
 
@@ -36,6 +38,8 @@ export interface OAuthExchangeParams {
   clientId: string
   clientSecret?: string
   redirectUri: string
+  /** RFC 8707 resource indicator — must match the value sent on the auth request */
+  resource?: string
 }
 
 /**

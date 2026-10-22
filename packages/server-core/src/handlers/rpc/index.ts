@@ -1,8 +1,10 @@
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 
+import { registerAgentComposeHandlers } from './agent-compose'
 import { registerAuthHandlers } from './auth'
 import { registerAutomationsHandlers } from './automations'
+import { registerDecisionsHandlers } from './decisions'
 import { registerFilesHandlers } from './files'
 export { cleanupWorkingDirWatchForClient } from './files'
 import { registerLabelsHandlers } from './labels'
@@ -10,14 +12,17 @@ import { registerLlmConnectionsHandlers } from './llm-connections'
 import { registerOAuthHandlers } from './oauth'
 import { registerResourcesHandlers } from './resources'
 import { registerOnboardingHandlers } from './onboarding'
-import { registerSessionsHandlers } from './sessions'
+import { cleanupSessionFileWatchForClient, registerSessionsHandlers } from './sessions'
 export { registerSessionsHandlers, cleanupSessionFileWatchForClient } from './sessions'
+import { cleanupPrWatchForClient, registerPrWatchHandlers } from './pr-watch'
+import { registerCodingReposHandlers } from './coding-repos'
 import { registerServerHandlers } from './server'
 import type { ServerHandlerContext } from '../../bootstrap/headless-start'
 export type { ServerHandlerContext } from '../../bootstrap/headless-start'
 export { getHealthCheck } from './server'
 import { registerSettingsHandlers } from './settings'
 import { registerProjectsHandlers } from './projects'
+import { registerPagesHandlers } from './pages'
 import { registerSkillsHandlers } from './skills'
 import { registerSourcesHandlers } from './sources'
 import { registerStatusesHandlers } from './statuses'
@@ -32,8 +37,10 @@ export function registerCoreRpcHandlers(
   deps: HandlerDeps,
   serverCtx?: ServerHandlerContext,
 ): void {
+  registerAgentComposeHandlers(server, deps)
   registerAuthHandlers(server, deps)
   registerAutomationsHandlers(server, deps)
+  registerDecisionsHandlers(server, deps)
   registerFilesHandlers(server, deps)
   registerLabelsHandlers(server, deps)
   registerLlmConnectionsHandlers(server, deps)
@@ -44,6 +51,9 @@ export function registerCoreRpcHandlers(
   if (serverCtx) registerServerHandlers(server, deps, serverCtx)
   registerSettingsHandlers(server, deps)
   registerProjectsHandlers(server, deps)
+  registerPagesHandlers(server, deps)
+  registerPrWatchHandlers(server, deps)
+  registerCodingReposHandlers(server, deps)
   registerSkillsHandlers(server, deps)
   registerSourcesHandlers(server, deps)
   registerStatusesHandlers(server, deps)
@@ -52,4 +62,10 @@ export function registerCoreRpcHandlers(
   registerTransferHandlers(server)
   registerWorkspaceCoreHandlers(server, deps)
   registerMessagingHandlers(server, deps)
+}
+
+/** Per-client server state to drop when a client disconnects (session file watches, PR watches). */
+export function cleanupRpcClientResources(clientId: string): void {
+  cleanupSessionFileWatchForClient(clientId)
+  cleanupPrWatchForClient(clientId)
 }

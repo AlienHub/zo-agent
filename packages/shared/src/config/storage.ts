@@ -1,3 +1,4 @@
+import type { SensitiveContextProtectionSettings, SensitiveContextProtectionAction } from './types.ts';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync, readdirSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import { getCredentialManager } from '../credentials/index.ts';
@@ -21,13 +22,15 @@ import type { Plan } from '../agent/plan-types.ts';
 import type { PermissionMode } from '../agent/mode-manager.ts';
 import type { ThinkingLevel } from '../agent/thinking-levels.ts';
 import { isValidThinkingLevel, normalizeThinkingLevel } from '../agent/thinking-levels.ts';
-import { parsePermissionMode, PERMISSION_MODE_ORDER } from '../agent/mode-types.ts';
+import { parsePermissionMode, DEFAULT_PERMISSION_MODES } from '../agent/mode-types.ts';
 import { type ConfigDefaults } from './config-defaults-schema.ts';
 import { isValidThemeFile } from './validators.ts';
-import type {
-  SensitiveContextProtectionSettings,
-  SensitiveContextProtectionAction,
-} from './types.ts';
+import {
+  mergeDecisionLayerSettings,
+  normalizeDecisionLayerSettings,
+  type DecisionLayerSettings,
+  type DecisionLayerStoredSettings,
+} from '../decisions/settings.ts';
 
 // Re-export CONFIG_DIR for convenience (centralized in paths.ts)
 export { CONFIG_DIR } from './paths.ts';
@@ -57,6 +60,7 @@ import {
 
 // Config stored in JSON file (credentials stored in encrypted file, not here)
 export interface StoredConfig {
+  sensitiveContextProtection?: SensitiveContextProtectionSettings;
   // LLM Connections (authoritative source for auth and model config)
   llmConnections?: LlmConnection[];
   defaultLlmConnection?: string;  // Slug of default connection for new sessions
@@ -81,13 +85,17 @@ export interface StoredConfig {
   richToolDescriptions?: boolean;  // Add intent/action metadata to all tool calls (default: true)
   // Tools
   browserToolEnabled?: boolean;  // Enable built-in browser tool (default: true). Disable for Playwright/Puppeteer.
-  sensitiveContextProtection?: SensitiveContextProtectionSettings; // Scan tool results before they enter model context.
   allowRemoteEvaluate?: boolean;  // Allow remote agents to call `browser_tool evaluate` on local browser (default: true).
   // Prompt caching & context
   extendedPromptCache?: boolean;  // Use 1h prompt cache TTL instead of 5m (default: false)
   enable1MContext?: boolean;  // Enable 1M context window for supported models (default: false — opt-in; requires Anthropic Tier 4+)
+  autoCompactWindow?: number;  // Auto-compact when the context reaches this many tokens (100000–1000000), in Claude and Pi sessions. Unset: each SDK's default, near the model's full window (1M on Opus 5.5)
+  subagentModel?: SubagentModel;  // Claude: model for subagents whose call names none (never above the session's model). Unset: same as the session
   // Token optimization
   rtkEnabled?: boolean;  // Route Bash commands through rtk to compress tool output (default: false). https://github.com/rtk-ai/rtk
+  rtkExcludeCommands?: string[];  // Base commands never routed through rtk, e.g. ["grep", "cat"] (default: none)
+  // Decision layer (Jev / TypeSafe System One) — opt-in, off by default. See src/decisions/.
+  decisionLayer?: DecisionLayerStoredSettings;
   // Network proxy
   networkProxy?: import('./types.ts').NetworkProxySettings;
   // Windows: path to Git Bash (bash.exe) for the SDK subprocess
@@ -118,7 +126,7 @@ let configDefaultsSynced = false;
 /** Minimal config-defaults used when bundled assets aren't available (CI, standalone server). */
 const FALLBACK_CONFIG_DEFAULTS: ConfigDefaults = {
   version: '1.0',
-  description: 'Default configuration values for Zo',
+  description: 'Default configuration values for Craft Agents',
   defaults: {
     notificationsEnabled: true,
     colorTheme: 'default',
@@ -129,15 +137,7 @@ const FALLBACK_CONFIG_DEFAULTS: ConfigDefaults = {
     richToolDescriptions: true,
     extendedPromptCache: false,
     browserToolEnabled: true,
-    sensitiveContextProtection: {
-      enabled: true,
-      sensitiveFiles: { enabled: true, action: 'prompt' },
-      outputRedaction: { enabled: true },
-      credentialFiles: { enabled: true, action: 'prompt' },
-      secrets: { enabled: true, action: 'redact' },
-      privateKeys: { enabled: true, action: 'block' },
-      audit: { enabled: true, storeRawValues: false },
-    },
+    sensitiveContextProtection: { enabled: true, sensitiveFiles: {enabled:true,action:"prompt"}, outputRedaction:{enabled:true}, credentialFiles:{enabled:true,action:"prompt"}, secrets:{enabled:true,action:"redact"},privateKeys:{enabled:true,action:"block"},audit:{enabled:true,storeRawValues:false} },
     allowRemoteEvaluate: true,
   },
   workspaceDefaults: {
@@ -209,7 +209,7 @@ export function loadConfigDefaults(): ConfigDefaults {
   }
 
   defaults.workspaceDefaults.cyclablePermissionModes =
-    normalizedCyclable.length >= 2 ? normalizedCyclable : [...PERMISSION_MODE_ORDER];
+    normalizedCyclable.length >= 2 ? normalizedCyclable : [...DEFAULT_PERMISSION_MODES];
 
   return defaults;
 }
@@ -580,6 +580,56 @@ export function setEnable1MContext(enabled: boolean): void {
 }
 
 /**
+ * Get the Claude auto-compact window in tokens, or undefined for the SDK default.
+ * The SDK compacts near min(window, model limit). Its default is the model's full window, and the
+ * CLI runs first-party Opus with 1M even when enable1MContext is off, so a long session re-reads up
+ * to ~1M tokens on every call. A smaller window trades more compactions for cheaper calls; subagents
+ * inherit it. Only integers the CLI accepts (100K–1M) are returned.
+ */
+export function getAutoCompactWindow(): number | undefined {
+  const value = loadStoredConfig()?.autoCompactWindow;
+  return Number.isInteger(value) && value! >= 100_000 && value! <= 1_000_000 ? value : undefined;
+}
+
+/** Set the Claude auto-compact window; `null` (or a value outside 100K–1M) restores the SDK default. */
+export function setAutoCompactWindow(tokens: number | null): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+  if (tokens !== null && Number.isInteger(tokens) && tokens >= 100_000 && tokens <= 1_000_000) {
+    config.autoCompactWindow = tokens;
+  } else {
+    delete config.autoCompactWindow;
+  }
+  saveConfig(config);
+}
+
+/** Models a subagent can be moved to, cheapest first (the Agent tool's `model` aliases). */
+export const SUBAGENT_MODELS = ['haiku', 'sonnet'] as const;
+export type SubagentModel = typeof SUBAGENT_MODELS[number];
+
+/**
+ * Get the model for Claude subagents whose Agent call names none, or undefined to run them on the
+ * session's model (the SDK default). Subagents re-read their context on every step, so running
+ * them on the session's model (often Opus) is a large share of a session's cost.
+ */
+export function getSubagentModel(): SubagentModel | undefined {
+  const value = loadStoredConfig()?.subagentModel;
+  return SUBAGENT_MODELS.includes(value as SubagentModel) ? value : undefined;
+}
+
+/** Set the default subagent model; `null` runs subagents on the session's model. */
+export function setSubagentModel(model: SubagentModel | null): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+  if (model && SUBAGENT_MODELS.includes(model)) {
+    config.subagentModel = model;
+  } else {
+    delete config.subagentModel;
+  }
+  saveConfig(config);
+}
+
+/**
  * Get whether rtk Bash-output compression is enabled.
  * When enabled, the PreToolUse pipeline rewrites Bash commands to their `rtk` equivalents
  * to reduce token consumption on common dev commands (git, ls, grep, test runners, etc.).
@@ -592,6 +642,16 @@ export function getRtkEnabled(): boolean {
 }
 
 /**
+ * Base commands (first word) that are never routed through rtk, from
+ * `rtkExcludeCommands` in config.json. Non-strings and blanks are ignored.
+ */
+export function getRtkExcludeCommands(): string[] {
+  const value = loadStoredConfig()?.rtkExcludeCommands;
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).map(entry => entry.trim());
+}
+
+/**
  * Set whether rtk Bash-output compression is enabled.
  */
 export function setRtkEnabled(enabled: boolean): void {
@@ -599,6 +659,32 @@ export function setRtkEnabled(enabled: boolean): void {
   if (!config) return;
   config.rtkEnabled = enabled;
   saveConfig(config);
+}
+
+/**
+ * Decision layer (Jev / TypeSafe System One) settings with defaults applied.
+ * Off by default; the `enabled` switch is the only master gate.
+ * See `src/decisions/settings.ts` for the shape and `src/decisions/resolve.ts` for how it is used.
+ */
+export function getDecisionLayerSettings(): DecisionLayerSettings {
+  const config = loadStoredConfig();
+  return normalizeDecisionLayerSettings(config?.decisionLayer);
+}
+
+/**
+ * Merge a settings patch (features merge key-wise; `null` clears an optional
+ * string) and persist. Returns the normalized result.
+ */
+export function setDecisionLayerSettings(patch: Partial<Record<keyof DecisionLayerStoredSettings, unknown>>): DecisionLayerSettings {
+  const config = loadStoredConfig();
+  if (!config) {
+    // Unlike the void rtk setter, callers display the returned value — do not
+    // pretend a write happened.
+    throw new Error('Cannot save decision model settings: config.json is not initialized');
+  }
+  config.decisionLayer = mergeDecisionLayerSettings(config.decisionLayer, patch);
+  saveConfig(config);
+  return normalizeDecisionLayerSettings(config.decisionLayer);
 }
 
 /**
@@ -1839,8 +1925,11 @@ function backfillAllConnectionModels(config: StoredConfig): boolean {
   return changed;
 }
 
-const OPUS_DEFAULT_ID = 'claude-opus-4-8';
-const OPUS_FALLBACK_ID = 'claude-opus-4-7';
+// Targets of the legacy Opus migrations (4.5 / 4.7 -> 4.8) and of the Bedrock
+// catalog fallback. Deliberately NOT the current DEFAULT_MODEL (Opus 5.5):
+// existing connections keep their pinned Opus; only new connections get 5.5.
+const OPUS_48_ID = 'claude-opus-4-8';
+const OPUS_47_ID = 'claude-opus-4-7';
 
 function defaultModelIdsForConnection(connection: LlmConnection): Set<string> {
   return new Set(
@@ -1861,10 +1950,10 @@ function normalizeConnectionModelId(connection: LlmConnection, modelId: string):
     const prefixedCandidate = `pi/${native}`;
     const candidate = hasPiPrefix || defaults.has(prefixedCandidate) ? prefixedCandidate : native;
 
-    // Pi 0.73.1 does not yet expose Opus 4.8. Keep 4.7 as the selectable fallback
-    // until the upstream catalog adds 4.8; the preferred-default list is already future-proofed.
-    if (bare === OPUS_DEFAULT_ID || native.endsWith(`.${OPUS_DEFAULT_ID}`)) {
-      const fallbackNative = toBedrockNativeId(OPUS_FALLBACK_ID);
+    // Safety net for Pi catalogs that lack Opus 4.8 (pre-0.8x SDK pins): keep 4.7
+    // as the selectable fallback instead of a dangling id.
+    if (bare === OPUS_48_ID || native.endsWith(`.${OPUS_48_ID}`)) {
+      const fallbackNative = toBedrockNativeId(OPUS_47_ID);
       const prefixedFallback = `pi/${fallbackNative}`;
       const fallback = defaults.has(prefixedFallback) ? prefixedFallback : fallbackNative;
       if (!defaults.has(candidate) && defaults.has(fallback)) return fallback;
@@ -1878,14 +1967,14 @@ function normalizeConnectionModelId(connection: LlmConnection, modelId: string):
     const bare = hasPiPrefix ? normalized.slice(3) : normalized;
     const prefixedCandidate = `pi/${bare}`;
     const candidate = hasPiPrefix || defaults.has(prefixedCandidate) ? prefixedCandidate : normalized;
-    const prefixedFallback = `pi/${OPUS_FALLBACK_ID}`;
-    const fallback = defaults.has(prefixedFallback) ? prefixedFallback : OPUS_FALLBACK_ID;
-    if ((bare === OPUS_DEFAULT_ID)
+    const prefixedFallback = `pi/${OPUS_47_ID}`;
+    const fallback = defaults.has(prefixedFallback) ? prefixedFallback : OPUS_47_ID;
+    if ((bare === OPUS_48_ID)
       && !defaults.has(candidate)
       && defaults.has(fallback)) {
       return fallback;
     }
-    if (bare === OPUS_DEFAULT_ID && candidate !== normalized) {
+    if (bare === OPUS_48_ID && candidate !== normalized) {
       return candidate;
     }
   }
@@ -1904,15 +1993,15 @@ function withUpdatedModelEntry(
   nextId: string,
 ): ModelDefinition | string {
   if (typeof entry === 'string') {
-    if (connection.providerType === 'anthropic' && nextId === OPUS_DEFAULT_ID) {
-      return { ...getModelById(OPUS_DEFAULT_ID)! };
+    if (connection.providerType === 'anthropic' && nextId === OPUS_48_ID) {
+      return { ...getModelById(OPUS_48_ID)! };
     }
     return nextId;
   }
 
   const nextEntry: ModelDefinition = { ...entry, id: nextId };
-  if (connection.providerType === 'anthropic' && nextId === OPUS_DEFAULT_ID) {
-    return { ...getModelById(OPUS_DEFAULT_ID)! };
+  if (connection.providerType === 'anthropic' && nextId === OPUS_48_ID) {
+    return { ...getModelById(OPUS_48_ID)! };
   }
   if (nextEntry.name && /Opus 4\.[56]/.test(nextEntry.name)) {
     nextEntry.name = displayNameForMigratedModel(nextId);
@@ -1921,14 +2010,15 @@ function withUpdatedModelEntry(
 }
 
 function modelEntryForDefault(connection: LlmConnection, modelId: string): ModelDefinition | string {
-  if (connection.providerType === 'anthropic' && modelId === OPUS_DEFAULT_ID) {
-    return { ...getModelById(OPUS_DEFAULT_ID)! };
+  if (connection.providerType === 'anthropic' && modelId === OPUS_48_ID) {
+    return { ...getModelById(OPUS_48_ID)! };
   }
   return modelId;
 }
 
 /**
- * Migrate deprecated Opus 4.5/4.6 IDs and previous direct-Anthropic Opus 4.7 defaults to the current default Opus model.
+ * Migrate deprecated Opus 4.5 IDs and previous direct-Anthropic Opus 4.7 defaults to Opus 4.8.
+ * Opus 5.5 (the default for new connections) is intentionally not force-migrated.
  * Custom/compat endpoints are intentionally skipped because provider-specific aliases may differ.
  */
 function migrateLegacyOpusToDefaultOpus(config: StoredConfig): boolean {
@@ -1944,8 +2034,8 @@ function migrateLegacyOpusToDefaultOpus(config: StoredConfig): boolean {
       // The previous direct-Anthropic default was Opus 4.7. Move existing
       // direct-Anthropic defaults to Opus 4.8 while keeping 4.7 in the model list.
       // Pi stays on 4.7 until the current Pi catalog exposes 4.8.
-      if (connection.providerType === 'anthropic' && normalizedDefault === OPUS_FALLBACK_ID) {
-        normalizedDefault = OPUS_DEFAULT_ID;
+      if (connection.providerType === 'anthropic' && normalizedDefault === OPUS_47_ID) {
+        normalizedDefault = OPUS_48_ID;
       }
       if (normalizedDefault !== connection.defaultModel) {
         connection.defaultModel = normalizedDefault;
@@ -1988,6 +2078,74 @@ function migrateLegacyOpusToDefaultOpus(config: StoredConfig): boolean {
     }
   }
 
+  return changed;
+}
+
+/**
+ * Restore claude-opus-4-6 to direct Anthropic connections that were previously
+ * force-migrated to 4.8 and no longer list 4.6. Runs once per user (tracked via
+ * config.migrationsApplied). Never touches `defaultModel` — users keep whatever
+ * default they had, and can switch models themselves.
+ *
+ * The marker is versioned ("-2") because the pre-4.8 restore already consumed
+ * 'opus-4-6-restored' in long-time users' configs; this restore must fire
+ * again after the 4.8-era removal.
+ *
+ * TODO(opus-4.6-sunset): drop this call and the function when 4.6 is deprecated.
+ */
+function restoreOpus46ToAnthropicConnections(config: StoredConfig): boolean {
+  const OPUS_46_ID = 'claude-opus-4-6';
+  const MARKER = 'opus-4-6-restored-2';
+  const alreadyRan = config.migrationsApplied?.includes(MARKER) ?? false;
+
+  // Anthropic connection.models entries are stored as full ModelDefinition
+  // objects (via backfillAllConnectionModels). The model picker reads
+  // model.name and falls back to the raw ID for bare strings, so we must
+  // push the object form to render as "Opus 4.6".
+  const opus46Model = getModelById(OPUS_46_ID);
+  if (!opus46Model) {
+    // Defensive — 4.6 is registered in this same PR, should never happen.
+    if (!alreadyRan) {
+      config.migrationsApplied = [...(config.migrationsApplied ?? []), MARKER];
+      return true;
+    }
+    return false;
+  }
+
+  let changed = false;
+
+  for (const connection of config.llmConnections ?? []) {
+    if (connection.providerType !== 'anthropic') continue;
+    if (!Array.isArray(connection.models) || connection.models.length === 0) continue;
+
+    // Idempotent shape repair: normalize any bare-string 'claude-opus-4-6'
+    // entry to the ModelDefinition object form. Runs regardless of the
+    // one-shot marker because it's a display-shape fix, not a new entry.
+    for (let i = 0; i < connection.models.length; i++) {
+      const m = connection.models[i];
+      if (typeof m === 'string' && m === OPUS_46_ID) {
+        connection.models[i] = { ...opus46Model };
+        changed = true;
+      }
+    }
+
+    // One-shot restore: only append 4.6 on the first run for a given user.
+    // A deliberate removal after the marker is set should stick.
+    if (alreadyRan) continue;
+
+    const ids = connection.models.map(m => typeof m === 'string' ? m : m.id);
+    if ((ids.includes(OPUS_48_ID) || ids.includes(OPUS_47_ID)) && !ids.includes(OPUS_46_ID)) {
+      connection.models.push({ ...opus46Model });
+      changed = true;
+    }
+  }
+
+  // Mark the migration as seen on the first run — even when no connection
+  // was eligible — so subsequent runs don't keep re-checking.
+  if (!alreadyRan) {
+    config.migrationsApplied = [...(config.migrationsApplied ?? []), MARKER];
+    return true;
+  }
   return changed;
 }
 
@@ -2079,7 +2237,7 @@ function migrateWorkspaceLegacyOpusToDefaultOpus(config: StoredConfig): void {
     if (!wsConfig?.defaults?.model) continue;
 
     const normalized = normalizeDeprecatedModelId(wsConfig.defaults.model);
-    const nextModel = normalized === OPUS_FALLBACK_ID ? OPUS_DEFAULT_ID : normalized;
+    const nextModel = normalized === OPUS_47_ID ? OPUS_48_ID : normalized;
     if (nextModel !== wsConfig.defaults.model) {
       wsConfig.defaults.model = nextModel;
       saveWorkspaceConfig(workspace.rootPath, wsConfig);
@@ -2364,6 +2522,12 @@ export function migrateLegacyLlmConnectionsConfig(): void {
     // Important for old Bedrock connections: they become Pi+Bedrock first, then can
     // fall back from Opus 4.8 to 4.7 while Pi's catalog lacks 4.8.
     if (migrateLegacyOpusToDefaultOpus(config)) {
+      needsSave = true;
+    }
+    // Phase 1m: Restore Opus 4.6 to direct Anthropic connections that were
+    // previously force-migrated away from it (one-shot, guarded by marker).
+    // TODO(opus-4.6-sunset): drop this call and the function when 4.6 is deprecated.
+    if (restoreOpus46ToAnthropicConnections(config)) {
       needsSave = true;
     }
 
@@ -2701,6 +2865,8 @@ export function updateLlmConnection(slug: string, updates: Partial<Omit<LlmConne
   connections[index] = {
     // Preserve required fields from existing
     slug: existing.slug,
+    compose: updates.compose ?? existing.compose,
+    composeUnavailable: updates.composeUnavailable ?? existing.composeUnavailable,
     name: updates.name ?? existing.name,
     providerType: updates.providerType ?? existing.providerType,
     type: updates.type ?? existing.type, // Legacy field
@@ -2958,96 +3124,6 @@ export function setNetworkProxySettings(settings: NetworkProxySettings): void {
 }
 
 // ============================================
-// Sensitive Context Protection
-// ============================================
-
-const DEFAULT_SENSITIVE_CONTEXT_PROTECTION_SETTINGS: SensitiveContextProtectionSettings = {
-  enabled: true,
-  sensitiveFiles: { enabled: true, action: 'prompt' },
-  outputRedaction: { enabled: true },
-  credentialFiles: { enabled: true, action: 'prompt' },
-  secrets: { enabled: true, action: 'redact' },
-  privateKeys: { enabled: true, action: 'block' },
-  audit: { enabled: true, storeRawValues: false },
-};
-
-export function getDefaultSensitiveContextProtectionSettings(): SensitiveContextProtectionSettings {
-  const defaults = loadConfigDefaults();
-  return normalizeSensitiveContextProtectionSettings(
-    defaults.defaults.sensitiveContextProtection ?? DEFAULT_SENSITIVE_CONTEXT_PROTECTION_SETTINGS,
-  );
-}
-
-const SENSITIVE_ACTIONS = new Set<string>(['allow', 'redact', 'block', 'prompt']);
-
-function coerceBool(value: unknown, fallback: boolean): boolean {
-  return typeof value === 'boolean' ? value : fallback;
-}
-
-function coerceAction(value: unknown, fallback: SensitiveContextProtectionAction): SensitiveContextProtectionAction {
-  return typeof value === 'string' && SENSITIVE_ACTIONS.has(value)
-    ? (value as SensitiveContextProtectionAction)
-    : fallback;
-}
-
-function coerceFileAction(value: unknown, fallback: 'prompt' | 'block'): 'prompt' | 'block' {
-  return value === 'prompt' || value === 'block' ? value : fallback;
-}
-
-/**
- * Normalize (and validate) the credential-safety-net settings into a
- * fully-populated, well-typed object. Untrusted input (settings IPC or a
- * hand-edited config.json) is coerced field-by-field — invalid enum values fall
- * back to defaults and unknown keys are dropped — rather than spread verbatim.
- */
-export function normalizeSensitiveContextProtectionSettings(
-  settings: Partial<SensitiveContextProtectionSettings> | undefined,
-): SensitiveContextProtectionSettings {
-  const base = DEFAULT_SENSITIVE_CONTEXT_PROTECTION_SETTINGS;
-  const s = settings ?? {};
-
-  const sensitiveFilesEnabled = coerceBool(
-    s.sensitiveFiles?.enabled,
-    coerceBool(s.credentialFiles?.enabled, base.sensitiveFiles.enabled),
-  );
-  // Fall back to the legacy credentialFiles.action so older/hand-edited configs
-  // that only set `credentialFiles: { action: 'block' }` aren't silently downgraded.
-  const sensitiveFilesAction = coerceFileAction(s.sensitiveFiles?.action ?? s.credentialFiles?.action, base.sensitiveFiles.action);
-  const outputRedactionEnabled = coerceBool(s.outputRedaction?.enabled, base.outputRedaction.enabled);
-
-  return {
-    enabled: coerceBool(s.enabled, base.enabled),
-    sensitiveFiles: { enabled: sensitiveFilesEnabled, action: sensitiveFilesAction },
-    outputRedaction: { enabled: outputRedactionEnabled },
-    credentialFiles: { enabled: sensitiveFilesEnabled, action: sensitiveFilesAction },
-    secrets: {
-      enabled: outputRedactionEnabled && coerceBool(s.secrets?.enabled, base.secrets.enabled),
-      action: coerceAction(s.secrets?.action, base.secrets.action),
-    },
-    privateKeys: {
-      enabled: outputRedactionEnabled && coerceBool(s.privateKeys?.enabled, base.privateKeys.enabled),
-      action: coerceAction(s.privateKeys?.action, base.privateKeys.action),
-    },
-    audit: { enabled: coerceBool(s.audit?.enabled, base.audit.enabled), storeRawValues: false },
-  };
-}
-
-export function getSensitiveContextProtectionSettings(): SensitiveContextProtectionSettings {
-  const config = loadStoredConfig();
-  return normalizeSensitiveContextProtectionSettings(
-    config?.sensitiveContextProtection ?? getDefaultSensitiveContextProtectionSettings(),
-  );
-}
-
-export function setSensitiveContextProtectionSettings(settings: SensitiveContextProtectionSettings): void {
-  const config = loadStoredConfig();
-  if (!config) return;
-
-  config.sensitiveContextProtection = normalizeSensitiveContextProtectionSettings(settings);
-  saveConfig(config);
-}
-
-// ============================================
 // Setup Deferred (user skipped onboarding)
 // ============================================
 
@@ -3147,5 +3223,91 @@ export function setServerConfig(serverConfig: ServerConfig): void {
   }
 
   config.serverConfig = serverConfig;
+  saveConfig(config);
+}
+
+const DEFAULT_SENSITIVE_CONTEXT_PROTECTION_SETTINGS: SensitiveContextProtectionSettings = {
+  enabled: true,
+  sensitiveFiles: { enabled: true, action: 'prompt' },
+  outputRedaction: { enabled: true },
+  credentialFiles: { enabled: true, action: 'prompt' },
+  secrets: { enabled: true, action: 'redact' },
+  privateKeys: { enabled: true, action: 'block' },
+  audit: { enabled: true, storeRawValues: false },
+};
+
+export function getDefaultSensitiveContextProtectionSettings(): SensitiveContextProtectionSettings {
+  const defaults = loadConfigDefaults();
+  return normalizeSensitiveContextProtectionSettings(
+    defaults.defaults.sensitiveContextProtection ?? DEFAULT_SENSITIVE_CONTEXT_PROTECTION_SETTINGS,
+  );
+}
+
+const SENSITIVE_ACTIONS = new Set<string>(['allow', 'redact', 'block', 'prompt']);
+
+function coerceBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function coerceAction(value: unknown, fallback: SensitiveContextProtectionAction): SensitiveContextProtectionAction {
+  return typeof value === 'string' && SENSITIVE_ACTIONS.has(value)
+    ? (value as SensitiveContextProtectionAction)
+    : fallback;
+}
+
+function coerceFileAction(value: unknown, fallback: 'prompt' | 'block'): 'prompt' | 'block' {
+  return value === 'prompt' || value === 'block' ? value : fallback;
+}
+
+/**
+ * Normalize (and validate) the credential-safety-net settings into a
+ * fully-populated, well-typed object. Untrusted input (settings IPC or a
+ * hand-edited config.json) is coerced field-by-field — invalid enum values fall
+ * back to defaults and unknown keys are dropped — rather than spread verbatim.
+ */
+export function normalizeSensitiveContextProtectionSettings(
+  settings: Partial<SensitiveContextProtectionSettings> | undefined,
+): SensitiveContextProtectionSettings {
+  const base = DEFAULT_SENSITIVE_CONTEXT_PROTECTION_SETTINGS;
+  const s = settings ?? {};
+
+  const sensitiveFilesEnabled = coerceBool(
+    s.sensitiveFiles?.enabled,
+    coerceBool(s.credentialFiles?.enabled, base.sensitiveFiles.enabled),
+  );
+  // Fall back to the legacy credentialFiles.action so older/hand-edited configs
+  // that only set `credentialFiles: { action: 'block' }` aren't silently downgraded.
+  const sensitiveFilesAction = coerceFileAction(s.sensitiveFiles?.action ?? s.credentialFiles?.action, base.sensitiveFiles.action);
+  const outputRedactionEnabled = coerceBool(s.outputRedaction?.enabled, base.outputRedaction.enabled);
+
+  return {
+    enabled: coerceBool(s.enabled, base.enabled),
+    sensitiveFiles: { enabled: sensitiveFilesEnabled, action: sensitiveFilesAction },
+    outputRedaction: { enabled: outputRedactionEnabled },
+    credentialFiles: { enabled: sensitiveFilesEnabled, action: sensitiveFilesAction },
+    secrets: {
+      enabled: outputRedactionEnabled && coerceBool(s.secrets?.enabled, base.secrets.enabled),
+      action: coerceAction(s.secrets?.action, base.secrets.action),
+    },
+    privateKeys: {
+      enabled: outputRedactionEnabled && coerceBool(s.privateKeys?.enabled, base.privateKeys.enabled),
+      action: coerceAction(s.privateKeys?.action, base.privateKeys.action),
+    },
+    audit: { enabled: coerceBool(s.audit?.enabled, base.audit.enabled), storeRawValues: false },
+  };
+}
+
+export function getSensitiveContextProtectionSettings(): SensitiveContextProtectionSettings {
+  const config = loadStoredConfig();
+  return normalizeSensitiveContextProtectionSettings(
+    config?.sensitiveContextProtection ?? getDefaultSensitiveContextProtectionSettings(),
+  );
+}
+
+export function setSensitiveContextProtectionSettings(settings: SensitiveContextProtectionSettings): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+
+  config.sensitiveContextProtection = normalizeSensitiveContextProtectionSettings(settings);
   saveConfig(config);
 }

@@ -1,40 +1,55 @@
 import { useTranslation } from 'react-i18next'
-import { ShieldAlert, Check, X, RefreshCw } from 'lucide-react'
+import { Hand, RefreshCw, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import type { PermissionRisk } from '@craft-agent/core/types'
 import type { PermissionRequest as PermissionRequestType } from '../../../../../shared/types'
 import type { PermissionResponse } from './types'
+import {
+  DECISION_ACTION,
+  DecisionActions,
+  DecisionBody,
+  DecisionCard,
+  DecisionDetails,
+  DecisionFoot,
+  DecisionHeader,
+  DecisionPreview,
+  DecisionSpacer,
+  type DecisionTone,
+} from './DecisionCard'
 
 interface PermissionRequestProps {
   request: PermissionRequestType
   onResponse: (response: PermissionResponse) => void
-  /** When true, removes container styling (shadow, rounded) - used when wrapped by InputContainer */
+  /** When true, the composer slot (InputContainer) draws the card material and ring */
   unstyled?: boolean
-}
-
-function extractSensitiveRule(reason?: string): string | null {
-  if (!reason) return null
-  const match = reason.match(/Matched sensitive credential file rule:\s*(.+?)(?:\n|$)/)
-  return match?.[1]?.trim() || null
 }
 
 /**
  * PermissionRequest - Self-contained structured input for permission approval
  *
- * Shows:
- * - Shield icon + "Permission Required" header
- * - Tool name badge
- * - Description of what the tool wants to do
- * - Command preview (scrollable)
- * - Action buttons: Allow, Always Allow, Deny
+ * Decision-card anatomy (spec §7.6): hand icon tile + "Permission required", the tool and its
+ * description, decision-model risk chips (destructive ring + tile when present), the command in
+ * a sunken well (scrollable), then Allow (primary) · Always Allow (secondary, only when there is
+ * something to remember) · Deny (ghost).
  */
 export function PermissionRequest({ request, onResponse, unstyled = false }: PermissionRequestProps) {
   const { t } = useTranslation()
-  const isSensitiveFileAccess = request.sensitiveCategory === 'file_access'
-  const sensitiveRule = isSensitiveFileAccess ? extractSensitiveRule(request.reason) : null
-  const description = isSensitiveFileAccess
-    ? t('chat.sensitiveFileAccessTitle')
-    : request.description
+  // Decision-model risk badges (opt-in, informational). Literal keys keep the i18n coverage check effective.
+  const riskLabels: Record<PermissionRisk, string> = {
+    deletes: t('chat.permissionRisk.deletes'),
+    sends: t('chat.permissionRisk.sends'),
+    publishes: t('chat.permissionRisk.publishes'),
+    credentials: t('chat.permissionRisk.credentials'),
+    system: t('chat.permissionRisk.system'),
+    spends: t('chat.permissionRisk.spends'),
+  }
+
+  // Risks a newer server may send that this client has no label for are left out.
+  const risks = (request.risks ?? []).filter((risk) => Object.hasOwn(riskLabels, risk))
+  const isSensitive = request.sensitiveCategory === 'file_access'
+  const sensitiveRule = request.reason?.match(/Matched sensitive credential file rule:\s*(.+?)(?:\n|$)/)?.[1]?.trim()
+  const canRemember = request.canRemember !== false
+  const tone: DecisionTone = risks.length > 0 ? 'danger' : 'info'
 
   const handleAllow = () => {
     onResponse({ type: 'permission', allowed: true, alwaysAllow: false, permissionScope: 'once' })
@@ -44,145 +59,92 @@ export function PermissionRequest({ request, onResponse, unstyled = false }: Per
     onResponse({ type: 'permission', allowed: true, alwaysAllow: true })
   }
 
-  const handleAllowForSession = () => {
-    onResponse({ type: 'permission', allowed: true, alwaysAllow: true, permissionScope: 'session' })
-  }
-
-  const handleAllowPermanently = () => {
-    onResponse({ type: 'permission', allowed: true, alwaysAllow: true, permissionScope: 'permanent' })
-  }
-
   const handleDeny = () => {
     onResponse({ type: 'permission', allowed: false, alwaysAllow: false })
   }
 
   return (
-    <div
-      className={cn(
-        'overflow-hidden h-full flex flex-col bg-info/5',
-        unstyled
-          ? 'border-0'
-          : 'border border-info/30 rounded-[8px] shadow-middle'
-      )}
-      data-tutorial="permission-banner"
-    >
+    <DecisionCard tone={tone} standalone={!unstyled} data-tutorial="permission-banner">
       {/* Content - grows to fill available space and scrolls before actions disappear */}
-      <div className="p-4 space-y-3 flex-1 min-h-0 flex flex-col overflow-y-auto">
-        <div className="space-y-2 pb-1">
-          <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-            <ShieldAlert className="h-3.5 w-3.5 text-info" />
-            <span>{t('chat.permissionRequired')}</span>
-          </div>
-          <div className="text-xs leading-[18px] text-muted-foreground">
-            <span className="font-medium text-foreground">Tool:</span> {request.toolName}
+      <DecisionBody>
+        <DecisionHeader
+          tone={tone}
+          icon={tone === 'danger' ? <TriangleAlert /> : <Hand />}
+          title={t('chat.permissionRequired')}
+        />
+        <DecisionDetails>
+          <p className="text-label text-secondary">
+            <span className="font-medium text-foreground">{t('chat.permissionTool')}</span>{' '}
+            <span className="font-mono text-mono-ui text-foreground">{request.toolName}</span>
             <br />
-            {description}
-          </div>
-          {(request.reason || request.impact) && (
-            <div className="rounded-md border border-info/20 bg-background/60 p-2 text-xs leading-[18px] text-muted-foreground">
-              {isSensitiveFileAccess ? (
-                <>
-                  <div>
-                    {t('chat.sensitiveFileAccessIntro', {
-                      path: request.command || t('common.unknown'),
-                    })}
-                  </div>
-                  {sensitiveRule && (
-                    <div className="mt-1">
-                      {t('chat.sensitiveFileAccessMatchedRule', { rule: sensitiveRule })}
-                    </div>
-                  )}
-                  <div className="mt-1">{t('chat.sensitiveFileAccessImpact')}</div>
-                </>
-              ) : (
-                <>
-                  {request.reason && <div>{request.reason}</div>}
-                  {request.impact && <div className="mt-1">{request.impact}</div>}
-                </>
-              )}
+            {isSensitive ? t("chat.sensitiveFileAccessTitle") : request.description}
+          </p>
+          {isSensitive && (
+            <div className="mt-2 text-label-sm text-secondary">
+              <p>{t("chat.sensitiveFileAccessIntro", {path: request.command || t("common.unknown")})}</p>
+              {sensitiveRule && <p>{t("chat.sensitiveFileAccessMatchedRule", {rule: sensitiveRule})}</p>}
+              <p>{t("chat.sensitiveFileAccessImpact")}</p>
             </div>
           )}
-        </div>
+          {risks.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1" title={t('chat.permissionRiskHint')}>
+              {risks.map((risk) => (
+                <span key={risk} className="inline-flex h-5 items-center rounded-full bg-destructive-tint px-2 text-label-sm font-medium text-destructive">
+                  {riskLabels[risk]}
+                </span>
+              ))}
+            </div>
+          )}
 
-        {/* Command preview */}
-        {request.command && (
-          <div className="bg-foreground/5 rounded-md p-3 font-mono text-xs text-foreground/90 whitespace-pre-wrap break-all max-h-24 overflow-y-auto">
-            {request.command}
-          </div>
-        )}
-      </div>
+          {/* Command preview */}
+          {request.command && (
+            <DecisionPreview>{request.command}</DecisionPreview>
+          )}
+        </DecisionDetails>
+      </DecisionBody>
 
       {/* Action buttons */}
-      <div className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-t border-border/50">
-        {isSensitiveFileAccess ? (
+      <DecisionActions>
+        <Button
+          variant="primary"
+          size="lg"
+          className={DECISION_ACTION}
+          onClick={handleAllow}
+          data-tutorial="permission-allow-button"
+        >
+          {isSensitive ? t('chat.permissionAllowOnce') : t('chat.permissionAllow')}
+        </Button>
+        {isSensitive && canRemember && (
           <>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 gap-1.5 border border-foreground/10 hover:bg-foreground/5 active:bg-foreground/10"
-              onClick={handleAllow}
-              data-tutorial="permission-allow-button"
-            >
-              <Check className="h-3.5 w-3.5" />
-              {t('chat.permissionAllowOnce')}
-            </Button>
-            <Button
-              size="sm"
-              variant="default"
-              className="h-7 gap-1.5"
-              onClick={handleAllowForSession}
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              {t('chat.permissionAllowSession')}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 gap-1.5 border border-foreground/10 hover:bg-foreground/5 active:bg-foreground/10"
-              onClick={handleAllowPermanently}
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              {t('chat.permissionAllowPermanent')}
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button
-              size="sm"
-              variant="default"
-              className="h-7 gap-1.5"
-              onClick={handleAllow}
-              data-tutorial="permission-allow-button"
-            >
-              <Check className="h-3.5 w-3.5" />
-              {t('chat.permissionAllow')}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 gap-1.5 border border-foreground/10 hover:bg-foreground/5 active:bg-foreground/10"
-              onClick={handleAlwaysAllow}
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              {t('chat.permissionAlwaysAllow')}
-            </Button>
+            <Button variant="secondary" size="lg" className={DECISION_ACTION} onClick={() => onResponse({type: "permission", allowed: true, alwaysAllow: true, permissionScope: "session"})}>{t("chat.permissionAllowSession")}</Button>
+            <Button variant="secondary" size="lg" className={DECISION_ACTION} onClick={() => onResponse({type: "permission", allowed: true, alwaysAllow: true, permissionScope: "permanent"})}>{t("chat.permissionAllowPermanent")}</Button>
           </>
         )}
+        {!isSensitive && canRemember && (
+          <Button
+            variant="secondary"
+            size="lg"
+            className={DECISION_ACTION}
+            onClick={handleAlwaysAllow}
+          >
+            {t('chat.permissionAlwaysAllow')}
+          </Button>
+        )}
+        <DecisionSpacer />
         <Button
-          size="sm"
           variant="ghost"
-          className="h-7 gap-1.5 text-destructive hover:text-destructive border border-dashed border-destructive/50 hover:bg-destructive/10 hover:border-destructive/70 active:bg-destructive/20"
+          size="lg"
+          className={DECISION_ACTION}
           onClick={handleDeny}
         >
-          <X className="h-3.5 w-3.5" />
           {t('chat.permissionDeny')}
         </Button>
+      </DecisionActions>
 
-        {/* Tip text */}
-        <span className="min-w-0 flex-1 basis-full text-[10px] text-muted-foreground sm:basis-auto sm:text-right">
-          {t('chat.permissionRememberHint')}
-        </span>
-      </div>
-    </div>
+      {/* What "Always Allow" does */}
+      {!isSensitive && canRemember && (
+        <DecisionFoot icon={<RefreshCw />}>{t('chat.permissionAlwaysAllowTip')}</DecisionFoot>
+      )}
+    </DecisionCard>
   )
 }

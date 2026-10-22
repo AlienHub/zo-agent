@@ -1,3 +1,29 @@
+import type {SessionResourceRef} from '../../shared/types';
+
+
+export interface ResourceAnnotationsUpdatedEvent {
+  type: 'resource_annotations_updated'
+  sessionId: string
+  resource: SessionResourceRef
+  annotations: NonNullable<Message['annotations']>
+}
+
+
+export interface AutomationConfirmationRequestedEvent {
+  type: 'automation_confirmation_requested'
+  sessionId: string
+  message: Message
+}
+
+
+export interface AutomationConfirmationUpdatedEvent {
+  type: 'automation_confirmation_updated'
+  sessionId: string
+  messageId: string
+  status: 'confirmed' | 'cancelled'
+  respondedAt: number
+}
+
 /**
  * Event Processor Types
  *
@@ -5,7 +31,11 @@
  * All agent events flow through a single pure function for consistent state transitions.
  */
 
-import type { Session, Message, PermissionRequest, CredentialRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta, SessionResourceRef } from '../../shared/types'
+import type { Session, SessionEvent, Message, PermissionRequest, CredentialRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta } from '../../shared/types'
+
+/** Explicit SDK retry boundaries; keep their transport shape authoritative. */
+export type TextDiscardEvent = Extract<SessionEvent, { type: 'text_discard' }>
+export type RetryEvent = Extract<SessionEvent, { type: 'retry' }>
 
 /**
  * Streaming state for a session - replaces streamingTextRef
@@ -84,6 +114,8 @@ export interface ToolResultEvent {
   parentToolUseId?: string
   /** Timestamp from main process for consistent ordering */
   timestamp?: number
+  /** Replaces the input from tool_start (a browser_tool password fill, redacted once its result is known) */
+  toolInput?: Record<string, unknown>
 }
 
 /**
@@ -136,6 +168,15 @@ export interface SourcesChangedEvent {
   type: 'sources_changed'
   sessionId: string
   enabledSourceSlugs: string[]
+}
+
+/**
+ * Coding mode changed event (only before the conversation starts; see SessionManager.setSessionCodingMode)
+ */
+export interface CodingModeChangedEvent {
+  type: 'coding_mode_changed'
+  sessionId: string
+  codingMode: boolean
 }
 
 /**
@@ -386,6 +427,21 @@ export interface WorkflowAgentCompletedEvent {
 }
 
 /**
+ * Task activity - what a running background task is doing (live summary, step count). The chip is
+ * updated in App.tsx's handleBackgroundTaskEvent; messages and session state do not change.
+ */
+export interface TaskActivityEvent {
+  type: 'task_activity'
+  sessionId: string
+  taskId: string
+  toolUseId?: string
+  summary?: string
+  lastToolName?: string
+  toolUses?: number
+  turnId?: string
+}
+
+/**
  * Shell backgrounded event - background bash shell started
  */
 export interface ShellBackgroundedEvent {
@@ -446,13 +502,6 @@ export interface MessageAnnotationsUpdatedEvent {
   annotations: NonNullable<Message['annotations']>
 }
 
-export interface ResourceAnnotationsUpdatedEvent {
-  type: 'resource_annotations_updated'
-  sessionId: string
-  resource: SessionResourceRef
-  annotations: NonNullable<Message['annotations']>
-}
-
 /**
  * Session shared event - session was shared to viewer
  */
@@ -494,20 +543,6 @@ export interface AuthCompletedEvent {
   error?: string
 }
 
-export interface AutomationConfirmationRequestedEvent {
-  type: 'automation_confirmation_requested'
-  sessionId: string
-  message: Message
-}
-
-export interface AutomationConfirmationUpdatedEvent {
-  type: 'automation_confirmation_updated'
-  sessionId: string
-  messageId: string
-  status: 'confirmed' | 'cancelled'
-  respondedAt: number
-}
-
 /**
  * Source activated event - a source was auto-activated mid-turn.
  * The server owns the auto-retry; renderers should treat this as UI feedback only.
@@ -526,16 +561,15 @@ export interface SourceActivatedEvent {
 export interface UsageUpdateEvent {
   type: 'usage_update'
   sessionId: string
-  tokenUsage: {
-    inputTokens: number
-    contextWindow?: number
-  }
+  tokenUsage: Pick<NonNullable<Session['tokenUsage']>, 'inputTokens' | 'contextWindow' | 'contextUsage'>
 }
 
 /**
  * Union of all agent events
  */
 export type AgentEvent =
+  | TextDiscardEvent
+  | RetryEvent
   | TextDeltaEvent
   | TextCompleteEvent
   | ToolStartEvent
@@ -546,6 +580,7 @@ export type AgentEvent =
   | PermissionRequestEvent
   | CredentialRequestEvent
   | SourcesChangedEvent
+  | CodingModeChangedEvent
   | LabelsChangedEvent
   | ProjectIdChangedEvent
   | SessionStatusChangedEvent
@@ -571,18 +606,16 @@ export type AgentEvent =
   | ShellBackgroundedEvent
   | TaskProgressEvent
   | TaskCompletedEvent
+  | TaskActivityEvent
   | WorkflowAgentCompletedEvent
   | UserMessageEvent
   | MessageAnnotationsUpdatedEvent
-  | ResourceAnnotationsUpdatedEvent
   | SessionSharedEvent
   | SessionUnsharedEvent
   | AuthRequestEvent
   | AuthCompletedEvent
-  | AutomationConfirmationRequestedEvent
-  | AutomationConfirmationUpdatedEvent
   | SourceActivatedEvent
-  | UsageUpdateEvent
+  | UsageUpdateEvent | ResourceAnnotationsUpdatedEvent | AutomationConfirmationRequestedEvent | AutomationConfirmationUpdatedEvent
 
 /**
  * Side effects that need to be handled outside the pure processor
@@ -592,6 +625,7 @@ export type Effect =
   | { type: 'credential_request'; request: CredentialRequest }
   | { type: 'generate_title'; sessionId: string; userMessage: string }
   | { type: 'permission_mode_changed'; sessionId: string; permissionMode: PermissionMode; previousPermissionMode?: PermissionMode; transitionDisplay?: string; modeVersion?: number; changedAt?: string; changedBy?: 'user' | 'system' | 'restore' | 'automation' | 'unknown' }
+  | { type: 'coding_mode_changed'; sessionId: string; codingMode: boolean }
   | { type: 'restore_input'; text: string }
   | { type: 'toast_error'; message: string }
 

@@ -7,6 +7,8 @@ import type { ThemeOverrides } from '../config/index'
 import type { LoadedSource } from '../sources/types'
 import type { LoadedSkill } from '../skills/types'
 import type { LoadedProject } from '../projects/types'
+import type { LoadedPage } from '../pages/types'
+import type { PrWatchState } from './pr-watch'
 import { RPC_CHANNELS } from './channels'
 import type {
   SessionEvent,
@@ -32,6 +34,9 @@ export interface BroadcastEventMap {
   [RPC_CHANNELS.automations.CHANGED]: [workspaceId: string]
   [RPC_CHANNELS.skills.CHANGED]: [workspaceId: string, skills: LoadedSkill[]]
   [RPC_CHANNELS.projects.CHANGED]: [workspaceId: string, projects: LoadedProject[]]
+  [RPC_CHANNELS.pages.CHANGED]: [workspaceId: string, pages: LoadedPage[]]
+  // PR watcher: to the subscribing client only
+  [RPC_CHANNELS.prWatch.CHANGED]: [sessionId: string, state: PrWatchState]
   [RPC_CHANNELS.tasks.GENERATED]: [workspaceId: string, result: TaskGenerateResult]
   [RPC_CHANNELS.llmConnections.CHANGED]: []
   [RPC_CHANNELS.permissions.DEFAULTS_CHANGED]: [value: null]
@@ -39,7 +44,7 @@ export interface BroadcastEventMap {
   // Theme broadcasts (global)
   [RPC_CHANNELS.theme.APP_CHANGED]: [theme: ThemeOverrides | null]
   [RPC_CHANNELS.theme.SYSTEM_CHANGED]: [isDark: boolean]
-  [RPC_CHANNELS.theme.PREFERENCES_CHANGED]: [preferences: { mode: string; colorTheme: string; font: string }]
+  [RPC_CHANNELS.theme.PREFERENCES_CHANGED]: [preferences: { mode: string; colorTheme: string; font: string; motion?: string }]
   [RPC_CHANNELS.theme.WORKSPACE_THEME_CHANGED]: [data: { workspaceId: string; themeId: string | null }]
 
   // Update broadcasts (global)

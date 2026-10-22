@@ -9,9 +9,10 @@
  * - Lines 2+: StoredMessage (one message per line)
  */
 
+import type { AnnotationV1 } from '@craft-agent/core/types';
 import type { PermissionMode } from '../agent/mode-manager.ts';
 import type { ThinkingLevel } from '../agent/thinking-levels.ts';
-import type { StoredAttachment, MessageRole, ToolStatus, AuthRequestType, AuthStatus, CredentialInputMode, StoredMessage, AnnotationV1 } from '@craft-agent/core/types';
+import type { StoredAttachment, MessageRole, ToolStatus, AuthRequestType, AuthStatus, CredentialInputMode, StoredMessage, ContextUsageSnapshot } from '@craft-agent/core/types';
 
 /**
  * Session fields that persist to disk.
@@ -36,6 +37,8 @@ export const SESSION_PERSISTENT_FIELDS = [
   'enabledSourceSlugs', 'permissionMode', 'previousPermissionMode', 'workingDirectory',
   // Model/Connection
   'model', 'llmConnection', 'connectionLocked', 'thinkingLevel',
+  // Coding mode (lean coding prompt + tool profile; fixed once the session has messages)
+  'codingMode',
   // Sharing
   'sharedUrl', 'sharedId',
   // Plan execution
@@ -96,6 +99,10 @@ export interface SessionTokenUsage {
   cacheCreationTokens?: number;
   /** Model's context window size in tokens (from SDK modelUsage) */
   contextWindow?: number;
+  /** Current occupancy, independent from billable/cumulative token counters. */
+  contextUsage?: ContextUsageSnapshot;
+  /** Backend running totals already counted into costUsd/outputTokens (see AgentEventUsage.runningTotals). */
+  lastRunningTotals?: { costUsd: number; outputTokens: number };
 }
 
 /**
@@ -122,7 +129,7 @@ export interface SessionConfig {
   lastMessageAt?: number;
   /** Whether this session is flagged */
   isFlagged?: boolean;
-  /** Permission mode for this session ('safe', 'ask', 'allow-all') */
+  /** Permission mode for this session ('safe', 'ask', 'guarded', 'allow-all') */
   permissionMode?: PermissionMode;
   /** Previous permission mode (used to preserve modeTransition context across restarts) */
   previousPermissionMode?: PermissionMode;
@@ -156,6 +163,8 @@ export interface SessionConfig {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
+  codingMode?: boolean;
   /**
    * Pending plan execution state - tracks "Accept & Compact" flow.
    * When set, indicates a plan needs to be executed after compaction completes.
@@ -207,7 +216,15 @@ export interface SessionConfig {
   /** Whether the transferred-session summary has already been injected. */
   transferredSessionSummaryApplied?: boolean;
   /** Metadata for sessions created by automations */
-  triggeredBy?: { automationName?: string; event?: string; timestamp?: number };
+  triggeredBy?: {
+    automationName?: string;
+    /** Matcher id of the automation that created the session (loop guard: it never re-triggers itself). */
+    automationId?: string;
+    event?: string;
+    timestamp?: number;
+    /** 1 for a session an automation created from a user event; +1 per automation-created hop. */
+    depth?: number;
+  };
   /** Workspace-scoped project id this session belongs to (undefined = unbound). */
   projectId?: string;
   /** Parent session id — when set, this session is a subtask of the parent (undefined = top-level task). */
@@ -234,16 +251,6 @@ export interface StoredSession extends SessionConfig {
   tokenUsage: SessionTokenUsage;
 }
 
-export interface SessionResourceRef {
-  kind: 'file' | 'url';
-  target: string;
-}
-
-export interface SessionResourceAnnotations {
-  resource: SessionResourceRef;
-  annotations: AnnotationV1[];
-}
-
 /**
  * Session header - line 1 of session.jsonl
  *
@@ -264,7 +271,7 @@ export interface SessionHeader {
   lastMessageAt?: number;
   /** Whether this session is flagged */
   isFlagged?: boolean;
-  /** Permission mode for this session ('safe', 'ask', 'allow-all') */
+  /** Permission mode for this session ('safe', 'ask', 'guarded', 'allow-all') */
   permissionMode?: PermissionMode;
   /** Previous permission mode (used to preserve modeTransition context across restarts) */
   previousPermissionMode?: PermissionMode;
@@ -298,6 +305,8 @@ export interface SessionHeader {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
+  codingMode?: boolean;
   /**
    * Pending plan execution state - tracks "Accept & Compact" flow.
    * When set, indicates a plan needs to be executed after compaction completes.
@@ -324,7 +333,15 @@ export interface SessionHeader {
   /** Whether the transferred-session summary has already been injected. */
   transferredSessionSummaryApplied?: boolean;
   /** Metadata for sessions created by automations */
-  triggeredBy?: { automationName?: string; event?: string; timestamp?: number };
+  triggeredBy?: {
+    automationName?: string;
+    /** Matcher id of the automation that created the session (loop guard: it never re-triggers itself). */
+    automationId?: string;
+    event?: string;
+    timestamp?: number;
+    /** 1 for a session an automation created from a user event; +1 per automation-created hop. */
+    depth?: number;
+  };
   /** Workspace-scoped project id this session belongs to (undefined = unbound). */
   projectId?: string;
   /** Parent session id — when set, this session is a subtask of the parent (undefined = top-level task). */
@@ -401,6 +418,8 @@ export interface SessionMetadata {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
+  codingMode?: boolean;
   /** ID of last message user has read - for unread detection */
   lastReadMessageId?: string;
   /** ID of the last final (non-intermediate) assistant message - for unread detection */
@@ -437,4 +456,14 @@ export interface SessionMetadata {
   taskNodeCount?: number;
   /** Tasks Conductor: generate-time draft orchestrator. Hidden from the board until adopted (promoted) by createTask. */
   taskDraft?: boolean;
+}
+
+export interface SessionResourceRef {
+  kind: 'file' | 'url';
+  target: string;
+}
+
+export interface SessionResourceAnnotations {
+  resource: SessionResourceRef;
+  annotations: AnnotationV1[];
 }

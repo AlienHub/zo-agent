@@ -15,9 +15,8 @@ import type { AutomationMatcher } from './types.ts';
  * 1. Explicit `matcher.name`
  * 2. First prompt action's `@mention` → "<mention> prompt"
  * 3. First prompt action's prompt text (truncated to 40 chars)
- * 4. First confirm action's title (truncated to 40 chars)
- * 5. First webhook action's URL (truncated to 40 chars)
- * 6. Event name fallback (raw event string)
+ * 4. First webhook action's URL / script action's target (truncated to 40 chars)
+ * 5. Event name fallback (raw event string)
  */
 export function deriveAutomationName(event: string, matcher: AutomationMatcher): string {
   if (matcher.name) return matcher.name;
@@ -30,10 +29,14 @@ export function deriveAutomationName(event: string, matcher: AutomationMatcher):
     return label.length > 40 ? label.slice(0, 40) + '...' : label;
   }
 
-  if (firstAction.type === 'confirm') {
-    const label = `Confirm ${firstAction.title}`;
+  if (firstAction.type === 'script') {
+    const label = firstAction.page
+      ? `Refresh page ${firstAction.page}`
+      : `Script ${firstAction.script}`;
     return label.length > 40 ? label.slice(0, 40) + '...' : label;
   }
+
+  if (firstAction.type === 'confirm') return firstAction.title;
 
   // Extract @skill/@source mention
   const mentionMatch = firstAction.prompt.match(/@(\S+)/);

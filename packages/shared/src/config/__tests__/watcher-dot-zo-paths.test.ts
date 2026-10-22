@@ -32,6 +32,7 @@ describe('ConfigWatcher .zo workspace paths', () => {
     createWorkspaceAtPath(workspaceRoot, 'Watcher Dot Zo');
     const sourceConfig = await createSource(workspaceRoot, {
       name: 'Local Docs',
+      icon: '📁',
       provider: 'local',
       type: 'local',
       local: { path: localFolder, format: 'filesystem' },

@@ -21,8 +21,11 @@ type ApiToChannelMapKeys = Exclude<
   | 'reconnectTransport'
   | 'isChannelAvailable'
   | 'getSystemWarnings' // reads env var set at startup — no IPC needed
+  | 'getWindowVibrancy' // reads a launch argument set by window-manager — no IPC needed
   | 'relaunchApp' // direct IPC to main process — not through WS RPC
   | 'removeWorkspace' // direct IPC to main process — modifies local config
+  | 'getDefaultZoomLevel' // direct IPC to main process — per-device zoom preference
+  | 'setDefaultZoomLevel' // direct IPC to main process — saves and applies the default zoom
   | 'invokeOnServer' // direct IPC to main process — cross-server RPC
   | 'transferSessionToWorkspace' // direct IPC to main process — orchestrated remote transfer
   | 'onTransferProgress' // direct IPC listener — chunk upload progress

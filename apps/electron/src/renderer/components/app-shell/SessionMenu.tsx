@@ -60,7 +60,7 @@ export interface SessionMenuProps {
   /** Callback when labels are toggled (receives full updated labels array) */
   onLabelsChange?: (labels: string[]) => void
   /** Whether multiple workspaces exist (enables "Send to Workspace" item) */
-  hasRemoteWorkspaces?: boolean
+  hasTransferTargets?: boolean
   /** Workspace projects (omit to hide the submenu) */
   projects?: SessionMenuProjectOption[]
   /** Callback for binding/unbinding the session to a project. `null` = unbind. */
@@ -97,7 +97,7 @@ export function SessionMenu({
   onOpenInNewWindow,
   onSendToWorkspace,
   onDelete,
-  hasRemoteWorkspaces,
+  hasTransferTargets,
   projects = [],
   onSetProjectId,
 }: SessionMenuProps) {
@@ -108,7 +108,6 @@ export function SessionMenu({
   const isArchived = item.isArchived ?? false
   const sharedUrl = item.sharedUrl
   const currentSessionStatus = getSessionStatus(item)
-  const sessionLabels = item.labels ?? []
   const _hasMessages = hasMessagesMeta(item)
   const _hasUnread = hasUnreadMeta(item)
 
@@ -144,7 +143,7 @@ export function SessionMenu({
       )}
 
       {/* Send to Workspace — visible when at least one other workspace exists */}
-      {hasRemoteWorkspaces && onSendToWorkspace && (
+      {hasTransferTargets && onSendToWorkspace && (
         <MenuItem onClick={onSendToWorkspace}>
           <Send className="h-3.5 w-3.5" />
           <span className="flex-1">{t("sessionMenu.sendToWorkspace")}</span>
@@ -185,9 +184,9 @@ export function SessionMenu({
           <SubTrigger className="pr-2">
             <Tag className="h-3.5 w-3.5" />
             <span className="flex-1">{t("sessionMenu.labels")}</span>
-            {sessionLabels.length > 0 && (
+            {actions.appliedLabelIds.size > 0 && (
               <span className="text-[10px] text-muted-foreground tabular-nums -mr-2.5">
-                {sessionLabels.length}
+                {actions.appliedLabelIds.size}
               </span>
             )}
           </SubTrigger>

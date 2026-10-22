@@ -7,6 +7,7 @@ import { useSetAtom } from "jotai"
 import { toast } from "sonner"
 
 import { cn } from "@/lib/utils"
+import { isWebUI } from "@/lib/platform"
 import { fullscreenOverlayOpenAtom } from "@/atoms/overlay"
 import {
   DropdownMenu,
@@ -18,6 +19,7 @@ import {
 import { WorkspaceAvatar } from "@/components/ui/workspace-avatar"
 import { FadingText } from "@/components/ui/fading-text"
 import { WorkspaceCreationScreen } from "@/components/workspace"
+import { RemoveWorkspaceDialog } from "@/components/workspace/RemoveWorkspaceDialog"
 import { waitForTransportConnected } from '@/lib/transport-wait'
 import { useWorkspaceIcons } from "@/hooks/useWorkspaceIcon"
 import { useTransportConnectionState } from "@/hooks/useTransportConnectionState"
@@ -55,6 +57,8 @@ export function WorkspaceSwitcher({
   const { t } = useTranslation()
   const [showCreationScreen, setShowCreationScreen] = useState(false)
   const [reconnectTarget, setReconnectTarget] = useState<Workspace | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [pendingRemoval, setPendingRemoval] = useState<Workspace | null>(null)
   const setFullscreenOverlayOpen = useSetAtom(fullscreenOverlayOpenAtom)
   const selectedWorkspace = workspaces.find(w => w.id === activeWorkspaceId)
   const workspaceIconMap = useWorkspaceIcons(workspaces)
@@ -137,17 +141,15 @@ export function WorkspaceSwitcher({
     onSelect(workspace.id)
   }
 
-  const handleRemoveWorkspace = useCallback(async (workspace: Workspace) => {
+  /** Close the menu, then ask in RemoveWorkspaceDialog (rendered outside the menu). */
+  const handleRemoveWorkspace = useCallback((workspace: Workspace) => {
     if (workspace.id === activeWorkspaceId) {
       toast.error(t('toast.cannotRemoveActiveWorkspace'))
       return
     }
-    const removed = await window.electronAPI.removeWorkspace(workspace.id)
-    if (removed) {
-      toast.success(t('toast.removedWorkspace', { name: workspace.name }))
-      onWorkspaceRemoved?.()
-    }
-  }, [activeWorkspaceId, onWorkspaceRemoved])
+    setMenuOpen(false)
+    setPendingRemoval(workspace)
+  }, [activeWorkspaceId, t])
 
   const handleCloseCreationScreen = useCallback(() => {
     setShowCreationScreen(false)
@@ -184,30 +186,37 @@ export function WorkspaceSwitcher({
         )}
       </AnimatePresence>
 
-      <DropdownMenu onOpenChange={(open) => { if (open) checkRemoteHealth() }}>
+      <RemoveWorkspaceDialog
+        workspace={pendingRemoval}
+        iconUrl={pendingRemoval ? workspaceIconMap.get(pendingRemoval.id) : undefined}
+        onClose={() => setPendingRemoval(null)}
+        onRemoved={onWorkspaceRemoved}
+      />
+
+      <DropdownMenu open={menuOpen} onOpenChange={(open) => { setMenuOpen(open); if (open) checkRemoteHealth() }}>
         <DropdownMenuTrigger asChild>
           {variant === 'topbar' ? (
             <button
               type="button"
               data-workspace-switcher="topbar"
-              className="header-icon-btn titlebar-no-drag ml-1 flex-1 min-w-0 flex items-center justify-start gap-0.5 h-[30px] px-3 rounded-[8px] border border-foreground/6 text-[13px] text-foreground/50 hover:bg-foreground/5 hover:text-foreground transition-colors cursor-pointer data-[state=open]:bg-foreground/5 data-[state=open]:text-foreground"
+              className="titlebar-no-drag ml-1 min-w-0 max-w-full flex items-center justify-start gap-2 h-control pl-1 pr-1.5 rounded-md text-label font-medium text-foreground hover:bg-fill-hover data-[state=open]:bg-fill-hover transition-[background-color] duration-micro ease-out-subtle hover:duration-instant cursor-pointer"
               aria-label={t('workspace.selectWorkspace')}
             >
               <WorkspaceAvatar
                 workspaceId={selectedWorkspace?.id}
                 workspaceName={selectedWorkspace?.name}
                 src={selectedWorkspace ? workspaceIconMap.get(selectedWorkspace.id) : undefined}
-                className="h-4 w-4 mr-1.5 rounded-full ring-1 ring-border/50"
-                fallbackClassName="rounded-full"
+                className="size-5 rounded-sm shadow-elev-0"
+                fallbackClassName="rounded-sm"
               />
-              <span className="truncate min-w-0 flex-1 text-left">{selectedWorkspace?.name || 'Workspace'}</span>
+              <span className="truncate min-w-0 text-left">{selectedWorkspace?.name || 'Workspace'}</span>
               {selectedWorkspace?.remoteServer && (
                 isRemoteDisconnected(selectedWorkspace.id)
-                  ? <CloudOff className="h-3 w-3 text-destructive shrink-0" />
-                  : <Cloud className="h-3 w-3 opacity-60 shrink-0" />
+                  ? <CloudOff className="size-3.5 text-destructive shrink-0" />
+                  : <Cloud className="size-3.5 text-tertiary shrink-0" />
               )}
-              <ChevronDown data-slot="chevron" className="h-3 w-3 opacity-60 shrink-0" />
-              {hasUnreadInOtherWorkspaces && <span className="h-2 w-2 rounded-full bg-accent shrink-0" />}
+              <ChevronDown data-slot="chevron" className="size-3.5 text-tertiary shrink-0" />
+              {hasUnreadInOtherWorkspaces && <span className="size-1.5 rounded-full bg-accent-solid shrink-0" />}
             </button>
           ) : (
             <button
@@ -247,6 +256,8 @@ export function WorkspaceSwitcher({
           align={variant === 'topbar' ? 'center' : 'start'}
           sideOffset={variant === 'topbar' ? 6 : 4}
           minWidth={variant === 'topbar' ? 'min-w-64' : undefined}
+          // The remove dialog takes focus; don't pull it back to the trigger
+          onCloseAutoFocus={(event) => { if (pendingRemoval) event.preventDefault() }}
         >
           {workspaces.map((workspace) => {
             const disconnected = isRemoteDisconnected(workspace.id)
@@ -287,8 +298,9 @@ export function WorkspaceSwitcher({
                   {workspaceUnreadMap?.[workspace.id] && <span className="h-2 w-2 rounded-full bg-accent shrink-0" />}
                 </div>
                 <div className="flex items-center gap-1">
-                  {/* Action buttons - only visible on hover for non-active workspaces */}
-                  {activeWorkspaceId !== workspace.id && (
+                  {/* Action buttons - only visible on hover for non-active workspaces.
+                      Remove is Electron-only: the Web UI can't remove workspaces. */}
+                  {activeWorkspaceId !== workspace.id && !isWebUI && (
                     <button
                       data-touch-reveal="true"
                       className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-destructive/20 hover:text-destructive transition-opacity"

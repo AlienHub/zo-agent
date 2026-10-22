@@ -1,3 +1,4 @@
+import { WsRpcClient } from '@craft-agent/server-core/transport'
 // Load user's shell environment first (before other imports that may use env)
 // This ensures tools like Homebrew, nvm, etc. are available to the agent
 import { loadShellEnv } from './shell-env'
@@ -7,6 +8,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } 
 import { createHash, randomUUID } from 'crypto'
 import { hostname, homedir } from 'os'
 import * as Sentry from '@sentry/electron/main'
+import { redactSensitiveHeadersInPlace, redactSensitiveKeysInPlace } from '@craft-agent/shared/utils'
 
 // Initialize Sentry error tracking as early as possible after app import.
 // Only enabled in production (packaged) builds to avoid noise during development.
@@ -26,30 +28,19 @@ Sentry.init({
   enabled: !!process.env.SENTRY_ELECTRON_INGEST_URL,
 
   // Scrub sensitive data before sending to Sentry.
-  // Removes authorization headers, API keys/tokens, and credential-like values.
+  // Shared logic in @craft-agent/shared/utils redaction.ts (also used by the
+  // renderer hook and the Pages action audit log) — keep semantics there.
   beforeSend(event) {
     // Scrub request headers (authorization, cookies)
     if (event.request?.headers) {
-      const sensitiveHeaders = ['authorization', 'cookie', 'x-api-key']
-      for (const header of sensitiveHeaders) {
-        if (event.request.headers[header]) {
-          event.request.headers[header] = '[REDACTED]'
-        }
-      }
+      redactSensitiveHeadersInPlace(event.request.headers)
     }
 
     // Scrub breadcrumb data that may contain sensitive values
     if (event.breadcrumbs) {
       for (const breadcrumb of event.breadcrumbs) {
         if (breadcrumb.data) {
-          for (const key of Object.keys(breadcrumb.data)) {
-            const lowerKey = key.toLowerCase()
-            if (lowerKey.includes('token') || lowerKey.includes('key') ||
-                lowerKey.includes('secret') || lowerKey.includes('password') ||
-                lowerKey.includes('credential') || lowerKey.includes('auth')) {
-              breadcrumb.data[key] = '[REDACTED]'
-            }
-          }
+          redactSensitiveKeysInPlace(breadcrumb.data)
         }
       }
     }
@@ -69,6 +60,8 @@ Sentry.init({
 // the system prompt's "Preferred language" line, and the native menu.
 import { setupI18n, i18n, SUPPORTED_LANGUAGE_CODES, type LanguageCode } from '@craft-agent/shared/i18n'
 import { getPersistedUiLanguage, setPersistedUiLanguage } from '@craft-agent/shared/config'
+import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
+import { registerDefaultZoomIpc } from './zoom'
 setupI18n()
 const persistedUiLanguage = getPersistedUiLanguage()
 if (persistedUiLanguage) {
@@ -85,8 +78,9 @@ import { join, delimiter } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@craft-agent/server-core/sessions'
+import { PageThumbnailer } from './page-thumbnailer'
 import { registerAllRpcHandlers } from './handlers/index'
-import { registerCoreRpcHandlers, cleanupSessionFileWatchForClient, cleanupWorkingDirWatchForClient } from '@craft-agent/server-core/handlers/rpc'
+import { registerCoreRpcHandlers, cleanupRpcClientResources } from '@craft-agent/server-core/handlers/rpc'
 import type { PlatformServices } from '../runtime/platform'
 import { createElectronPlatform } from './platform'
 import type { HandlerDeps } from './handlers/handler-deps'
@@ -116,10 +110,9 @@ import { setPerfEnabled, enableDebug } from '@craft-agent/shared/utils'
 import { registerPiModelResolver } from '@craft-agent/shared/config'
 import { getPiModelsForAuthProvider, getAllPiModels } from '@craft-agent/shared/config'
 import { initNotificationService, initBadgeIcon, initInstanceBadge, updateBadgeCount } from './notifications'
-import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating, setBeforeUpdateQuitHook } from './auto-update'
+import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating, setBeforeUpdateQuitHook, setBeforeUpdateInstallHook, setInstallQuitFailedHook } from './auto-update'
 import type { EventSink } from '@craft-agent/server-core/transport'
 import { validateGitBashPath, checkVCRedistInstalled } from '@craft-agent/server-core/services'
-import { getExcalidrawMaterializerService, shutdownExcalidrawMaterializerService } from './excalidraw-materializer'
 
 // Initialize electron-log for renderer process support
 log.initialize()
@@ -226,7 +219,7 @@ let messagingHandle: MessagingBootstrapHandle | null = null
 let pendingDeepLink: string | null = null
 
 // Set app name early (before app.whenReady) to ensure correct macOS menu bar title
-// Supports multi-instance dev: CRAFT_APP_NAME env var (e.g., "Zo [1]")
+// Supports multi-instance dev: CRAFT_APP_NAME env var (e.g., "Craft Agents [1]")
 app.setName(process.env.CRAFT_APP_NAME || 'Zo')
 
 // Register as default protocol client for craftagents:// URLs
@@ -334,6 +327,14 @@ async function createInitialWindows(): Promise<void> {
   // Load saved window state
   const savedState = loadWindowState()
   let workspaces = getWorkspaces()
+  if(process.env.CRAFT_SERVER_URL) {
+    const remote=new WsRpcClient(process.env.CRAFT_SERVER_URL,{token:process.env.CRAFT_SERVER_TOKEN,autoReconnect:false})
+    try {
+      const available=await remote.invoke(RPC_CHANNELS.server.GET_WORKSPACES) as import('@craft-agent/core/types').WorkspaceInfo[]
+      workspaces=available.map(ws=>({...ws,rootPath:join(CONFIG_DIR,'remote-workspaces',ws.id),createdAt:0}))
+      if(!workspaces.length) throw new Error('The remote Zo server has no workspace. Create a workspace on the server first.')
+    } finally {remote.destroy()}
+  }
 
   // If no workspaces exist, create default "My Workspace" on first run
   if (workspaces.length === 0) {
@@ -381,6 +382,33 @@ async function createInitialWindows(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+      // Language change: sync from renderer to main process, persist, and rebuild native menu.
+      // Persistence here is what lets the next app launch hydrate main's i18n correctly —
+      // see the `getPersistedUiLanguage()` block at the top of this file.
+      ipcMain.handle('i18n:changeLanguage', async (_event, lang: unknown) => {
+        const previousResolved = i18n.resolvedLanguage ?? null
+        if (typeof lang !== 'string' || !SUPPORTED_LANGUAGE_CODES.includes(lang as LanguageCode)) {
+          // Defense-in-depth: renderer guarantees a supported code, but if a renegade
+          // caller hands us garbage we drop it silently rather than poison i18n state.
+          mainLog.warn('[i18n] changeLanguage IPC rejected — unsupported code', {
+            incoming: lang,
+            previousResolved,
+          })
+          return
+        }
+        const code = lang as LanguageCode
+        await i18n.changeLanguage(code)
+        setPersistedUiLanguage(code)
+        mainLog.info('[i18n] changeLanguage IPC applied', {
+          incoming: code,
+          previousResolved,
+          newResolved: i18n.resolvedLanguage ?? null,
+        })
+        const { rebuildMenu } = await import('./menu')
+        await rebuildMenu()
+      })
+
+
   // Export packaged state as env var so logger.ts (and headless Bun) don't need 'electron'
   process.env.CRAFT_IS_PACKAGED = app.isPackaged ? 'true' : 'false'
 
@@ -456,6 +484,8 @@ app.whenReady().then(async () => {
   try {
     // Initialize window manager
     windowManager = new WindowManager()
+    const windows = windowManager
+    registerDefaultZoomIpc(() => windows.getAllWindows().map(managed => managed.window))
 
     // Create the application menu (needs windowManager for New Window action)
     createApplicationMenu(windowManager)
@@ -641,7 +671,6 @@ app.whenReady().then(async () => {
             updateBadgeCount,
             onSessionStarted,
             onSessionStopped,
-            materializeCanvas: (graph) => getExcalidrawMaterializerService().materializeCanvas(graph),
             captureException: (error, context) => {
               Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
                 tags: {
@@ -657,6 +686,16 @@ app.whenReady().then(async () => {
         createSessionManager: () => {
           const sm = new SessionManager()
           sm.setBrowserPaneManager(browserPaneManager!)
+          // Page preview posters: offscreen capture is Electron-main-only. On
+          // capture, nudge the watcher so the pages:changed push carries the
+          // fresh thumbnail pointer to open grids.
+          const pageThumbnailer = new PageThumbnailer({
+            log: (m) => mainLog.info(m),
+            onCaptured: ({ workspaceRootPath, slug }) => {
+              sm.notifyConfigFileChange(workspaceRootPath, `pages/${slug}/page.json`)
+            },
+          })
+          sm.setPageThumbnailer((req) => pageThumbnailer.enqueue(req))
           return sm
         },
         bindRpcServer: (sm, server) => sm.setRpcServer(server),
@@ -668,7 +707,7 @@ app.whenReady().then(async () => {
             sessionManager: sm,
             credentialManager: getCredentialManager(),
             getMessagingDir: (wsId: string) =>
-              join(homedir(), '.craft-agent', 'workspaces', wsId, 'messaging'),
+              join(CONFIG_DIR, 'workspaces', wsId, 'messaging'),
             getLegacyMessagingDir: (wsId: string) => {
               const ws = getWorkspaces().find((w) => w.id === wsId)
               return ws ? join(ws.rootPath, 'messaging') : undefined
@@ -725,8 +764,7 @@ app.whenReady().then(async () => {
           for (const [wcId, cId] of clientMap) {
             if (cId === clientId) { clientMap.delete(wcId); break }
           }
-          cleanupSessionFileWatchForClient(clientId)
-          cleanupWorkingDirWatchForClient(clientId)
+          cleanupRpcClientResources(clientId)
         },
       })
 
@@ -786,17 +824,25 @@ app.whenReady().then(async () => {
         }
       })
 
-      // Transfer session to another workspace — orchestrated in main process
-      // so large bundles can be moved directly between owning servers.
-      ipcMain.handle('session:transferToRemoteWorkspace', async (_event, sessionId: string, targetWorkspaceId: string, sessionIndex?: number, sessionCount?: number) => {
+      // Transfer session to another workspace — orchestrated in main process so
+      // bundles can be moved directly between owning servers. Every connection is
+      // outbound from this process: remote sources/targets are reached over WS,
+      // a local target imports in-process on the embedded server — the local
+      // machine never needs to accept an inbound connection.
+      ipcMain.handle('session:transferToWorkspace', async (_event, sessionId: string, targetWorkspaceId: string, sessionIndex?: number, sessionCount?: number) => {
         const idx = sessionIndex ?? 0
         const count = sessionCount ?? 1
         const { getWorkspaceByNameOrId } = await import('@craft-agent/shared/config')
         const { connectToRemote } = await import('./handlers/workspace')
         const { CHUNKED_TRANSFER_THRESHOLD, getChunkCount, invokeChunked, prepareChunkedPayload } = await import('./chunked-rpc')
 
+        // The pull side (sessions:export) returns the whole bundle as a single
+        // unchunked response frame — up to MAX_BUNDLE_SIZE_BYTES over WAN — so
+        // the 30s default request timeout is not enough for transfer clients.
+        const TRANSFER_REQUEST_TIMEOUT_MS = 120_000
+
         const targetWorkspace = getWorkspaceByNameOrId(targetWorkspaceId)
-        if (!targetWorkspace?.remoteServer) throw new Error(`Workspace ${targetWorkspaceId} has no remote server`)
+        if (!targetWorkspace) throw new Error(`Workspace ${targetWorkspaceId} not found`)
         if (!sessionManager) throw new Error('Session manager not initialized')
 
         const sourceWorkspaceLocalId = windowManager?.getWorkspaceForWindow(_event.sender.id)
@@ -810,7 +856,7 @@ app.whenReady().then(async () => {
         if (sourceWorkspace.remoteServer) {
           const { url: sourceUrl, token: sourceToken, remoteWorkspaceId: sourceRemoteWorkspaceId } = sourceWorkspace.remoteServer
           console.log(`[Transfer] Exporting remote-owned session ${sessionId} from workspace ${sourceRemoteWorkspaceId}...`)
-          const { client: sourceClient, error: sourceError } = await connectToRemote(sourceUrl, sourceToken, sourceRemoteWorkspaceId)
+          const { client: sourceClient, error: sourceError } = await connectToRemote(sourceUrl, sourceToken, sourceRemoteWorkspaceId, { requestTimeout: TRANSFER_REQUEST_TIMEOUT_MS })
           if (!sourceClient) throw new Error(sourceError ?? 'Connection failed to source remote server')
 
           try {
@@ -851,9 +897,24 @@ app.whenReady().then(async () => {
 
         console.log(`[Transfer] Export complete: ${bundle.session?.messages?.length ?? 0} messages, ${bundle.files?.length ?? 0} files`)
 
+        const emitProgress = (chunkSent: number, chunkTotal: number) => {
+          try { _event.sender.send('transfer:progress', { sessionIndex: idx, sessionCount: count, chunkSent, chunkTotal }) } catch { /* renderer may be gone */ }
+        }
+
+        if (!targetWorkspace.remoteServer) {
+          // Local target — import in-process on the embedded server. Same method
+          // the sessions:import RPC handler runs on a remote target, so the
+          // result shape matches the remote path.
+          console.log(`[Transfer] Target workspace ${targetWorkspace.id} is local → importing in-process`)
+          emitProgress(0, 1)
+          const result = await sessionManager.importSession(targetWorkspace.id, bundle, 'fork')
+          emitProgress(1, 1)
+          return result
+        }
+
         const { url, token, remoteWorkspaceId } = targetWorkspace.remoteServer
         console.log(`[Transfer] Connecting to target remote server: ${url}`)
-        const { client, error } = await connectToRemote(url, token, remoteWorkspaceId)
+        const { client, error } = await connectToRemote(url, token, remoteWorkspaceId, { requestTimeout: TRANSFER_REQUEST_TIMEOUT_MS })
         if (!client) throw new Error(error ?? 'Connection failed to target remote server')
         console.log('[Transfer] Connected to target remote server')
 
@@ -861,10 +922,6 @@ app.whenReady().then(async () => {
           const preparedBundle = prepareChunkedPayload(bundle)
           const payloadSize = preparedBundle.bytes.length
           const payloadMB = (payloadSize / (1024 * 1024)).toFixed(1)
-
-          const emitProgress = (chunkSent: number, chunkTotal: number) => {
-            try { _event.sender.send('transfer:progress', { sessionIndex: idx, sessionCount: count, chunkSent, chunkTotal }) } catch { /* renderer may be gone */ }
-          }
 
           if (payloadSize < CHUNKED_TRANSFER_THRESHOLD) {
             console.log(`[Transfer] Bundle size: ${payloadMB}MB (< 5MB threshold) → using direct RPC`)
@@ -893,32 +950,6 @@ app.whenReady().then(async () => {
       ipcMain.handle('app:relaunch', () => {
         app.relaunch()
         app.exit(0)
-      })
-
-      // Language change: sync from renderer to main process, persist, and rebuild native menu.
-      // Persistence here is what lets the next app launch hydrate main's i18n correctly —
-      // see the `getPersistedUiLanguage()` block at the top of this file.
-      ipcMain.handle('i18n:changeLanguage', async (_event, lang: unknown) => {
-        const previousResolved = i18n.resolvedLanguage ?? null
-        if (typeof lang !== 'string' || !SUPPORTED_LANGUAGE_CODES.includes(lang as LanguageCode)) {
-          // Defense-in-depth: renderer guarantees a supported code, but if a renegade
-          // caller hands us garbage we drop it silently rather than poison i18n state.
-          mainLog.warn('[i18n] changeLanguage IPC rejected — unsupported code', {
-            incoming: lang,
-            previousResolved,
-          })
-          return
-        }
-        const code = lang as LanguageCode
-        await i18n.changeLanguage(code)
-        setPersistedUiLanguage(code)
-        mainLog.info('[i18n] changeLanguage IPC applied', {
-          incoming: code,
-          previousResolved,
-          newResolved: i18n.resolvedLanguage ?? null,
-        })
-        const { rebuildMenu } = await import('./menu')
-        await rebuildMenu()
       })
 
       ipcMain.on('__get-ws-port', (e) => {
@@ -1093,6 +1124,29 @@ app.whenReady().then(async () => {
     // before-quit firing; saving from before-quit alone would overwrite
     // window-state.json with an empty array.
     setBeforeUpdateQuitHook(() => captureAndSaveWindowState('pre-update'))
+    // Before the installer hands off, run the full quit cleanup and mark the app
+    // as quitting so before-quit's guard returns early instead of cancelling
+    // Squirrel.Mac's quit with preventDefault (#891).
+    setBeforeUpdateInstallHook(async () => {
+      isQuitting = true
+      windowManager?.setAppQuitting(true)
+      await performQuitCleanup()
+    })
+    // If quitAndInstall throws after the cleanup above already ran, the process
+    // is a zombie: sessions flushed but no watchers/messaging/lock, and isQuitting
+    // makes the next quit skip the flush. The only honest recovery is a controlled
+    // relaunch into a fresh process (#891).
+    setInstallQuitFailedHook(() => {
+      mainLog.error('[auto-update] quitAndInstall failed after cleanup — relaunching')
+      dialog.showMessageBoxSync({
+        type: 'error',
+        title: 'Update failed',
+        message: 'The update could not be installed.',
+        detail: 'Craft Agents will restart now. The update will be retried on the next launch.',
+      })
+      app.relaunch()
+      app.exit(0)
+    })
     if (app.isPackaged) {
       checkForUpdatesOnLaunch().catch(err => {
         mainLog.error('[auto-update] Launch check failed:', err)
@@ -1170,6 +1224,60 @@ function captureAndSaveWindowState(reason: 'before-quit' | 'pre-update'): number
   return windows.length
 }
 
+// Flush sessions and release all quit-time resources. Shared by the normal quit
+// path (before-quit) and the update-install handoff (beforeUpdateInstallHook), so
+// the two cleanup sequences can't drift (#891).
+let quitCleanupRan = false
+async function performQuitCleanup(): Promise<void> {
+  // Idempotent: a failed update install may retry, and the update path plus a
+  // subsequent quit must not dispose already-disposed services.
+  if (quitCleanupRan) {
+    mainLog.info('Quit cleanup already ran, skipping')
+    return
+  }
+  quitCleanupRan = true
+
+  if (sessionManager) {
+    try {
+      await sessionManager.flushAllSessions()
+      mainLog.info('Flushed all pending session writes')
+    } catch (error) {
+      mainLog.error('Failed to flush sessions:', error)
+    }
+    // Clean up SessionManager resources (file watchers, timers, etc.)
+    sessionManager.cleanup()
+  }
+
+  // Clean up browser pane instances
+  if (browserPaneManager) {
+    browserPaneManager.destroyAll()
+  }
+
+  // Clean up OAuth flow store (stop periodic cleanup timer)
+  if (oauthFlowStore) {
+    oauthFlowStore.dispose()
+  }
+
+  // Stop all model refresh timers
+  getModelRefreshService().stopAll()
+
+  // Stop messaging gateways so the WhatsApp worker subprocess exits cleanly.
+  if (messagingHandle) {
+    try {
+      await messagingHandle.dispose()
+    } catch (err) {
+      mainLog.error('[messaging] dispose failed:', err)
+    }
+  }
+
+  // Clean up power manager (release power blocker)
+  const { cleanup: cleanupPowerManager } = await import('./power-manager')
+  cleanupPowerManager()
+
+  // Release the server lock file so the next launch doesn't see a stale PID.
+  releaseServerLock()
+}
+
 // Save window state and clean up resources before quitting
 app.on('before-quit', async (event) => {
   // Avoid re-entry when we call app.exit()
@@ -1178,9 +1286,6 @@ app.on('before-quit', async (event) => {
 
   // Ensure Cmd+Q/app quit bypasses layered window close interception (Cmd+W behavior).
   windowManager?.setAppQuitting(true)
-
-  // Tear down the hidden Excalidraw materializer window + pending requests.
-  shutdownExcalidrawMaterializerService()
 
   if (windowManager) {
     const windows = windowManager.getWindowStates()
@@ -1210,58 +1315,13 @@ app.on('before-quit', async (event) => {
     }
   }
 
-  // Flush all pending session writes before quitting
+  // Normal quit: flush + clean up, then exit. The update-install path does NOT
+  // reach here — installUpdate's beforeUpdateInstallHook already ran
+  // performQuitCleanup and set isQuitting, so the guard at the top returns early
+  // and Squirrel.Mac's quit proceeds uninterrupted so the update installs (#891).
   if (sessionManager) {
-    // Prevent quit until sessions are flushed
     event.preventDefault()
-    try {
-      await sessionManager.flushAllSessions()
-      mainLog.info('Flushed all pending session writes')
-    } catch (error) {
-      mainLog.error('Failed to flush sessions:', error)
-    }
-    // Clean up SessionManager resources (file watchers, timers, etc.)
-    sessionManager.cleanup()
-
-    // Clean up browser pane instances
-    if (browserPaneManager) {
-      browserPaneManager.destroyAll()
-    }
-
-    // Clean up OAuth flow store (stop periodic cleanup timer)
-    if (oauthFlowStore) {
-      oauthFlowStore.dispose()
-    }
-
-    // Stop all model refresh timers
-    getModelRefreshService().stopAll()
-
-    // Stop messaging gateways so the WhatsApp worker subprocess exits cleanly.
-    if (messagingHandle) {
-      try {
-        await messagingHandle.dispose()
-      } catch (err) {
-        mainLog.error('[messaging] dispose failed:', err)
-      }
-    }
-
-    // Clean up power manager (release power blocker)
-    const { cleanup: cleanupPowerManager } = await import('./power-manager')
-    cleanupPowerManager()
-
-    // Release the server lock file so the next launch doesn't see a stale PID.
-    // This must happen regardless of the exit path (normal quit or update quit).
-    releaseServerLock()
-
-    // If update is in progress, let electron-updater handle the quit flow
-    // Force exit breaks the NSIS installer on Windows
-    if (isUpdating()) {
-      mainLog.info('Update in progress, letting electron-updater handle quit')
-      app.quit()
-      return
-    }
-
-    // Now actually quit
+    await performQuitCleanup()
     app.exit(0)
   }
 })

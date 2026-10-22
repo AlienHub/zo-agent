@@ -1,16 +1,9 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  isMaskedCredential,
   resolveCustomEndpointPayload,
   resolvePiAuthProviderForSubmit,
   resolvePresetStateForBaseUrlChange,
 } from '../submit-helpers'
-import {
-  getOpenCodeModelIdsForSubmit,
-  getOpenCodeStaticModelsForPreset,
-  isOpenCodePresetKey,
-  resolveOpenCodeDefaultModels,
-} from '../opencode-models'
 import { pickTierDefaults, resolveTierModels } from '../tier-models'
 
 const MODELS = [
@@ -18,15 +11,6 @@ const MODELS = [
   { id: 'pi/zai-balanced', name: 'Balanced', costInput: 5, costOutput: 10, contextWindow: 200000, reasoning: true },
   { id: 'pi/zai-fast', name: 'Fast', costInput: 1, costOutput: 2, contextWindow: 128000, reasoning: false },
 ]
-
-describe('isMaskedCredential', () => {
-  it('detects display-only masked API keys', () => {
-    expect(isMaskedCredential('sk-neGi••••••••P82w')).toBe(true)
-    expect(isMaskedCredential('••••••••')).toBe(true)
-    expect(isMaskedCredential('sk-real-secret')).toBe(false)
-    expect(isMaskedCredential('')).toBe(false)
-  })
-})
 
 describe('ApiKeyInput tier hydration helpers', () => {
   it('resolveTierModels keeps saved tier selections when all are valid', () => {
@@ -116,9 +100,7 @@ describe('resolvePresetStateForBaseUrlChange', () => {
 })
 
 describe('resolveCustomEndpointPayload', () => {
-  const BRANDED = new Set(['manifest'])
-  const NO_BRANDED_ANTHROPIC = new Set<string>()
-  const NO_ROUTING_SLUGS = new Set<string>()
+  const BRANDED = new Set(['manifest', 'opencode-go'])
 
   it('routes branded openai-compat presets through openai-completions regardless of toggle', () => {
     expect(resolveCustomEndpointPayload({
@@ -126,8 +108,23 @@ describe('resolveCustomEndpointPayload', () => {
       baseUrl: 'https://app.manifest.build/v1',
       customApi: 'anthropic-messages',
       brandedOpenAiCompatPresets: BRANDED,
-      brandedAnthropicCompatPresets: NO_BRANDED_ANTHROPIC,
-      brandedRoutingSlugPresets: NO_ROUTING_SLUGS,
+      brandedAnthropicCompatPresets: new Set(),
+      brandedRoutingSlugPresets: new Set(),
+      fallbackPiAuthProvider: undefined,
+    })).toEqual({
+      customEndpoint: { api: 'openai-completions' },
+      piAuthProvider: 'openai',
+    })
+  })
+
+  it('pins OpenCode Go to openai-completions (branded openai-compat preset)', () => {
+    expect(resolveCustomEndpointPayload({
+      activePreset: 'opencode-go',
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      customApi: 'anthropic-messages',
+      brandedOpenAiCompatPresets: BRANDED,
+      brandedAnthropicCompatPresets: new Set(),
+      brandedRoutingSlugPresets: new Set(),
       fallbackPiAuthProvider: undefined,
     })).toEqual({
       customEndpoint: { api: 'openai-completions' },
@@ -141,8 +138,8 @@ describe('resolveCustomEndpointPayload', () => {
       baseUrl: 'https://my-endpoint.example.com',
       customApi: 'anthropic-messages',
       brandedOpenAiCompatPresets: BRANDED,
-      brandedAnthropicCompatPresets: NO_BRANDED_ANTHROPIC,
-      brandedRoutingSlugPresets: NO_ROUTING_SLUGS,
+      brandedAnthropicCompatPresets: new Set(),
+      brandedRoutingSlugPresets: new Set(),
       fallbackPiAuthProvider: undefined,
     })).toEqual({
       customEndpoint: { api: 'anthropic-messages' },
@@ -156,8 +153,8 @@ describe('resolveCustomEndpointPayload', () => {
       baseUrl: 'https://openrouter.ai/api/v1',
       customApi: 'openai-completions',
       brandedOpenAiCompatPresets: BRANDED,
-      brandedAnthropicCompatPresets: NO_BRANDED_ANTHROPIC,
-      brandedRoutingSlugPresets: NO_ROUTING_SLUGS,
+      brandedAnthropicCompatPresets: new Set(),
+      brandedRoutingSlugPresets: new Set(),
       fallbackPiAuthProvider: 'openrouter',
     })).toEqual({
       customEndpoint: undefined,
@@ -171,75 +168,12 @@ describe('resolveCustomEndpointPayload', () => {
       baseUrl: '',
       customApi: 'openai-completions',
       brandedOpenAiCompatPresets: BRANDED,
-      brandedAnthropicCompatPresets: NO_BRANDED_ANTHROPIC,
-      brandedRoutingSlugPresets: NO_ROUTING_SLUGS,
+      brandedAnthropicCompatPresets: new Set(),
+      brandedRoutingSlugPresets: new Set(),
       fallbackPiAuthProvider: undefined,
     })).toEqual({
       customEndpoint: undefined,
       piAuthProvider: undefined,
     })
-  })
-
-  it('routes OpenCode Zen preset with empty customEndpoint and its routing slug', () => {
-    const OPENCODE = new Set(['opencode-zen', 'opencode-go'])
-    const ANTHROPIC_COMPAT = new Set(['opencode-zen', 'opencode-go'])
-    expect(resolveCustomEndpointPayload({
-      activePreset: 'opencode-zen',
-      baseUrl: 'https://opencode.ai/zen/v1',
-      customApi: 'openai-completions',
-      brandedOpenAiCompatPresets: new Set<string>(),
-      brandedAnthropicCompatPresets: ANTHROPIC_COMPAT,
-      brandedRoutingSlugPresets: OPENCODE,
-      fallbackPiAuthProvider: 'opencode-zen',
-    })).toEqual({
-      customEndpoint: { api: 'anthropic-messages' },
-      piAuthProvider: 'opencode-zen',
-    })
-  })
-
-  it('routes OpenCode Go preset with empty customEndpoint and its routing slug', () => {
-    const OPENCODE = new Set(['opencode-zen', 'opencode-go'])
-    expect(resolveCustomEndpointPayload({
-      activePreset: 'opencode-go',
-      baseUrl: 'https://opencode.ai/zen/go/v1',
-      customApi: 'anthropic-messages',
-      brandedOpenAiCompatPresets: new Set<string>(),
-      brandedAnthropicCompatPresets: new Set(['opencode-zen', 'opencode-go']),
-      brandedRoutingSlugPresets: OPENCODE,
-      fallbackPiAuthProvider: 'opencode-go',
-    })).toEqual({
-      customEndpoint: { api: 'anthropic-messages' },
-      piAuthProvider: 'opencode-go',
-    })
-  })
-})
-
-describe('OpenCode model helpers', () => {
-  it('recognizes OpenCode presets and returns merged model buckets', () => {
-    expect(isOpenCodePresetKey('opencode-go')).toBe(true)
-    expect(isOpenCodePresetKey('opencode-zen')).toBe(true)
-    expect(isOpenCodePresetKey('openrouter')).toBe(false)
-
-    const goModels = getOpenCodeStaticModelsForPreset('opencode-go')
-    const zenModels = getOpenCodeStaticModelsForPreset('opencode-zen')
-
-    expect(goModels.map(m => m.id)).toContain('glm-5.2')
-    expect(goModels.map(m => m.id)).toContain('minimax-m3')
-    expect(zenModels.map(m => m.id)).toContain('claude-sonnet-4-6')
-    expect(zenModels.map(m => m.id)).toContain('deepseek-v4-pro')
-  })
-
-  it('keeps the full OpenCode catalog for submit while defaulting to GLM and flash', () => {
-    const models = getOpenCodeStaticModelsForPreset('opencode-go')
-    const defaults = resolveOpenCodeDefaultModels(models)
-    const modelIds = getOpenCodeModelIdsForSubmit(models)
-
-    expect(defaults.best).toBe('glm-5.2')
-    expect(defaults.default_).toBe('glm-5.2')
-    expect(defaults.cheap).toBe('deepseek-v4-flash')
-    expect(modelIds).toContain('glm-5.2')
-    expect(modelIds).toContain('deepseek-v4-flash')
-    expect(modelIds.length).toBeGreaterThan(3)
-    expect(new Set(modelIds).size).toBe(modelIds.length)
   })
 })

@@ -1,3 +1,4 @@
+import { ComposeAgentBackend } from '../../agent-compose/agent.ts';
 /**
  * Agent Factory
  *
@@ -164,6 +165,7 @@ export function createBackendFromResolvedContext(args: {
   providerOptions?: BackendProviderOptions;
 }): AgentBackend {
   const { context, coreConfig, hostRuntime, providerOptions } = args;
+  if (context.connection?.compose) return new ComposeAgentBackend({ ...coreConfig, provider: 'pi', model: context.resolvedModel, connectionSlug: context.connection.slug }, context.connection.compose);
   const { driver, resolvedPaths } = resolveDriverRuntime(context.provider, hostRuntime);
 
   const buildArgs = {

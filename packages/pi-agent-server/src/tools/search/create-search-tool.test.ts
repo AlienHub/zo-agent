@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { validateToolArguments } from '@earendil-works/pi-ai';
 import { createSearchTool } from './create-search-tool.ts';
 import type { WebSearchProvider } from './types.ts';
 
@@ -18,6 +19,25 @@ describe('createSearchTool', () => {
     expect(tool.description).toContain('Search the web');
   });
 
+  it('validates arguments through the SDK TypeBox build (coercion + required checks)', () => {
+    const provider: WebSearchProvider = {
+      name: 'Mock',
+      async search() {
+        return [];
+      },
+    };
+    const tool = createSearchTool(provider);
+    const call = (args: unknown) =>
+      validateToolArguments(tool as any, { type: 'toolCall', id: 'call-1', name: tool.name, arguments: args } as any);
+
+    // The SDK only coerces model-emitted argument types (e.g. "3" -> 3) for schemas
+    // built with its own TypeBox; a schema from a second TypeBox copy would be
+    // validated strictly and reject this call instead.
+    expect(call({ query: 'craft', count: '3' })).toEqual({ query: 'craft', count: 3 });
+    expect(() => call({ count: 3 })).toThrow(/Validation failed/);
+    expect(() => call({ query: 'craft', count: 99 })).toThrow(/Validation failed/);
+  });
+
   it('clamps count to [1, 10] and formats results', async () => {
     let capturedCount = 0;
     const provider: WebSearchProvider = {
@@ -32,7 +52,7 @@ describe('createSearchTool', () => {
     const result = await tool.execute('tool-1', { query: 'craft', count: 99 });
 
     expect(capturedCount).toBe(10);
-    expect(result.details?.isError).toBeUndefined();
+    expect(result.isError).toBeUndefined();
     expect(result.content[0]?.type).toBe('text');
     expect((result.content[0] as any).text).toContain('(via MockProvider)');
   });
@@ -55,7 +75,7 @@ describe('createSearchTool', () => {
     const tool = createSearchTool(provider, fallbackProvider);
     const result = await tool.execute('tool-2', { query: 'craft', count: 5 });
 
-    expect(result.details?.isError).toBeUndefined();
+    expect(result.isError).toBeUndefined();
     expect((result.content[0] as any).text).toContain('automatically fell back to DuckDuckGo');
     expect((result.content[0] as any).text).toContain('401 missing scope');
     expect((result.content[0] as any).text).toContain('https://fallback.example');
@@ -79,9 +99,38 @@ describe('createSearchTool', () => {
     const tool = createSearchTool(provider, fallbackProvider);
     const result = await tool.execute('tool-3', { query: 'craft', count: -1 });
 
-    expect(result.details?.isError).toBe(true);
+    expect(result.isError).toBe(true);
     expect((result.content[0] as any).text).toContain('primary (OpenAI) failed');
     expect((result.content[0] as any).text).toContain('fallback (DuckDuckGo) failed');
+  });
+
+  it('truncates oversized provider errors in the tool result', async () => {
+    const hugePrimary = `primary detail ${'x'.repeat(5_000)}`;
+    const hugeFallback = `fallback detail ${'y'.repeat(5_000)}`;
+    const provider: WebSearchProvider = {
+      name: 'OpenAI',
+      async search() {
+        throw new Error(hugePrimary);
+      },
+    };
+
+    const fallbackProvider: WebSearchProvider = {
+      name: 'DuckDuckGo',
+      async search() {
+        throw new Error(hugeFallback);
+      },
+    };
+
+    const tool = createSearchTool(provider, fallbackProvider);
+    const result = await tool.execute('tool-5', { query: 'craft' });
+
+    const text = (result.content[0] as any).text as string;
+    expect(result.isError).toBe(true);
+    expect(text).toContain('primary detail');
+    expect(text).toContain('fallback detail');
+    expect(text).toContain('…');
+    // Both messages capped at 400 chars — the combined result stays compact.
+    expect(text.length).toBeLessThan(1_000);
   });
 
   it('does not recurse fallback when provider is already fallback provider', async () => {
@@ -95,7 +144,7 @@ describe('createSearchTool', () => {
     const tool = createSearchTool(ddgProvider, ddgProvider);
     const result = await tool.execute('tool-4', { query: 'craft' });
 
-    expect(result.details?.isError).toBe(true);
+    expect(result.isError).toBe(true);
     expect((result.content[0] as any).text).toContain('Search failed');
     expect((result.content[0] as any).text).toContain('ddg boom');
   });

@@ -2,6 +2,8 @@
  * Message types for conversations
  */
 
+import type { ContextUsageSnapshot } from './context-usage.ts';
+
 /**
  * Message roles for display (runtime)
  */
@@ -310,8 +312,8 @@ export interface Message {
   hidden?: boolean;
   // Turn ID: Correlation ID from the API's message.id, groups all messages in an assistant turn
   turnId?: string;
-  // Status type for special status messages (e.g., compacting)
-  statusType?: 'compacting' | 'compaction_complete';
+  // Status type for special status messages (retrying is transient renderer state)
+  statusType?: 'compacting' | 'compaction_complete' | 'retrying';
   // Info level for info messages (determines icon/color)
   infoLevel?: 'info' | 'warning' | 'error' | 'success';
   // Error-specific fields (for typed errors with diagnostics)
@@ -403,8 +405,8 @@ export interface StoredMessage {
   // Turn grouping - critical for TurnCard rendering after reload
   isIntermediate?: boolean;
   turnId?: string;
-  // Status type for compaction messages (persisted for reload)
-  statusType?: 'compacting' | 'compaction_complete';
+  // Status type (retry progress is not persisted by the session manager)
+  statusType?: 'compacting' | 'compaction_complete' | 'retrying';
   // Info level for info messages (persisted for reload)
   infoLevel?: 'info' | 'warning' | 'error' | 'success';
   // Error display fields
@@ -472,6 +474,9 @@ export interface TokenUsage {
   costUsd: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  contextWindow?: number;
+  /** Current occupancy, separate from cumulative/billable counters. */
+  contextUsage?: ContextUsageSnapshot;
 }
 
 /**
@@ -548,6 +553,13 @@ export interface TypedError {
 export type PermissionRequestType = 'bash' | 'file_write' | 'mcp_mutation' | 'api_mutation' | 'admin_approval';
 
 /**
+ * What a permission prompt's action does, as judged by the decision model
+ * (opt-in, `riskBadges`). Informational badges only: they never change the
+ * prompt or its outcome.
+ */
+export type PermissionRisk = 'deletes' | 'sends' | 'publishes' | 'credentials' | 'system' | 'spends';
+
+/**
  * Permission request from agent (e.g., bash command approval)
  */
 export interface PermissionRequest {
@@ -572,6 +584,10 @@ export interface PermissionRequest {
   commandHash?: string;
   /** Approval validity window */
   approvalTtlSeconds?: number;
+  /** Decision-model risk badges (opt-in); absent when the feature is off or unsure */
+  risks?: PermissionRisk[];
+  /** `false` when "Always Allow" would remember nothing (e.g. Guarded-mode prompts): the button is hidden */
+  canRemember?: boolean;
 }
 
 /**
@@ -586,6 +602,13 @@ export interface AgentEventUsage {
   costUsd?: number;
   /** Model's context window size in tokens (from SDK modelUsage) */
   contextWindow?: number;
+  /**
+   * Totals for the backend's whole session so far (Claude SDK `total_cost_usd` and `modelUsage`,
+   * subagents included). They grow across turns and resumes and restart at /clear or a new SDK
+   * session, so consumers add the change since the last totals instead of summing; when present
+   * they replace `costUsd`/`outputTokens` for cumulative accounting.
+   */
+  runningTotals?: { costUsd: number; outputTokens: number };
 }
 
 /**
@@ -593,8 +616,12 @@ export interface AgentEventUsage {
  * turnId: Correlation ID from the API's message.id, groups all events in an assistant turn
  */
 export type AgentEvent =
+  // Failed assistant output is discarded before a retry can produce more text.
+  | { type: 'text_discard'; turnId: string }
+  | { type: 'retry'; phase: 'backoff'; message: string }
+  | { type: 'retry'; phase: 'active' | 'end' }
   | { type: 'status'; message: string }
-  | { type: 'info'; message: string }
+  | { type: 'info'; message: string; compactionTrigger?: 'manual' | 'auto' }
   | { type: 'text_delta'; text: string; turnId?: string; parentToolUseId?: string }
   | { type: 'text_complete'; text: string; isIntermediate?: boolean; turnId?: string; parentToolUseId?: string; sdkMessageId?: string }
   | { type: 'pi_turn_anchor'; sdkMessageId: string; sdkTurnAnchor: string }
@@ -619,15 +646,19 @@ export type AgentEvent =
   | { type: 'typed_error'; error: TypedError }
   | { type: 'complete'; usage?: AgentEventUsage }
   | { type: 'working_directory_changed'; workingDirectory: string }
-  | { type: 'task_backgrounded'; toolUseId: string; taskId: string; intent?: string; turnId?: string; kind?: 'workflow'; workflowId?: string }
+  | { type: 'task_backgrounded'; toolUseId: string; taskId: string; intent?: string; turnId?: string; kind?: 'workflow' | 'task'; workflowId?: string }
   | { type: 'shell_backgrounded'; toolUseId: string; shellId: string; intent?: string; command?: string; turnId?: string }
   | { type: 'task_progress'; toolUseId: string; elapsedSeconds: number; turnId?: string }
-  | { type: 'task_completed'; taskId: string; status: 'completed' | 'failed' | 'stopped'; outputFile?: string; summary?: string; turnId?: string }
+  /** What a running background task of the session's own agent is doing (SDK `task_progress`). */
+  | { type: 'task_activity'; taskId: string; toolUseId?: string; /** One-line, model-generated status ("Analyzing the auth module") when the SDK has one */ summary?: string; lastToolName?: string; toolUses?: number; turnId?: string }
+  | { type: 'task_completed'; taskId: string; status: 'completed' | 'failed' | 'stopped'; outputFile?: string; summary?: string; turnId?: string; toolUseId?: string; /** The session's own agent started it (a top-level tool call), not a subagent. */ launchedHere?: boolean }
   | { type: 'workflow_agent_completed'; workflowId: string; agentId: string; turnId?: string }
   | { type: 'shell_killed'; shellId: string; turnId?: string }
   | { type: 'source_activated'; sourceSlug: string; originalMessage: string }
   | { type: 'usage_update'; usage: Pick<AgentEventUsage, 'inputTokens' | 'contextWindow'> }
-  | { type: 'steer_undelivered'; message: string };
+  | { type: 'context_usage'; contextUsage: ContextUsageSnapshot }
+  | { type: 'compaction_failed' }
+  | { type: 'steer_undelivered'; message: string; messageId?: string };
 
 /**
  * Generate a unique message ID

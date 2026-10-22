@@ -55,6 +55,8 @@ export interface SessionScopedToolCallbacks {
   setSessionLabelsFn?: (sessionId: string | undefined, labels: string[]) => void | Promise<void>;
   /** Set status on a session (defaults to current). */
   setSessionStatusFn?: (sessionId: string | undefined, status: string) => void | Promise<void>;
+  /** Archive (archived=true) or unarchive (archived=false) a session by ID. */
+  archiveSessionFn?: (sessionId: string, archived: boolean) => void | Promise<void>;
   /** Get detailed info about a session (defaults to current). */
   getSessionInfoFn?: (sessionId?: string) => import('@craft-agent/session-tools-core').SessionInfo | null;
   /** List sessions in the workspace with pagination. */
@@ -81,6 +83,32 @@ export interface SessionScopedToolCallbacks {
   getMessagingBindingsFn?: (sessionId: string) => Array<{ platform: string; channelId: string; threadId?: number; channelName?: string; enabled: boolean }>;
   /** Unbind messaging channels from a session. Returns count of removed bindings. */
   unbindMessagingChannelFn?: (sessionId: string, platform?: string) => number;
+  /** Create a Craft Agents Task (board card + task.yaml + orchestrator session) without running it. */
+  createTaskFn?: (
+    input: import('@craft-agent/session-tools-core').CreateTaskInput
+  ) => Promise<import('@craft-agent/session-tools-core').CreateTaskResult>;
+  /** Append a dated note to the session's project MEMORY.md (project_memory_append). */
+  appendProjectMemoryFn?: (
+    input: import('@craft-agent/session-tools-core').ProjectMemoryAppendInput
+  ) => Promise<import('@craft-agent/session-tools-core').ProjectMemoryAppendResult>;
+  /**
+   * Pages tools (list/get/create/update/write data/delete) — grouped in one
+   * object because the six operations always ship together. Wired by
+   * SessionManager to the invoking session's workspace.
+   */
+  pages?: import('@craft-agent/session-tools-core').PagesToolCallbacks;
+  /**
+   * MCP source resources & prompts tools (source_list_resources/read_resource/
+   * list_prompts/get_prompt). Wired by SessionManager to the session's MCP pool,
+   * read at call time; only the session's enabled, connected sources are reachable.
+   */
+  mcpSources?: import('@craft-agent/session-tools-core').McpSourceToolCallbacks;
+  /**
+   * Decision-layer callback for the `decide` tool (Jev / System One). Wired by
+   * SessionManager from `@craft-agent/shared/decisions`; gating (Settings switch,
+   * feature toggle, key) happens inside the callback at call time.
+   */
+  decide?: import('@craft-agent/session-tools-core').DecisionToolCallbacks;
   /** Materialize a coordinate-free Excalidraw graph in a DOM-capable backend. */
   materializeCanvasFn?: (
     graph: import('@craft-agent/session-tools-core').ExcalidrawGraph
@@ -88,6 +116,7 @@ export interface SessionScopedToolCallbacks {
   /** Notify renderers that a session-owned resource file changed. */
   notifyResourceUpdatedFn?: (path: string) => void | Promise<void>;
 }
+
 
 // Registry of callbacks keyed by sessionId
 const sessionScopedToolCallbackRegistry = new Map<string, SessionScopedToolCallbacks>();

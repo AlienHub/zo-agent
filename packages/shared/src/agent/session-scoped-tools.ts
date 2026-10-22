@@ -30,13 +30,14 @@ import {
   // Types
   type ToolResult,
   type AuthRequest,
+  type SessionToolFilterOptions,
 } from '@craft-agent/session-tools-core';
 import { createLLMTool, type LLMQueryRequest, type LLMQueryResult } from './llm-tool.ts';
 import { createSpawnSessionTool, type SpawnSessionFn } from './spawn-session-tool.ts';
 import { createBrowserTools, type BrowserPaneFns } from './browser-tools.ts';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
-import { getBrowserToolEnabled, getSensitiveContextProtectionSettings } from '../config/storage.ts';
-import { formatSensitiveProtectionNotice, guardToolResult, sensitiveAuditFilePath, writeSensitiveAuditEntry } from './guards/sensitive-context/index.ts';
+import { getBrowserToolEnabled } from '../config/storage.ts';
+import { isDecisionFeatureActive } from '../decisions/resolve.ts';
 
 // Re-export types for backward compatibility
 export type {
@@ -151,59 +152,6 @@ export function isPathInPlansDir(path: string, workspacePath: string, sessionId:
 /**
  * Convert shared ToolResult to SDK format
  */
-function protectSessionToolResult(
-  sessionId: string,
-  workspaceRootPath: string,
-  toolName: string,
-  args: Record<string, unknown>,
-  result: ToolResult,
-): ToolResult {
-  const text = result.content.map(c => c.text).join('\n');
-  if (!text) return result;
-
-  let config;
-  try {
-    config = getSensitiveContextProtectionSettings();
-  } catch {
-    config = undefined;
-  }
-
-  const guarded = guardToolResult({
-    sessionId,
-    toolName: `mcp__session__${toolName}`,
-    toolInput: args,
-    resultText: text,
-    permissionMode: 'ask',
-    sourceSlug: 'session',
-    workingDirectory: workspaceRootPath,
-    config,
-  });
-
-  writeSensitiveAuditEntry({
-    auditFilePath: sensitiveAuditFilePath(getSessionPath(workspaceRootPath, sessionId)),
-    auditEnabled: config?.audit?.enabled !== false,
-    sessionId,
-    toolName: `mcp__session__${toolName}`,
-    sourceSlug: 'session',
-    action: guarded.action,
-    policyMode: guarded.policyMode,
-    findings: guarded.findings,
-  });
-
-  if (guarded.action === 'allow') {
-    return result;
-  }
-  return {
-    ...result,
-    content: [{
-      type: 'text',
-      text: guarded.action === 'block'
-        ? guarded.reason
-        : `${formatSensitiveProtectionNotice(guarded)}${guarded.text ?? text}`,
-    }],
-  };
-}
-
 function convertResult(result: ToolResult): { content: Array<{ type: 'text'; text: string }>; isError?: boolean } {
   return {
     content: result.content.map(c => ({ type: 'text' as const, text: c.text })),
@@ -214,6 +162,9 @@ function convertResult(result: ToolResult): { content: Array<{ type: 'text'; tex
 // ============================================================
 // Cache for Session-Scoped Tools
 // ============================================================
+
+/** Profile inputs for the session tool set (see `getSessionToolDefs` in session-tools-core). */
+export type SessionToolProfileOptions = Pick<SessionToolFilterOptions, 'profile' | 'hasEnabledSources' | 'hasProject'>;
 
 // Cache tools by session to avoid recreating them on every query.
 // We cache the tools array (expensive to build) but NOT the MCP server wrapper,
@@ -271,9 +222,14 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
 export function getSessionScopedTools(
   sessionId: string,
   workspaceRootPath: string,
-  workspaceId?: string
+  workspaceId?: string,
+  profileOptions?: SessionToolProfileOptions,
 ): ReturnType<typeof createSdkMcpServer> {
-  const cacheKey = `${sessionId}::${workspaceRootPath}`;
+  // A coding session's tool set depends on its profile inputs, so they are part of its key.
+  // The default key is unchanged: the default tool set does not depend on them.
+  const cacheKey = profileOptions?.profile === 'coding'
+    ? `${sessionId}::${workspaceRootPath}::coding:${profileOptions.hasEnabledSources ? 1 : 0}:${profileOptions.hasProject ? 1 : 0}`
+    : `${sessionId}::${workspaceRootPath}`;
 
   // Return cached tools if available, but always create a fresh MCP server wrapper
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -306,47 +262,61 @@ export function getSessionScopedTools(
       const def = SESSION_TOOL_REGISTRY.get(name)!;
       return tool(name, TOOL_DESCRIPTIONS[name] || def.description, schema, async (args: any) => {
         const result = await def.handler!(ctx, args);
-        return convertResult(protectSessionToolResult(sessionId, workspaceRootPath, name, args, result));
+        return convertResult(result);
       }, def.readOnly ? { annotations: { readOnlyHint: true } } : undefined);
     }
 
     // Ensure backend-mode tool wiring is in sync with core metadata.
     assertClaudeBackendSessionToolParity();
 
-    // Create tools from the canonical registry — all tools with handlers.
-    // Tool visibility is centrally filtered in session-tools-core to avoid backend drift.
-    tools = getSessionToolDefs({ includeDeveloperFeedback: FEATURE_FLAGS.developerFeedback })
-      .filter(def => def.handler !== null) // Skip backend-specific tools (call_llm)
+    // Tool visibility is centrally filtered in session-tools-core to avoid backend drift:
+    // feature flags, the "Built-in browser" setting and the agent profile (coding mode).
+    const defs = getSessionToolDefs({
+      includeDeveloperFeedback: FEATURE_FLAGS.developerFeedback,
+      // `decide` is advertised only while the decision layer is on; the tool list
+      // is built per agent, so toggling the setting applies to new sessions.
+      includeDecide: isDecisionFeatureActive('decideTool'),
+      // Users with external browser tools (Playwright, Puppeteer, etc.) can disable the built-in one.
+      includeBrowser: getBrowserToolEnabled(),
+      ...profileOptions,
+    });
+    const visible = new Set(defs.map(def => def.name));
+
+    // Registry tools — all tools with handlers
+    tools = defs
+      .filter(def => def.handler !== null) // Backend-specific tools are added below
       .map(def => registryTool(def.name, def.inputSchema.shape));
 
     // Add call_llm — backend-specific (not in registry handler)
-    const sessionPath = getSessionPath(workspaceRootPath, sessionId);
-    tools.push(
-      createLLMTool({
-        sessionId,
-        sessionPath,
-        getQueryFn: () => {
-          const callbacks = getSessionScopedToolCallbacks(sessionId);
-          return callbacks?.queryFn;
-        },
-      }),
-    );
+    if (visible.has('call_llm')) {
+      const sessionPath = getSessionPath(workspaceRootPath, sessionId);
+      tools.push(
+        createLLMTool({
+          sessionId,
+          sessionPath,
+          getQueryFn: () => {
+            const callbacks = getSessionScopedToolCallbacks(sessionId);
+            return callbacks?.queryFn;
+          },
+        }),
+      );
+    }
 
     // Add spawn_session — backend-specific (not in registry handler)
-    tools.push(
-      createSpawnSessionTool({
-        sessionId,
-        getSpawnSessionFn: () => {
-          const callbacks = getSessionScopedToolCallbacks(sessionId);
-          return callbacks?.spawnSessionFn;
-        },
-      }),
-    );
+    if (visible.has('spawn_session')) {
+      tools.push(
+        createSpawnSessionTool({
+          sessionId,
+          getSpawnSessionFn: () => {
+            const callbacks = getSessionScopedToolCallbacks(sessionId);
+            return callbacks?.spawnSessionFn;
+          },
+        }),
+      );
+    }
 
     // Add browser_* tools — backend-specific (requires BrowserPaneManager in Electron)
-    // Gated by the "Built-in browser" setting so users with external browser tools
-    // (Playwright, Puppeteer, etc.) can disable the built-in one.
-    if (getBrowserToolEnabled()) {
+    if (visible.has('browser_tool')) {
       tools.push(
         ...createBrowserTools({
           sessionId,

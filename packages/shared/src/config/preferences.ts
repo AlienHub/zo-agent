@@ -5,6 +5,7 @@ import { CONFIG_DIR } from './paths.ts';
 import { readJsonFileSync } from '../utils/files.ts';
 import { i18n, SUPPORTED_LANGUAGE_CODES } from '../i18n/index.ts';
 import { LOCALE_REGISTRY, type LanguageCode } from '../i18n/registry.ts';
+import { sanitizePromptBody, sanitizePromptLine } from '../prompts/prompt-sanitize.ts';
 
 export interface UserLocation {
   city?: string;
@@ -39,6 +40,12 @@ export interface UserPreferences {
    * Not user-editable; not exposed via the `update_user_preferences` tool.
    */
   uiLanguage?: LanguageCode;
+  /**
+   * Internal: default zoom for app windows in percent (Appearance → Default zoom).
+   * Maintained only by the Electron main process (`zoom:setDefault` IPC); a per-device
+   * display setting, so it lives here and never on a remote server. Not exposed to the agent.
+   */
+  defaultZoomLevel?: number;
   // When the preferences were last updated
   updatedAt?: number;
 }
@@ -114,6 +121,18 @@ export function setPersistedUiLanguage(code: LanguageCode): void {
   savePreferences({ ...current, uiLanguage: code });
 }
 
+/** The stored default zoom percentage, if any (callers snap it to the offered choices). */
+export function getPersistedDefaultZoomLevel(): number | undefined {
+  const level = loadPreferences().defaultZoomLevel;
+  return typeof level === 'number' && Number.isFinite(level) ? level : undefined;
+}
+
+export function setPersistedDefaultZoomLevel(level: number): void {
+  const current = loadPreferences();
+  if (current.defaultZoomLevel === level) return;
+  savePreferences({ ...current, defaultZoomLevel: level });
+}
+
 /**
  * Native-language name to request for AI-generated session titles, or
  * `undefined` to let the model follow the conversation's own language.
@@ -146,32 +165,37 @@ export function formatPreferencesForPrompt(): string {
     return '';
   }
 
-  const lines: string[] = ['## User Preferences - User has explicitly set these preferences, so adhere to them', ''];
+  const tags = ['user_preferences'] as const;
+  const lines: string[] = [
+    '<user_preferences>',
+    'The user/app supplied these preferences. Follow them unless they conflict with higher-priority system, developer, tool, safety, or permission instructions.',
+    '',
+  ];
 
   if (prefs.name) {
-    lines.push(`- Name: ${prefs.name}`);
+    lines.push(`- Name: ${sanitizePromptLine(prefs.name, tags)}`);
   }
 
   if (prefs.timezone) {
-    lines.push(`- Timezone: ${prefs.timezone}`);
+    lines.push(`- Timezone: ${sanitizePromptLine(prefs.timezone, tags)}`);
   }
 
   if (prefs.location) {
     const loc = prefs.location;
-    const parts = [loc.city, loc.region, loc.country].filter(Boolean);
+    const parts = [loc.city, loc.region, loc.country].filter(Boolean).map((part) => sanitizePromptLine(part!, tags));
     if (parts.length > 0) {
       lines.push(`- Location: ${parts.join(', ')}`);
     }
   }
 
-  // Always include language so the AI knows which language to respond in.
-  lines.push(`- Preferred language: ${langName}`);
+  // UI language is app state, not necessarily an explicitly saved user note.
+  lines.push(`- Preferred response language (from app UI): ${sanitizePromptLine(langName, tags)}`);
 
   if (prefs.notes) {
-    lines.push('', '### Notes about this user', prefs.notes);
+    lines.push('', '### Notes about this user', sanitizePromptBody(prefs.notes, tags));
   }
 
-  lines.push('');
+  lines.push('</user_preferences>', '');
   return lines.join('\n');
 }
 

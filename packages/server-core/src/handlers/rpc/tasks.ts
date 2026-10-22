@@ -9,10 +9,11 @@
  *   tasks:get      — spec + (optional) active run-state
  *   tasks:list     — task slugs with a task.yaml
  *
- * The legacy `tasks:getOutput` (background-task remnant) is handled in sessions.ts
- * and intentionally left untouched; retiring it is a separate cleanup.
+ * Background-task output and stop (the composer's task chips) are session channels in sessions.ts
+ * (`sessions:getBackgroundTaskOutput`, `sessions:stopBackgroundTask`).
  */
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
+import type { ThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
 import type {
   TaskCreateRequest,
   TaskCreateResult,
@@ -44,7 +45,11 @@ import {
 import { createLogger } from '@craft-agent/shared/utils'
 import { pushTyped, type RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
-import { TaskRunner } from '../../tasks'
+import type { ISessionManager } from '../session-manager-interface'
+import { TaskRunner, createTaskFromSpec, finishTaskOrchestrator } from '../../tasks'
+import { buildTaskVerdictDecider } from '../../decisions/task-verdict'
+import { buildNodeOutcomeClassifier } from '../../decisions/turn-outcome'
+import { buildRepairScopePicker } from '../../decisions/task-repairs'
 
 const tasksLog = createLogger('tasks-generate')
 
@@ -78,7 +83,63 @@ function toValidationDto(result: ReturnType<typeof parseTaskYaml>): TaskValidati
   }
 }
 
-const GENERATE_TIMEOUT_MS = 180_000
+// An authoring turn fails when it shows no activity (text, thinking, tools) for this long, or
+// when one attempt runs past the cap. A fixed 180 s limit cut off turns that were slow but
+// still writing. The editor's fallback timer (TaskEditor GENERATE_CLIENT_TIMEOUT_MS) must stay
+// above MAX_GENERATE_ATTEMPTS × GENERATE_ATTEMPT_MAX_MS.
+export const GENERATE_IDLE_TIMEOUT_MS = 90_000
+export const GENERATE_ATTEMPT_MAX_MS = 300_000
+
+/**
+ * Send a turn and wait for its reply. Subscribes BEFORE sending, so a fast turn can't complete
+ * before we listen. Fails a turn that shows no activity for `idleMs` and any turn running past
+ * `maxMs`, and a stopped or failed turn at once. Resolves to that turn's reply only, never an
+ * earlier one.
+ */
+export function waitForTurnReply(
+  sessions: Pick<ISessionManager, 'onSessionComplete' | 'onSessionActivity'>,
+  sessionId: string,
+  send: () => Promise<void> | void,
+  opts: { idleMs?: number; maxMs?: number } = {},
+): Promise<string> {
+  const idleMs = opts.idleMs ?? GENERATE_IDLE_TIMEOUT_MS
+  const maxMs = opts.maxMs ?? GENERATE_ATTEMPT_MAX_MS
+  return new Promise<string>((resolve, reject) => {
+    let settled = false
+    let idleTimer: ReturnType<typeof setTimeout> | undefined
+    const cleanups: Array<() => void> = []
+    const finish = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      for (const cleanup of cleanups) cleanup()
+      clearTimeout(idleTimer)
+      fn()
+    }
+    const armIdleTimer = () => {
+      clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => finish(() => reject(new Error(`Task generation stalled (no progress for ${Math.round(idleMs / 1000)} s)`))), idleMs)
+    }
+    cleanups.push(sessions.onSessionActivity(sessionId, armIdleTimer))
+    cleanups.push(sessions.onSessionComplete((evt) => {
+      if (evt.sessionId !== sessionId) return
+      if (evt.reason !== 'complete') {
+        finish(() => reject(new Error(evt.reason === 'error' ? 'The authoring turn failed' : 'The authoring turn was stopped')))
+        return
+      }
+      finish(() => resolve(evt.finalText ?? ''))
+    }))
+    armIdleTimer()
+    const capTimer = setTimeout(() => finish(() => reject(new Error('Task generation timed out'))), maxMs)
+    cleanups.push(() => clearTimeout(capTimer))
+    void Promise.resolve()
+      .then(send)
+      .catch((err: unknown) => finish(() => reject(err instanceof Error ? err : new Error(String(err)))))
+  })
+}
+
+// Authoring a short YAML needs little thinking. Without this the turn ran at the workspace's
+// default level (often max), thought for minutes before its first token and hit the timeout.
+const GENERATE_THINKING_LEVEL: ThinkingLevel = 'medium'
 
 // One initial generation plus up to one feedback-driven repair turn. Bounded so a model
 // that keeps emitting invalid specs can't loop forever; the last attempt is returned as-is.
@@ -104,7 +165,19 @@ export function registerTasksHandlers(server: RpcServer, deps: HandlerDeps): voi
     let runner = runners.get(workspaceId)
     if (!runner) {
       const ws = workspaceOrThrow(workspaceId)
-      runner = new TaskRunner({ host: deps.sessionManager, workspaceId: ws.id, workspaceRoot: ws.rootPath })
+      runner = new TaskRunner({
+        host: deps.sessionManager,
+        workspaceId: ws.id,
+        workspaceRoot: ws.rootPath,
+        // Decision model (Jev) reads verdicts out of replies without a VERDICT line; gated per call,
+        // `null` when the layer is off → the runner re-asks exactly as before.
+        decide: buildTaskVerdictDecider(),
+        // Decision model reads how a child's turn ended; a child that asked for input or gave up
+        // is failed (retry / needs-review) instead of marked done. `null` → marked done as before.
+        classifyNodeOutcome: buildNodeOutcomeClassifier(),
+        // Decision model narrows a FAIL without named subtasks to the ones its reason implicates.
+        pickRepairNodes: buildRepairScopePicker(),
+      })
       runners.set(workspaceId, runner)
     }
     return runner
@@ -129,21 +202,11 @@ export function registerTasksHandlers(server: RpcServer, deps: HandlerDeps): voi
     // Single choke point for ALL orchestrator paths (attach / adopt / fresh): apply the reserved
     // "Task" label (surfacing its resolved id so the renderer can navigate to the label filter)
     // and enable the spec's sources on the orchestrator session. Fail-soft — neither a label nor
-    // a sources problem may fail task creation.
+    // a sources problem may fail task creation. The body lives in finishTaskOrchestrator
+    // (../../tasks/create-task) so the create_task session tool shares it verbatim.
     const finish = async (orchestratorSessionId: string): Promise<TaskCreateResult> => {
-      const applied = await deps.sessionManager
-        .applyTaskLabel(orchestratorSessionId)
-        .catch((err: unknown) => {
-          tasksLog.warn('applyTaskLabel failed for orchestrator', { orchestratorSessionId, err })
-          return undefined
-        })
-      if (spec.sources?.length) {
-        await Promise.resolve(deps.sessionManager.setSessionSources(orchestratorSessionId, spec.sources))
-          .catch((err: unknown) => {
-            tasksLog.warn('setSessionSources failed for orchestrator', { orchestratorSessionId, err })
-          })
-      }
-      return { slug: spec.id, orchestratorSessionId, validation, taskLabelId: applied?.labelId }
+      const setup = await finishTaskOrchestrator(deps.sessionManager, orchestratorSessionId, spec)
+      return { slug: spec.id, orchestratorSessionId, validation, taskLabelId: setup.taskLabelId }
     }
 
     // Edit-mode bind: the user saved this spec onto an existing, visible tile (e.g. a quick-add
@@ -186,23 +249,11 @@ export function registerTasksHandlers(server: RpcServer, deps: HandlerDeps): voi
       }
     }
 
-    const orchestrator = await deps.sessionManager.createSession(workspaceId, {
-      name: spec.title,
-      projectId: spec.project,
-      sessionStatus: 'todo',
-      // Stable linkage: this session orchestrates task `spec.id` across all of its runs.
-      taskSlug: spec.id,
-      // Explicit cwd from the spec seeds the orchestrator; children inherit it at dispatch.
-      // Omitted → orchestrator falls back to the project/workspace default working directory.
-      ...(spec.cwd ? { workingDirectory: spec.cwd } : {}),
-      ...(spec.defaults?.model ? { model: spec.defaults.model } : {}),
-      ...(spec.defaults?.llmConnection ? { llmConnection: spec.defaults.llmConnection } : {}),
-      // Persisted task autonomy also seeds the orchestrator session (children read it via the runner).
-      ...(spec.defaults?.permissionMode ? { permissionMode: spec.defaults.permissionMode } : {}),
-    })
-    // createSession announces the orchestrator to the renderer by default, so its tile appears
-    // on the board immediately.
-    return finish(orchestrator.id)
+    // Fresh create — shared core with the create_task session tool. The spec was already saved
+    // above (all three paths persist first), so skip the core's save. createSession announces the
+    // orchestrator to the renderer by default, so its tile appears on the board immediately.
+    const created = await createTaskFromSpec(deps.sessionManager, workspaceId, ws.rootPath, spec, { save: false })
+    return { slug: created.slug, orchestratorSessionId: created.orchestratorSessionId, validation, taskLabelId: created.taskLabelId }
   })
 
   // tasks:generate — the persistent orchestrator session AUTHORS the task.yaml from a goal (#2).
@@ -246,32 +297,12 @@ export function registerTasksHandlers(server: RpcServer, deps: HandlerDeps): voi
       projectId: req.projectId,
       hasConnection: Boolean(req.llmConnection),
       permissionMode: req.permissionMode,
+      thinkingLevel: GENERATE_THINKING_LEVEL,
     })
 
-    // Send `prompt` to the orchestrator and await its next final turn. Subscribe BEFORE
-    // sending so a fast turn can't complete before we listen; a timeout keeps a hung turn
-    // from blocking forever.
     const askOrchestrator = (prompt: string) =>
-      new Promise<string>((resolve, reject) => {
-        let settled = false
-        let off: (() => void) | undefined
-        let timer: ReturnType<typeof setTimeout> | undefined
-        const finish = (fn: () => void) => {
-          if (settled) return
-          settled = true
-          off?.()
-          if (timer) clearTimeout(timer)
-          fn()
-        }
-        off = deps.sessionManager.onSessionComplete((evt) => {
-          if (evt.sessionId !== sessionId) return
-          const text = evt.finalText ?? deps.sessionManager.getSessionFinalText(sessionId) ?? ''
-          finish(() => resolve(text))
-        })
-        timer = setTimeout(() => finish(() => reject(new Error('Task generation timed out'))), GENERATE_TIMEOUT_MS)
-        void Promise.resolve(deps.sessionManager.sendMessage(sessionId, prompt))
-          .catch((err: unknown) => finish(() => reject(err instanceof Error ? err : new Error(String(err)))))
-      })
+      waitForTurnReply(deps.sessionManager, sessionId, () =>
+        deps.sessionManager.sendMessage(sessionId, prompt, undefined, undefined, { thinkingLevel: GENERATE_THINKING_LEVEL }))
 
     // Run the generate→repair loop in the background and push the result when done. Awaiting
     // here would re-introduce the synchronous-RPC-over-WS timeout this async path exists to avoid.
@@ -413,6 +444,9 @@ export function registerTasksHandlers(server: RpcServer, deps: HandlerDeps): voi
           result: entry.result,
           ...(entry.reason ? { reason: entry.reason } : {}),
           ...(entry.nodes?.length ? { nodes: entry.nodes } : {}),
+          // Provenance: a decision-model verdict must stay distinguishable from a parsed VERDICT line.
+          ...(entry.via ? { via: entry.via } : {}),
+          ...(typeof entry.confidence === 'number' ? { confidence: entry.confidence } : {}),
         })
       } else if (entry.kind === 'run-completed') {
         runStatus = 'completed'

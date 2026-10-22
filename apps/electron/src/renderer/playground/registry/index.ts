@@ -1,7 +1,9 @@
-import './excalidraw-assets'
 import type { ComponentEntry, CategoryGroup, Category } from './types'
 import { onboardingComponents } from './onboarding'
+import { workspaceComponents } from './workspaces'
 import { chatComponents } from './chat'
+import { chatHeaderComponents } from './chat-header'
+import { chatPanelComponents } from './chat-panel'
 import { turnCardComponents, fullscreenOverlayComponents } from './turn-card'
 import { turnCardModesComponents } from './turn-card-modes'
 import { messagesComponents } from './messages'
@@ -17,7 +19,6 @@ import { editPopoverComponents } from './edit-popover'
 import { automationComponents } from './automations'
 import { entityListComponents } from './entity-lists'
 import { browserUiComponents } from './browser-ui'
-import { artifactHostComponents } from './artifact-host'
 import { plannerComponents } from './planner'
 import { customShadowsComponents } from './custom-shadows'
 import { transportBannerComponents } from './transport-banner'
@@ -26,17 +27,22 @@ import { apiKeyInputComponents } from './api-key-input'
 import { messagingComponents } from './messaging'
 import { imageSupportComponents } from './image-support'
 import { mobileWebUIComponents } from './mobile-webui'
-import { filesPanelLayoutComponents } from './files-panel-layout'
-import { excalidrawComponents } from './excalidraw'
 import { kanbanComponents } from './kanban'
 import { taskEditorComponents } from './task-editor'
+import { primitivesComponents } from './primitives'
+import { chatStartersComponents } from './chat-starters'
 
 export * from './types'
 
 export const componentRegistry: ComponentEntry[] = [
+  ...primitivesComponents,
+  ...chatStartersComponents,
   ...mobileWebUIComponents,
   ...apiKeyInputComponents,
   ...onboardingComponents,
+  ...workspaceComponents,
+  ...chatHeaderComponents,
+  ...chatPanelComponents,
   ...chatComponents,
   ...turnCardComponents,
   ...turnCardModesComponents,
@@ -45,7 +51,6 @@ export const componentRegistry: ComponentEntry[] = [
   ...inputComponents,
   ...toastsComponents,
   ...slashCommandComponents,
-  ...excalidrawComponents,
   ...markdownComponents,
   ...iconComponents,
   ...oauthComponents,
@@ -56,7 +61,6 @@ export const componentRegistry: ComponentEntry[] = [
   ...editPopoverComponents,
   ...automationComponents,
   ...entityListComponents,
-  ...artifactHostComponents,
   ...browserUiComponents,
   ...plannerComponents,
   ...customShadowsComponents,
@@ -64,11 +68,10 @@ export const componentRegistry: ComponentEntry[] = [
   ...containerTransitionsComponents,
   ...messagingComponents,
   ...imageSupportComponents,
-  ...filesPanelLayoutComponents,
 ]
 
 export function getCategories(): CategoryGroup[] {
-  const categoryOrder: Category[] = ['Files Panel', 'Mobile WebUI', 'Automations', 'Onboarding', 'Agent Setup', 'Chat', 'Island', 'Artifact Host', 'Browser', 'Planner', 'Custom Shadows', 'Session List', 'Kanban', 'Entity Lists', 'Edit Popover', 'Turn Cards', 'TurnCard Modes', 'Fullscreen', 'Chat Messages', 'Chat Inputs', 'Toast Messages', 'Markdown', 'Icons', 'OAuth', 'Messaging']
+  const categoryOrder: Category[] = ['Primitives', 'Mobile WebUI', 'Automations', 'Onboarding', 'Agent Setup', 'Settings', 'Chat', 'Island', 'Browser', 'Planner', 'Custom Shadows', 'Session List', 'Kanban', 'Entity Lists', 'Edit Popover', 'Turn Cards', 'TurnCard Modes', 'Fullscreen', 'Chat Messages', 'Chat Inputs', 'Toast Messages', 'Markdown', 'Icons', 'OAuth', 'Messaging']
   const categoryMap = new Map<Category, ComponentEntry[]>()
 
   for (const entry of componentRegistry) {

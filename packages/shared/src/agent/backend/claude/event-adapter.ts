@@ -13,10 +13,12 @@
  */
 
 import type { SDKMessage, SDKAssistantMessageError } from '@anthropic-ai/claude-agent-sdk';
-import type { AgentEvent } from '@craft-agent/core/types';
+import type { AgentEvent, ContextUsageSnapshot } from '@craft-agent/core/types';
+import { contextAfterCompaction, contextFromClaude } from '../../context-usage.ts';
 import type { AgentError } from '../../errors.ts';
 import { BaseEventAdapter } from '../base-event-adapter.ts';
 import { ToolIndex, extractToolStarts, extractToolResults, isParentTaskTool, type ContentBlock } from '../../tool-matching.ts';
+import { classifyClaudeTaskNotification, classifyClaudeTaskProgress } from './task-notification.ts';
 
 /**
  * Callbacks injected by ClaudeAgent for operations that depend on agent state.
@@ -69,24 +71,11 @@ interface AssistantUsage {
   cache_creation_input_tokens: number;
 }
 
-/**
- * Shape of the SDK's `task_notification` system message.
- * The SDK doesn't export a type for this, so we define it locally
- * and validate fields before use to catch silent breakage.
- */
-interface TaskNotificationMessage {
-  type: 'system';
-  subtype: 'task_notification';
-  task_id: string;
-  status?: string;
-  output_file?: string;
-  summary?: string;
-  session_id?: string;
+/** SDK keep-alive progress for a long-running tool: `<tool_use_id>-heartbeat-<n>` under that tool. */
+export function isToolHeartbeat(progress: { tool_use_id: string; parent_tool_use_id: string | null }): boolean {
+  return /-heartbeat-\d+$/.test(progress.tool_use_id)
+    && (!progress.parent_tool_use_id || progress.tool_use_id.startsWith(`${progress.parent_tool_use_id}-heartbeat-`));
 }
-
-/** Valid terminal statuses for background tasks */
-const VALID_TASK_STATUSES = ['completed', 'failed', 'stopped'] as const;
-type TaskStatus = typeof VALID_TASK_STATUSES[number];
 
 export class ClaudeEventAdapter extends BaseEventAdapter {
   // Per-turn state (reset on each startTurn)
@@ -94,10 +83,20 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
   private emittedToolStarts = new Set<string>();
   private activeParentTools = new Set<string>();
   private pendingText: string | null = null;
+  private manualCompactionRequested = false;
+  private manualCompactionBoundarySeen = false;
 
   // Session-persistent state (survives across turns)
+  /**
+   * Tool calls made by the session's own agent (top-level, no parent tool use), and the tasks they
+   * started. Background-task completions are attributed through these: a subagent's own background
+   * work is not the session's to report. Bounded; oldest entries drop first.
+   */
+  private topLevelToolUseIds = new Set<string>();
+  private mainAgentTasks = new Map<string, { toolUseId: string; taskType?: string; description?: string; announced?: boolean }>();
   private lastAssistantUsage: AssistantUsage | null = null;
   private cachedContextWindow?: number;
+  private contextUsage?: ContextUsageSnapshot;
   private _sdkTools: string[] = [];
 
   private callbacks: ClaudeAdapterCallbacks;
@@ -117,11 +116,41 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
     this.activeParentTools = new Set();
     this.pendingText = null;
     this.lastAssistantUsage = null;
+    this.manualCompactionRequested = false;
+    this.manualCompactionBoundarySeen = false;
   }
 
   // ============================================================
   // Public API
   // ============================================================
+
+  /**
+   * Whether a background task was started by the session's own agent: its starting tool call (from
+   * the notification, or remembered from task_started) was a top-level one. False for a subagent's
+   * own tasks and for anything this adapter never saw start.
+   */
+  wasLaunchedByMainAgent(taskId: string, toolUseId?: string): boolean {
+    if (toolUseId) return this.topLevelToolUseIds.has(toolUseId);
+    return this.mainAgentTasks.has(taskId);
+  }
+
+  /** Called only for our explicit /compact command, after startTurn(). */
+  expectManualCompaction(): void {
+    this.manualCompactionRequested = true;
+  }
+
+  /** True from expectManualCompaction() until the next turn starts. */
+  isManualCompactionRequested(): boolean {
+    return this.manualCompactionRequested;
+  }
+
+  setContextUsage(snapshot: ContextUsageSnapshot): void {
+    this.contextUsage = snapshot;
+  }
+
+  getContextUsage(): ContextUsageSnapshot | undefined {
+    return this.contextUsage;
+  }
 
   /**
    * Convert an SDK message to AgentEvents.
@@ -245,6 +274,11 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
 
     // Track usage from non-sidechain assistant messages
     const isSidechain = (message as any).parent_tool_use_id !== null;
+    const structuredContextUsage = !isSidechain ? contextFromClaude((message as any).context_usage) : undefined;
+    if (structuredContextUsage) {
+      this.contextUsage = structuredContextUsage;
+      events.push({ type: 'context_usage', contextUsage: structuredContextUsage });
+    }
     if (!isSidechain && (message as any).message?.usage) {
       const usage = (message as any).message.usage;
       this.lastAssistantUsage = {
@@ -265,6 +299,20 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
           contextWindow: this.cachedContextWindow,
         },
       });
+
+      // Local command replies carry synthetic zero usage, not fresh occupancy.
+      // Never let those overwrite a compact boundary or the previous snapshot.
+      if (!this.manualCompactionRequested && !structuredContextUsage) {
+        const estimate = contextFromClaude({
+          totalTokens: currentInputTokens + (usage.output_tokens ?? 0),
+          rawMaxTokens: this.contextUsage?.limitTokens ?? this.cachedContextWindow,
+          isAutoCompactEnabled: this.contextUsage?.limitKind === 'compaction',
+        });
+        if (estimate) {
+          this.contextUsage = estimate;
+          events.push({ type: 'context_usage', contextUsage: estimate });
+        }
+      }
     }
 
     // Full assistant message with content blocks
@@ -280,6 +328,7 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
 
     // Stateless tool start extraction
     const sdkParentId = (message as any).parent_tool_use_id;
+    if (sdkParentId == null) this.rememberTopLevelToolUses(content as ContentBlock[]);
     const toolStartEvents = extractToolStarts(
       content as ContentBlock[],
       sdkParentId,
@@ -408,6 +457,18 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
         }
       }
 
+      if (isDetachedToolCallResult(toolUseResultValue)) {
+        // The SDK moved this call (WebFetch/WebSearch) to the background for a message the user
+        // sent mid-turn; its tool_result text is a model-directed placeholder, and the real
+        // result reaches the model later as a queued task notification Craft never sees.
+        for (const event of resultEvents) {
+          if (event.type === 'tool_result') {
+            event.result = DETACHED_TOOL_CALL_RESULT;
+            event.isError = false;
+          }
+        }
+      }
+
       events.push(...resultEvents);
     }
   }
@@ -430,8 +491,11 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
       });
     }
 
-    // Emit tool_start for tools discovered through progress events
-    if (!this.emittedToolStarts.has(progress.tool_use_id)) {
+    // Emit tool_start for tools discovered through progress events. Not for heartbeats: the SDK
+    // sends one every 30 s for a long-running tool (`<tool_use_id>-heartbeat-<n>`, parent = that
+    // tool) with nothing but elapsed time, and a tool_start for each would add a row that never
+    // finishes ("Running …").
+    if (!this.emittedToolStarts.has(progress.tool_use_id) && !isToolHeartbeat(progress)) {
       const progressBlocks: ContentBlock[] = [{
         type: 'tool_use' as const,
         id: progress.tool_use_id,
@@ -499,7 +563,24 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
       cacheCreationTokens: cacheCreation,
       costUsd: msg.total_cost_usd,
       contextWindow: primaryModelUsage?.contextWindow,
+      // `total_cost_usd` and `modelUsage` are running totals for the SDK session (subagents
+      // included), not this turn's spend; `usage` covers the main loop only.
+      runningTotals: {
+        costUsd: msg.total_cost_usd ?? 0,
+        outputTokens: modelUsageEntries.reduce((sum: number, entry: any) => sum + (entry?.outputTokens ?? 0), 0),
+      },
     };
+
+    if (this.manualCompactionRequested) {
+      // The installed CLI returns result(success, is_error:false) even for
+      // too-small/API-failed /compact commands. Only a correlated boundary
+      // proves success, and plan readiness waits until this terminal result.
+      if (this.manualCompactionBoundarySeen && msg.subtype === 'success' && !msg.is_error) {
+        events.push({ type: 'info', message: 'Compacted Conversation', compactionTrigger: 'manual' });
+      } else {
+        events.push({ type: 'compaction_failed' });
+      }
+    }
 
     if (msg.subtype === 'success') {
       events.push({ type: 'complete', usage });
@@ -526,30 +607,94 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
         this.callbacks.onDebug?.(`SDK init: captured ${this._sdkTools.length} tools`);
       }
     } else if (msg.subtype === 'compact_boundary') {
-      events.push({
-        type: 'info',
-        message: 'Compacted Conversation',
-      });
+      this.contextUsage = contextAfterCompaction(msg.compact_metadata?.post_tokens, this.contextUsage);
+      events.push({ type: 'context_usage', contextUsage: this.contextUsage });
+      if (this.manualCompactionRequested && msg.compact_metadata?.trigger === 'manual') {
+        this.manualCompactionBoundarySeen = true;
+      } else {
+        events.push({ type: 'info', message: 'Compacted Conversation', compactionTrigger: 'auto' });
+      }
     } else if (msg.subtype === 'status' && msg.status === 'compacting') {
       events.push({ type: 'status', message: 'Compacting conversation...' });
     } else if (msg.subtype === 'task_notification') {
-      const notification = msg as TaskNotificationMessage;
-      if (!notification.task_id) {
+      const classification = classifyClaudeTaskNotification(message);
+      if (classification.kind === 'missing-task-id') {
         this.callbacks.onDebug?.('[EventAdapter] task_notification missing task_id, skipping');
         return;
       }
-      const status: TaskStatus = VALID_TASK_STATUSES.includes(notification.status as TaskStatus)
-        ? (notification.status as TaskStatus)
-        : 'completed';
-      events.push({
-        type: 'task_completed',
-        taskId: notification.task_id,
-        status,
-        outputFile: notification.output_file,
-        summary: notification.summary,
-        turnId: this.currentTurnId || undefined,
-      });
+      if (classification.kind === 'valid') {
+        const { taskId, toolUseId } = classification.notification;
+        events.push({
+          type: 'task_completed',
+          taskId,
+          status: classification.notification.status,
+          outputFile: classification.notification.outputFile,
+          summary: classification.notification.summary,
+          turnId: this.currentTurnId || undefined,
+          ...(toolUseId ? { toolUseId } : {}),
+          launchedHere: this.wasLaunchedByMainAgent(taskId, toolUseId),
+        });
+      }
+    } else if (msg.subtype === 'task_progress') {
+      // What one of the session's own background tasks is doing (a subagent's nested tasks have no chip)
+      const activity = classifyClaudeTaskProgress(message);
+      if (activity && this.wasLaunchedByMainAgent(activity.taskId, activity.toolUseId)) {
+        events.push({ type: 'task_activity', ...activity, turnId: this.currentTurnId || undefined });
+      }
+    } else if (msg.subtype === 'task_started') {
+      // Remember the session's own tasks (structured, unlike tool-result text) and announce a
+      // background one; a foreground task is announced if it later moves to the background.
+      if (typeof msg.task_id === 'string' && typeof msg.tool_use_id === 'string' && this.topLevelToolUseIds.has(msg.tool_use_id)) {
+        this.mainAgentTasks.set(msg.task_id, {
+          toolUseId: msg.tool_use_id,
+          ...(typeof msg.task_type === 'string' ? { taskType: msg.task_type } : {}),
+          ...(typeof msg.description === 'string' && msg.description ? { description: msg.description } : {}),
+        });
+        trimOldest(this.mainAgentTasks, 500);
+        if (msg.is_backgrounded === true) this.pushBackgroundedTask(msg.task_id, events);
+      }
+    } else if (msg.subtype === 'task_updated') {
+      if (typeof msg.task_id === 'string' && msg.patch?.is_backgrounded === true) this.pushBackgroundedTask(msg.task_id, events);
     }
+  }
+
+  /** Remember top-level tool calls so later task events can be attributed to the session's agent. */
+  private rememberTopLevelToolUses(content: ContentBlock[]): void {
+    for (const block of content) {
+      if (block.type === 'tool_use' && typeof (block as { id?: unknown }).id === 'string') {
+        this.topLevelToolUseIds.add((block as { id: string }).id);
+      }
+    }
+    trimOldest(this.topLevelToolUseIds, 2000);
+  }
+
+  /**
+   * Announce one of the session's own tasks as backgrounded, once. Agents and workflows are
+   * detected from their tool result (which carries the workflow id); everything else (Bash,
+   * Monitor, MCP tasks...) is announced from here.
+   */
+  private pushBackgroundedTask(taskId: string, events: AgentEvent[]): void {
+    const task = this.mainAgentTasks.get(taskId);
+    if (!task || task.announced) return;
+    task.announced = true;
+    if (task.taskType === 'local_agent' || task.taskType === 'local_workflow') return;
+    const input = this.toolIndex.getInput(task.toolUseId);
+    const intent = task.description
+      ?? (typeof input?._intent === 'string' ? input._intent : undefined)
+      ?? (typeof input?.description === 'string' ? input.description : undefined);
+    const turnId = this.currentTurnId || undefined;
+    if (task.taskType === 'local_bash') {
+      events.push({
+        type: 'shell_backgrounded',
+        toolUseId: task.toolUseId,
+        shellId: taskId,
+        turnId,
+        ...(intent ? { intent } : {}),
+        ...(typeof input?.command === 'string' ? { command: input.command } : {}),
+      });
+      return;
+    }
+    events.push({ type: 'task_backgrounded', toolUseId: task.toolUseId, taskId, turnId, kind: 'task', ...(intent ? { intent } : {}) });
   }
 
   private adaptAuthStatus(message: SDKMessage, events: AgentEvent[]): void {
@@ -560,5 +705,27 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
         message: `Auth error: ${msg.error}. Try running /auth to re-authenticate.`,
       });
     }
+  }
+}
+
+/** Shown for a tool call the SDK moved to the background (see `isDetachedToolCallResult`). */
+export const DETACHED_TOOL_CALL_RESULT =
+  'Still running in the background — the result goes straight to the agent when it finishes.';
+
+/**
+ * `tool_use_result` of a call that stepped aside for a mid-turn user message (SDK >=0.3.287,
+ * WebFetch/WebSearch only). Craft's matcher-less PostToolUse hook keeps the CLI from detaching
+ * calls at all (`claude-agent.ts`), so this only guards against that hook ever being narrowed.
+ */
+export function isDetachedToolCallResult(value: unknown): boolean {
+  return typeof value === 'object' && value !== null
+    && (value as { detachedToolCall?: unknown }).detachedToolCall === true;
+}
+
+/** Drop the oldest entries (insertion order) beyond `max`. */
+function trimOldest(collection: Set<string> | Map<string, unknown>, max: number): void {
+  for (const key of collection.keys()) {
+    if (collection.size <= max) return;
+    collection.delete(key);
   }
 }

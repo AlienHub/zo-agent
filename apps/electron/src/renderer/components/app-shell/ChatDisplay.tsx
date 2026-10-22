@@ -1,27 +1,15 @@
+import { MemoizedAutomationConfirmationCard } from '@/components/chat/AutomationConfirmationCard'
 import * as React from "react"
 import { useTranslation } from "react-i18next"
 import { useEffect, useState, useMemo, useCallback } from "react"
-import {
-  AlertTriangle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  CircleAlert,
-  ExternalLink,
-  Info,
-  X,
-} from "lucide-react"
-import { motion, AnimatePresence } from "motion/react"
+import { Bot, Info } from "lucide-react"
 import { toast } from "sonner"
 
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { coerceInputText, appendRestoredInput } from "@/lib/input-text"
-import { Markdown, CollapsibleMarkdownProvider, StreamingMarkdown, type RenderMode } from "@/components/markdown"
-import { AnimatedCollapsibleContent } from "@/components/ui/collapsible"
+import { useDelayedLoading } from "@/hooks/useDelayedLoading"
 import {
-  Spinner,
   parseReadResult,
   parseBashResult,
   parseGrepResult,
@@ -39,15 +27,15 @@ import {
   type ActivityItem,
   type FileChange,
   type DiffViewerSettings,
+  RunCommandProvider,
 } from "@craft-agent/ui"
 import { useFocusZone } from "@/hooks/keyboard"
 import { useTheme } from "@/hooks/useTheme"
-import type { Session, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, LoadedSource, LoadedSkill, AnnotationV1 } from "../../../shared/types"
+import type { Session, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, LoadedSource, LoadedSkill } from "../../../shared/types"
 import type { PermissionMode } from "@craft-agent/shared/agent/modes"
 import type { ThinkingLevel } from "@craft-agent/shared/agent/thinking-levels"
 import {
   TurnCard,
-  UserMessageBubble,
   groupMessagesByTurn,
   formatTurnAsMarkdown,
   formatActivityAsMarkdown,
@@ -56,7 +44,6 @@ import {
   getAnnotationNoteText,
   isAnnotationFollowUpSent,
   extractAnnotationSelectedText,
-  getAnnotationContext,
   normalizeFollowUpText,
   type Turn,
   type AssistantTurn,
@@ -65,10 +52,13 @@ import {
   type AuthRequestTurn,
 } from "@craft-agent/ui"
 import { MemoizedAuthRequestCard } from "@/components/chat/AuthRequestCard"
-import { MemoizedAutomationConfirmationCard } from "@/components/chat/AutomationConfirmationCard"
 import { ChatInputZone, type StructuredInputState, type StructuredResponse, type PermissionResponse, type AdminApprovalResponse } from "./input"
 import type { RichTextInputHandle } from "@/components/ui/rich-text-input"
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks"
+import type { BackgroundTask } from "@/atoms/sessions"
+import type { BackgroundTaskOutput } from "@craft-agent/shared/protocol"
+import { agentDocument } from "./BackgroundTaskChip"
+import { runCommandMessage } from "@/lib/run-command-message"
 import { useTurnCardExpansion } from "@/hooks/useTurnCardExpansion"
 import { useNavigation } from "@/contexts/NavigationContext"
 import { useAppShellContext } from "@/context/AppShellContext"
@@ -76,7 +66,20 @@ import { navigate, routes } from "@/lib/navigate"
 import { CHAT_LAYOUT } from "@/config/layout"
 import { collectFileChangesFromActivities, getFirstFileChangeIdForActivity } from "@/lib/file-changes"
 import { resolveBranchNewPanelOption } from "./branching"
-import { handleErrorMessageAction } from "./error-message-actions"
+import { MemoizedMessageBubble } from "./chat-display/MessageBubble"
+import { ProcessingIndicator } from "./chat-display/ProcessingIndicator"
+import { ScrollOnMount } from "./chat-display/ScrollOnMount"
+import { TurnFrame } from "./chat-display/TurnFrame"
+import { NewChatSuggestions } from "./chat-display/NewChatSuggestions"
+import { newChatSuggestionMentions, newChatSuggestionMessage, pickNewChatSuggestions, pickCustomSuggestions, type NewChatSuggestion } from "./chat-display/new-chat-suggestions"
+import {
+  CompactEmptyState,
+  NewChatEmptyState,
+  EarlierMessagesHint,
+  NoRenderableMessages,
+  TranscriptLoadError,
+  TranscriptSkeleton,
+} from "./chat-display/TranscriptStates"
 
 // ============================================================================
 // CSS Custom Highlight API helper
@@ -112,11 +115,19 @@ interface MarkdownOverlayState {
   forceCodeView?: boolean
 }
 
+/** State for a background task's full output (the task chip's card → Open) */
+interface TaskOutputOverlayState {
+  type: 'task-output'
+  title: string
+  output: BackgroundTaskOutput
+}
+
 /** Union of all overlay states, or null for no overlay */
 type OverlayState =
   | { type: 'activity'; activity: ActivityItem }
   | MultiDiffOverlayState
   | MarkdownOverlayState
+  | TaskOutputOverlayState
   | null
 
 function isStackedActivityTool(activity: ActivityItem): boolean {
@@ -127,8 +138,8 @@ function isStackedActivityTool(activity: ActivityItem): boolean {
 function getTurnKey(turn: Turn): string {
   if (turn.type === 'user') return `user-${turn.message.id}`
   if (turn.type === 'system') return `system-${turn.message.id}`
-  if (turn.type === 'auth-request') return `auth-${turn.message.id}`
   if (turn.type === 'automation-confirmation') return `automation-confirmation-${turn.message.id}`
+  if (turn.type === 'auth-request') return `auth-${turn.message.id}`
   return `turn-${turn.turnId}-${turn.timestamp}`
 }
 
@@ -166,9 +177,16 @@ interface ChatDisplayProps {
   thinkingLevel?: ThinkingLevel
   /** Callback when thinking level changes */
   onThinkingLevelChange?: (level: ThinkingLevel) => void
+  // Coding mode (session-level, fixed once the conversation starts)
+  /** Coding mode is on: lean coding prompt and session tools */
+  codingMode?: boolean
+  /** Toggle coding mode (only before the first message) */
+  onCodingModeChange?: (enabled: boolean) => void
   // Advanced options
   /** Current permission mode */
   permissionMode?: PermissionMode
+  /** Mode before the last change (plan approval returns to Guarded from it) */
+  previousPermissionMode?: PermissionMode
   onPermissionModeChange?: (mode: PermissionMode) => void
   /** Enabled permission modes for Shift+Tab cycling */
   enabledModes?: PermissionMode[]
@@ -184,21 +202,18 @@ interface ChatDisplayProps {
   // Source selection
   /** Available sources (enabled only) */
   sources?: LoadedSource[]
+  /** User-defined chat starters from workspace config; replaces auto-generated suggestions when non-empty. */
+  chatStarters?: Array<{ label: string; prompt: string }>
   /** Callback when source selection changes */
   onSourcesChange?: (slugs: string[]) => void
   // Skill selection (for @mentions)
   /** Available skills for @mention autocomplete */
   skills?: LoadedSkill[]
-  // Label selection (for #labels)
-  /** Available label configs (tree) for label menu and badge display */
+  // Label selection (for the composer's # menu; the chips themselves live in the chat header)
+  /** Available label configs (tree) for the label menu */
   labels?: import('@craft-agent/shared/labels').LabelConfig[]
   /** Callback when labels change */
   onLabelsChange?: (labels: string[]) => void
-  // State/status selection (for # menu and ActiveOptionBadges)
-  /** Available workflow states */
-  sessionStatuses?: import('@/config/session-status-config').SessionStatus[]
-  /** Callback when session state changes */
-  onSessionStatusChange?: (stateId: string) => void
   /** Workspace ID for loading skill icons */
   workspaceId?: string
   // Working directory (per session)
@@ -263,172 +278,6 @@ export interface ChatDisplayHandle {
 }
 
 /**
- * Processing status messages - cycles through these randomly
- * Inspired by Claude Code's playful status messages
- */
-const PROCESSING_MESSAGE_KEYS = [
-  'chat.processing.thinking',
-  'chat.processing.pondering',
-  'chat.processing.contemplating',
-  'chat.processing.reasoning',
-  'chat.processing.processing',
-  'chat.processing.computing',
-  'chat.processing.considering',
-  'chat.processing.reflecting',
-  'chat.processing.deliberating',
-  'chat.processing.cogitating',
-  'chat.processing.ruminating',
-  'chat.processing.musing',
-  'chat.processing.workingOnIt',
-  'chat.processing.onIt',
-  'chat.processing.crunching',
-  'chat.processing.brewing',
-  'chat.processing.connectingDots',
-  'chat.processing.mullingItOver',
-  'chat.processing.deepInThought',
-  'chat.processing.hmm',
-  'chat.processing.letMeSee',
-  'chat.processing.oneMoment',
-  'chat.processing.holdOn',
-  'chat.processing.bearWithMe',
-  'chat.processing.justASec',
-  'chat.processing.hangTight',
-  'chat.processing.gettingThere',
-  'chat.processing.almost',
-  'chat.processing.working',
-  'chat.processing.busyBusy',
-  'chat.processing.whirring',
-  'chat.processing.churning',
-  'chat.processing.percolating',
-  'chat.processing.simmering',
-  'chat.processing.cooking',
-  'chat.processing.baking',
-  'chat.processing.stirring',
-  'chat.processing.spinningUp',
-  'chat.processing.warmingUp',
-  'chat.processing.revving',
-  'chat.processing.buzzing',
-  'chat.processing.humming',
-  'chat.processing.ticking',
-  'chat.processing.clicking',
-  'chat.processing.whizzing',
-  'chat.processing.zooming',
-  'chat.processing.zipping',
-  'chat.processing.chugging',
-  'chat.processing.trucking',
-  'chat.processing.rolling',
-]
-
-/**
- * Format elapsed time: "45s" under a minute, "1:02" for 1+ minutes
- */
-function formatElapsed(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  const remainingSeconds = seconds % 60
-  return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
-}
-
-interface ProcessingIndicatorProps {
-  /** Start timestamp (persists across remounts) */
-  startTime?: number
-  /** Override cycling messages with explicit status (e.g., "Compacting...") */
-  statusMessage?: string
-}
-
-/**
- * ProcessingIndicator - Shows cycling status messages with elapsed time
- * Matches TurnCard header layout for visual continuity
- */
-function ProcessingIndicator({ startTime, statusMessage }: ProcessingIndicatorProps) {
-  const { t } = useTranslation()
-  const [elapsed, setElapsed] = React.useState(0)
-  const [messageIndex, setMessageIndex] = React.useState(() =>
-    Math.floor(Math.random() * PROCESSING_MESSAGE_KEYS.length)
-  )
-
-  // Update elapsed time every second using provided startTime
-  React.useEffect(() => {
-    const start = startTime || Date.now()
-    // Set initial elapsed immediately
-    setElapsed(Math.floor((Date.now() - start) / 1000))
-
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - start) / 1000))
-    }, 1000)
-    return () => clearInterval(interval)
-  }, [startTime])
-
-  // Cycle through messages every 10 seconds (only when not showing status)
-  React.useEffect(() => {
-    if (statusMessage) return  // Don't cycle when showing status
-    const interval = setInterval(() => {
-      setMessageIndex(prev => {
-        // Pick a random different message
-        let next = Math.floor(Math.random() * PROCESSING_MESSAGE_KEYS.length)
-        while (next === prev && PROCESSING_MESSAGE_KEYS.length > 1) {
-          next = Math.floor(Math.random() * PROCESSING_MESSAGE_KEYS.length)
-        }
-        return next
-      })
-    }, 10000)
-    return () => clearInterval(interval)
-  }, [statusMessage])
-
-  // Use status message if provided, otherwise cycle through default messages
-  const displayMessage = statusMessage || t(PROCESSING_MESSAGE_KEYS[messageIndex])
-
-  return (
-    <div className="flex items-center gap-2 px-3 py-1 -mb-1 text-[13px] text-muted-foreground">
-      {/* Spinner in same location as TurnCard chevron */}
-      <div className="w-3 h-3 flex items-center justify-center shrink-0">
-        <Spinner className="text-[10px]" />
-      </div>
-      {/* Label with crossfade animation on content change only */}
-      <span className="relative h-5 flex items-center">
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.span
-            key={displayMessage}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.4, ease: 'easeInOut' }}
-          >
-            {displayMessage}
-          </motion.span>
-        </AnimatePresence>
-        {elapsed >= 1 && (
-          <span className="text-muted-foreground/60 ml-1 tabular-nums">
-            {formatElapsed(elapsed)}
-          </span>
-        )}
-      </span>
-    </div>
-  )
-}
-
-/**
- * Scrolls to target element on mount, before browser paint.
- * Uses useLayoutEffect to ensure scroll happens before content is visible.
- */
-function ScrollOnMount({
-  targetRef,
-  onScroll,
-  skip = false
-}: {
-  targetRef: React.RefObject<HTMLDivElement | null>
-  onScroll?: () => void
-  skip?: boolean
-}) {
-  React.useLayoutEffect(() => {
-    if (skip) return
-    targetRef.current?.scrollIntoView({ behavior: 'instant' })
-    onScroll?.()
-  }, [skip])
-  return null
-}
-
-/**
  * ChatDisplay - Main chat interface for a selected session
  *
  * Structure:
@@ -441,7 +290,7 @@ function ScrollOnMount({
 export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>(function ChatDisplay({
   session,
   onSendMessage,
-  onOpenFile,
+  onOpenFile: onOpenFileProp,
   onOpenUrl,
   currentModel,
   onModelChange,
@@ -455,8 +304,11 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   // Thinking level
   thinkingLevel = 'medium',
   onThinkingLevelChange,
+  codingMode = false,
+  onCodingModeChange,
   // Advanced options
   permissionMode = 'ask',
+  previousPermissionMode,
   onPermissionModeChange,
   enabledModes,
   // Input value preservation
@@ -466,15 +318,13 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   onAttachmentsChange,
   // Sources
   sources,
+  chatStarters,
   onSourcesChange,
   // Skills (for @mentions)
   skills,
   // Labels (for #labels)
   labels,
   onLabelsChange,
-  // States (for # menu and badge)
-  sessionStatuses,
-  onSessionStatusChange,
   workspaceId,
   // Working directory
   workingDirectory,
@@ -499,6 +349,10 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   // Connection unavailable
   connectionUnavailable = false,
 }, ref) {
+  const onOpenFile = React.useCallback((path:string)=>{
+    const sandboxRoot=session?.workingDirectory
+    onOpenFileProp(sandboxRoot?.startsWith('/__agent_compose__/') && path.startsWith('/workspace/') ? `${sandboxRoot}/${path.slice('/workspace/'.length)}` : path)
+  },[onOpenFileProp,session?.workingDirectory])
   const { t } = useTranslation()
 
   // Panel focus state (for multi-panel auto-scroll behavior)
@@ -559,7 +413,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   })
 
   // Background tasks management
-  const { tasks: backgroundTasks, killTask } = useBackgroundTasks({
+  const { tasks: backgroundTasks, stopTask, dismissTask } = useBackgroundTasks({
     sessionId: session?.id ?? ''
   })
 
@@ -578,6 +432,10 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   // Current match index for navigation (internal state, exposed via ref)
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0)
   const turnRefs = React.useRef<Map<string, HTMLDivElement>>(new Map())
+  const registerTurnRef = useCallback((turnKey: string, el: HTMLDivElement | null) => {
+    if (el) turnRefs.current.set(turnKey, el)
+    else turnRefs.current.delete(turnKey)
+  }, [])
   // Inject ::highlight() styles at runtime to avoid LightningCSS build warnings
   // (the optimizer doesn't recognize ::highlight as a valid pseudo-element yet)
   React.useEffect(() => {
@@ -1036,6 +894,43 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     return isStackedActivityTool(overlayState.activity)
   }, [overlayState])
 
+  // "Run in background" on a shell/console code block or a pasted snippet: ask the agent to start it
+  // as a background command (permissions apply; the task chip shows it)
+  const handleRunCommand = useCallback((command: string) => {
+    onSendMessage(runCommandMessage(command))
+  }, [onSendMessage])
+
+  // New-chat starter prompts (design spec §7.8): use custom starters from workspace config when
+  // defined (capped at 3), otherwise fall back to source-based auto-generation.
+  const newChatSuggestions = useMemo(
+    () => chatStarters && chatStarters.length > 0
+      ? pickCustomSuggestions(chatStarters)
+      : pickNewChatSuggestions(sources ?? []),
+    [chatStarters, sources]
+  )
+
+  // Coding mode is fixed once the conversation starts: continue in a new session with it switched.
+  // The server carries the folder, model, sources and a summary of this conversation over.
+  const handleContinueWithCodingMode = useCallback(async (enabled: boolean) => {
+    if (!session) return
+    const toastId = toast.loading(t('chat.codingMode.continuing'))
+    try {
+      const result = await window.electronAPI.sessionCommand(session.id, { type: 'continueInNewSession', codingMode: enabled })
+      toast.dismiss(toastId)
+      navigate(routes.view.allSessions(result.sessionId))
+    } catch (error) {
+      toast.error(t('chat.codingMode.continueFailed'), {
+        id: toastId,
+        description: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }, [session, navigate, t])
+
+  // A background task's full output, from its chip card
+  const handleOpenTaskOutput = useCallback((task: BackgroundTask, output: BackgroundTaskOutput) => {
+    setOverlayState({ type: 'task-output', title: task.intent?.trim() || task.id, output })
+  }, [])
+
   // Pop-out handler - opens message in overlay (read-only markdown)
   const handlePopOut = useCallback((message: Message) => {
     if (!session) return
@@ -1056,16 +951,12 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   const lastMessageRole = lastMessage?.role
 
   const pendingFollowUpAnnotations = useMemo<PendingFollowUpAnnotation[]>(() => {
-    const messages = session?.messages ?? []
-    const resourceAnnotationGroups = session?.resourceAnnotations ?? []
-    if (messages.length === 0 && resourceAnnotationGroups.length === 0) return []
+    if (!session?.messages?.length) return []
 
     const pending: PendingFollowUpAnnotation[] = []
 
-    for (const message of messages) {
-      // 'user' is included so follow-ups anchored on the user's OWN messages are
-      // collected and flushed alongside assistant/plan annotations.
-      if (message.role !== 'assistant' && message.role !== 'plan' && message.role !== 'user') continue
+    for (const message of session.messages) {
+      if (message.role !== 'assistant' && message.role !== 'plan') continue
       if (!message.annotations?.length) continue
 
       for (const annotation of message.annotations) {
@@ -1074,7 +965,6 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
         if (isAnnotationFollowUpSent(annotation)) continue
 
         pending.push({
-          kind: 'message',
           messageId: message.id,
           annotationId: annotation.id,
           note,
@@ -1086,35 +976,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
       }
     }
 
-    for (const group of resourceAnnotationGroups) {
-      for (const annotation of group.annotations) {
-        const note = getAnnotationNoteText(annotation)
-        if (!note) continue
-        if (isAnnotationFollowUpSent(annotation)) continue
-
-        const annotationMeta = asRecord(annotation.meta) ?? undefined
-        const sourceLine = typeof annotationMeta?.sourceLine === 'number' ? annotationMeta.sourceLine : undefined
-        const sourceEndLine = typeof annotationMeta?.sourceEndLine === 'number' ? annotationMeta.sourceEndLine : undefined
-        pending.push({
-          kind: 'resource',
-          messageId: annotation.target.source.messageId,
-          annotationId: annotation.id,
-          note,
-          selectedText: extractAnnotationSelectedText(annotation, ''),
-          createdAt: annotation.updatedAt ?? annotation.createdAt,
-          color: annotation.style?.color,
-          meta: annotationMeta,
-          resource: group.resource,
-          sourceLabel: group.resource.target,
-          sourceLine,
-          sourceEndLine,
-          context: getAnnotationContext(annotation),
-        })
-      }
-    }
-
     return pending.sort((a, b) => a.createdAt - b.createdAt)
-  }, [session?.messages, session?.resourceAnnotations])
+  }, [session?.messages])
 
   const followUpInputItems = useMemo(() => {
     return pendingFollowUpAnnotations.map((followUp, idx) => ({
@@ -1278,32 +1141,22 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
       void Promise.all(pendingFollowUpAnnotations.map((followUp) => {
         const currentMeta = followUp.meta ?? {}
         const currentFollowUpMeta = asRecord(currentMeta.followUp) ?? {}
-        const patch = {
-          meta: {
-            ...currentMeta,
-            followUp: {
-              ...currentFollowUpMeta,
-              text: followUp.note,
-              lastSentAt: sentAt,
-              lastSentText: followUp.note,
-            },
-          },
-        }
-
-        if (followUp.kind === 'resource' && followUp.resource) {
-          return window.electronAPI.sessionCommand(session.id, {
-            type: 'updateResourceAnnotation',
-            resource: followUp.resource,
-            annotationId: followUp.annotationId,
-            patch,
-          })
-        }
 
         return window.electronAPI.sessionCommand(session.id, {
           type: 'updateAnnotation',
           messageId: followUp.messageId,
           annotationId: followUp.annotationId,
-          patch,
+          patch: {
+            meta: {
+              ...currentMeta,
+              followUp: {
+                ...currentFollowUpMeta,
+                text: followUp.note,
+                lastSentAt: sentAt,
+                lastSentText: followUp.note,
+              },
+            },
+          },
         })
       })).catch((error) => {
         console.error('[ChatDisplay] Failed to mark follow-up annotations as sent:', error)
@@ -1340,42 +1193,25 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     }, 0)
   }, [session, isInputDisabled, disableSend, connectionUnavailable])
 
-  // Shared annotation handlers — used by both the assistant TurnCard and the
-  // user message bubble, so commenting works identically on either side.
-  const handleAddAnnotation = useCallback(async (messageId: string, annotation: AnnotationV1) => {
-    if (!session) return
-    try {
-      await window.electronAPI.sessionCommand(session.id, { type: 'addAnnotation', messageId, annotation })
-    } catch (error) {
-      toast.error(t('toast.couldNotSaveHighlight'), {
-        description: error instanceof Error ? error.message : 'Unknown error',
-      })
-      throw error
-    }
-  }, [session, t])
-
-  const handleRemoveAnnotation = useCallback(async (messageId: string, annotationId: string) => {
-    if (!session) return
-    try {
-      await window.electronAPI.sessionCommand(session.id, { type: 'removeAnnotation', messageId, annotationId })
-    } catch (error) {
-      toast.error(t('toast.couldNotRemoveHighlight'), {
-        description: error instanceof Error ? error.message : 'Unknown error',
-      })
-    }
-  }, [session, t])
-
-  const handleUpdateAnnotation = useCallback(async (messageId: string, annotationId: string, patch: Partial<AnnotationV1>) => {
-    if (!session) return
-    try {
-      await window.electronAPI.sessionCommand(session.id, { type: 'updateAnnotation', messageId, annotationId, patch })
-    } catch (error) {
-      toast.error(t('toast.couldNotUpdateHighlight'), {
-        description: error instanceof Error ? error.message : 'Unknown error',
-      })
-      throw error
-    }
-  }, [session, t])
+  // A new-chat suggestion chip sends its prompt as if typed: mentioned sources are enabled first
+  // and mentioned skills invoked, like @-mentions sent from the composer.
+  const canRunSuggestion = !!session && !isInputDisabled && !disableSend && !connectionUnavailable
+  const handleRunSuggestion = (suggestion: NewChatSuggestion) => {
+    if (!session || !canRunSuggestion) return
+    const mentions = newChatSuggestionMentions(
+      suggestion,
+      (skills ?? []).map(s => s.slug),
+      (sources ?? []).map(s => s.config.slug),
+    )
+    const enabled = session.enabledSourceSlugs ?? []
+    const toEnable = mentions.sources.filter(slug => !enabled.includes(slug))
+    if (toEnable.length > 0 && onSourcesChange) onSourcesChange([...enabled, ...toEnable])
+    handleSubmit(
+      newChatSuggestionMessage(suggestion, (key, options) => t(key, options)),
+      undefined,
+      mentions.skills.length > 0 ? mentions.skills : undefined,
+    )
+  }
 
   // Handle stop request from InputContainer
   // silent=true when redirecting (sending new message), silent=false when user clicks Stop button
@@ -1418,10 +1254,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
           pendingPermission.sessionId,
           pendingPermission.requestId,
           permResponse.allowed,
-          permResponse.alwaysAllow,
-          permResponse.permissionScope
-            ? { permissionScope: permResponse.permissionScope }
-            : undefined
+          permResponse.alwaysAllow
         )
         return
       }
@@ -1571,8 +1404,13 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   const hasUnrenderedLoadedMessages = !messagesLoading
     && turns.length === 0
     && ((session?.messages?.length ?? 0) > 0 || (session?.messageCount ?? 0) > 0)
+  // Transcript placeholder only after 200ms of loading. Loaded messages replace it at once (no
+  // minimum display time): holding them back left the turns unmounted while the search
+  // highlight / scroll-to-match effects ran, so a slow switch lost the match.
+  const showTranscriptSkeleton = useDelayedLoading(messagesLoading)
 
   return (
+    <RunCommandProvider value={session ? handleRunCommand : null}>
     <div ref={zoneRef} className="flex h-full flex-col min-w-0" data-focus-zone="chat">
       {session ? (
         <div className="flex flex-1 flex-col min-h-0 min-w-0 relative">
@@ -1589,74 +1427,30 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
               }}
             >
               <ScrollArea className="h-full min-w-0" viewportRef={scrollViewportRef}>
+              {/* Transcript column: 720px of text + gutters, turns 20px apart (spec §7.4) */}
               <div className={cn(
                 CHAT_LAYOUT.maxWidth,
                 "mx-auto min-w-0",
-                compactMode ? "px-3 py-4 space-y-2" : [CHAT_LAYOUT.containerPadding, CHAT_LAYOUT.messageSpacing]
+                compactMode ? CHAT_LAYOUT.compactContainerPadding : CHAT_LAYOUT.containerPadding,
+                CHAT_LAYOUT.messageSpacing
               )}>
-                {/* Session-level AnimatePresence: Prevents layout jump when switching sessions */}
-                <AnimatePresence mode={compactMode ? "sync" : "wait"} initial={false}>
-                  <motion.div
-                    key={compactMode ? 'compact-session' : session?.id}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={compactMode ? { duration: 0 } : { duration: 0.1, ease: 'easeOut' }}
-                  >
-                    {/* Loading/Content AnimatePresence: sync mode avoids stale loading exits masking ready content */}
-                    <AnimatePresence mode="sync" initial={false}>
+                {/* Session switch is instant (spec §6.3): the keyed wrapper swaps the whole transcript
+                    in the same frame — no crossfade, no exit that holds back the new content. The keys
+                    are the same as before, so ScrollOnMount still re-runs for every session. */}
+                <div key={compactMode ? 'compact-session' : session?.id} className="contents">
                     {messagesLoading ? (
-                      /* Loading State: Show spinner while messages are being lazy loaded */
-                      <motion.div
-                        key="loading"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        transition={compactMode ? { duration: 0 } : { duration: 0.1 }}
-                        className="flex items-center justify-center h-64"
-                      >
-                        <Spinner className="text-foreground/30" />
-                      </motion.div>
+                      showTranscriptSkeleton ? <TranscriptSkeleton /> : null
                     ) : messagesLoadError ? (
-                      <motion.div
-                        key="load-error"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        transition={compactMode ? { duration: 0 } : { duration: 0.1 }}
-                        className="flex items-center justify-center h-64 px-4"
-                      >
-                        <div
-                          className="max-w-sm rounded-[8px] border border-destructive/20 px-4 py-3 text-center shadow-tinted"
-                          style={{
-                            backgroundColor: 'oklch(from var(--destructive) l c h / 0.03)',
-                            '--shadow-color': 'var(--destructive-rgb)',
-                          } as React.CSSProperties}
-                        >
-                          <AlertTriangle className="mx-auto mb-2 h-4 w-4 text-destructive/70" />
-                          <div className="text-sm font-medium text-destructive">{t("chat.failedToLoadConversation")}</div>
-                          <p className="mt-1 break-words text-xs text-destructive/70">{messagesLoadError}</p>
-                          {onRetryMessagesLoad && (
-                            <button
-                              type="button"
-                              onClick={onRetryMessagesLoad}
-                              disabled={messagesRetrying}
-                              className="mt-3 rounded border border-destructive/20 px-2 py-0.5 text-xs text-destructive/70 transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {messagesRetrying ? t("common.retrying") : t("common.retry")}
-                            </button>
-                          )}
-                        </div>
-                      </motion.div>
+                      <TranscriptLoadError
+                        error={messagesLoadError}
+                        onRetry={onRetryMessagesLoad}
+                        isRetrying={messagesRetrying}
+                      />
                     ) : (
                     /* Turn-based Message Display - memoized to avoid re-grouping on every render */
-                    /* AnimatePresence handles the fade-in animation when transitioning from loading */
-                    <motion.div
+                    <div
                       key={compactMode ? 'loaded-compact' : `loaded-${session?.id}`}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={compactMode ? { duration: 0 } : { duration: 0.1, ease: 'easeOut' }}
+                      className={CHAT_LAYOUT.messageSpacing}
                     >
                   {/* Scroll to bottom before paint - fires via useLayoutEffect */}
                   {/* Skip when search is active on session switch - scroll to first match instead */}
@@ -1668,27 +1462,17 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                     }}
                   />
                   {/* Empty state for compact mode - inviting conversational prompt, centered in full popover */}
-                  {compactMode && turns.length === 0 && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center select-none gap-1 pointer-events-none">
-                      <span className="text-sm text-muted-foreground">{t("editPopover.whatToChange")}</span>
-                      <span className="text-xs text-muted-foreground/50">{t("editPopover.justDescribe")}</span>
-                    </div>
+                  {/* The "what to change" hint is EditPopover's (the only caller passing emptyStateLabel);
+                      compact/mobile chats share compactMode but are not edits */}
+                  {compactMode && emptyStateLabel !== undefined && turns.length === 0 && <CompactEmptyState />}
+                  {emptyStateLabel === undefined && !messagesLoading && !messagesLoadError && turns.length === 0 && !hasUnrenderedLoadedMessages && (
+                    <NewChatEmptyState compact={compactMode}>
+                      {canRunSuggestion && <NewChatSuggestions suggestions={newChatSuggestions} onSelect={handleRunSuggestion} />}
+                    </NewChatEmptyState>
                   )}
-                  {!compactMode && hasUnrenderedLoadedMessages && (
-                    <div className="flex h-64 items-center justify-center px-4 text-center">
-                      <div className="max-w-sm rounded-[8px] border border-border/50 bg-foreground/[0.03] px-4 py-3">
-                        <CircleAlert className="mx-auto mb-2 h-4 w-4 text-foreground/50" />
-                        <div className="text-sm font-medium text-foreground/70">Conversation loaded, but no renderable messages were found.</div>
-                        <p className="mt-1 text-xs text-foreground/50">Try reloading the session. If this persists, the message history may contain an unsupported format.</p>
-                      </div>
-                    </div>
-                  )}
+                  {!compactMode && hasUnrenderedLoadedMessages && <NoRenderableMessages />}
                   {/* Load more indicator - shown when there are older messages */}
-                  {hasMoreAbove && (
-                    <div className="text-center text-muted-foreground/60 text-xs py-3 select-none">
-                      ↑ {t('chat.scrollUpForEarlier', { count: startIndex })}
-                    </div>
-                  )}
+                  {hasMoreAbove && <EarlierMessagesHint count={startIndex} />}
                   {turns.map((turn, index) => {
                     // Compute turn key and check if it's a search match
                     const turnKey = getTurnKey(turn)
@@ -1696,18 +1480,15 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                     const isAnyMatch = isSearchActive && matchingTurnIds.includes(turnKey)
 
                     // User turns - render with MemoizedMessageBubble
-                    // Extra padding creates visual separation from AI responses
                     if (turn.type === 'user') {
                       return (
-                        <div
+                        <TurnFrame
                           key={turnKey}
-                          ref={el => { if (el) turnRefs.current.set(turnKey, el); else turnRefs.current.delete(turnKey) }}
-                          className={cn(
-                            compactMode ? "pt-2 pb-1" : CHAT_LAYOUT.userMessagePadding,
-                            "rounded-lg transition-all duration-200",
-                            isCurrentMatch && "ring-2 ring-info ring-offset-2 ring-offset-background",
-                            isAnyMatch && !isCurrentMatch && "ring-1 ring-info/30"
-                          )}
+                          turnKey={turnKey}
+                          registerRef={registerTurnRef}
+                          isCurrentMatch={isCurrentMatch}
+                          isAnyMatch={isAnyMatch}
+                          className={CHAT_LAYOUT.userMessagePadding}
                         >
                           <MemoizedMessageBubble
                             message={turn.message}
@@ -1715,29 +1496,20 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             onOpenUrl={onOpenUrl}
                             sessionId={session?.id}
                             compactMode={compactMode}
-                            annotations={turn.message.annotations}
-                            sendMessageKey={sendMessageKey}
-                            openAnnotationRequest={openAnnotationRequest}
-                            onAddAnnotation={handleAddAnnotation}
-                            onRemoveAnnotation={handleRemoveAnnotation}
-                            onUpdateAnnotation={handleUpdateAnnotation}
-                            onSaveAndSendFollowUp={handleSaveAndSendFollowUp}
                           />
-                        </div>
+                        </TurnFrame>
                       )
                     }
 
                     // System turns (error, status, info, warning) - render with MemoizedMessageBubble
                     if (turn.type === 'system') {
                       return (
-                        <div
+                        <TurnFrame
                           key={turnKey}
-                          ref={el => { if (el) turnRefs.current.set(turnKey, el); else turnRefs.current.delete(turnKey) }}
-                          className={cn(
-                            "rounded-lg transition-all duration-200",
-                            isCurrentMatch && "ring-2 ring-info ring-offset-2 ring-offset-background",
-                            isAnyMatch && !isCurrentMatch && "ring-1 ring-info/30"
-                          )}
+                          turnKey={turnKey}
+                          registerRef={registerTurnRef}
+                          isCurrentMatch={isCurrentMatch}
+                          isAnyMatch={isAnyMatch}
                         >
                           <MemoizedMessageBubble
                             message={turn.message}
@@ -1754,35 +1526,11 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                               }
                             } : undefined}
                           />
-                        </div>
+                        </TurnFrame>
                       )
                     }
 
                     // Auth-request turns - render inline auth UI
-                    // mt-2 matches ResponseCard spacing for visual consistency
-                    if (turn.type === 'auth-request') {
-                      // Interactive only if no user message follows
-                      const isAuthInteractive = !turns.slice(index + 1).some(t => t.type === 'user')
-                      return (
-                        <div
-                          key={turnKey}
-                          ref={el => { if (el) turnRefs.current.set(turnKey, el); else turnRefs.current.delete(turnKey) }}
-                          className={cn(
-                            "mt-2 rounded-lg transition-all duration-200",
-                            isCurrentMatch && "ring-2 ring-info ring-offset-2 ring-offset-background",
-                            isAnyMatch && !isCurrentMatch && "ring-1 ring-info/30"
-                          )}
-                        >
-                          <MemoizedAuthRequestCard
-                            message={turn.message}
-                            sessionId={session.id}
-                            onRespondToCredential={onRespondToCredential}
-                            isInteractive={isAuthInteractive}
-                          />
-                        </div>
-                      )
-                    }
-
                     if (turn.type === 'automation-confirmation') {
                       const isConfirmationInteractive = !turns.slice(index + 1).some(t => t.type === 'user')
                       return (
@@ -1804,21 +1552,39 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                       )
                     }
 
+                    if (turn.type === 'auth-request') {
+                      // Interactive only if no user message follows
+                      const isAuthInteractive = !turns.slice(index + 1).some(t => t.type === 'user')
+                      return (
+                        <TurnFrame
+                          key={turnKey}
+                          turnKey={turnKey}
+                          registerRef={registerTurnRef}
+                          isCurrentMatch={isCurrentMatch}
+                          isAnyMatch={isAnyMatch}
+                        >
+                          <MemoizedAuthRequestCard
+                            message={turn.message}
+                            sessionId={session.id}
+                            onRespondToCredential={onRespondToCredential}
+                            isInteractive={isAuthInteractive}
+                          />
+                        </TurnFrame>
+                      )
+                    }
+
                     // Check if this is the last response (for Accept Plan button visibility)
                     const isLastResponse = index === turns.length - 1 || !turns.slice(index + 1).some(t => t.type === 'user')
 
                     // Assistant turns - render with TurnCard (buffered streaming)
                     const assistantUiKey = getAssistantTurnUiKey(turn, index)
                     return (
-                      <div
+                      <TurnFrame
                         key={turnKey}
-                        ref={el => { if (el) turnRefs.current.set(turnKey, el); else turnRefs.current.delete(turnKey) }}
-                        className={cn(
-                          "pt-2",
-                          "rounded-lg transition-all duration-200",
-                          isCurrentMatch && "ring-2 ring-info ring-offset-2 ring-offset-background",
-                          isAnyMatch && !isCurrentMatch && "ring-1 ring-info/30"
-                        )}
+                        turnKey={turnKey}
+                        registerRef={registerTurnRef}
+                        isCurrentMatch={isCurrentMatch}
+                        isAnyMatch={isAnyMatch}
                       >
                       <TurnCard
                         sessionId={session.id}
@@ -1868,9 +1634,51 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             toast.error(t('toast.couldNotCreateBranch'), { description: message })
                           }
                         } : undefined}
-                        onAddAnnotation={handleAddAnnotation}
-                        onRemoveAnnotation={handleRemoveAnnotation}
-                        onUpdateAnnotation={handleUpdateAnnotation}
+                        onAddAnnotation={async (messageId, annotation) => {
+                          if (!session) return
+                          try {
+                            await window.electronAPI.sessionCommand(session.id, {
+                              type: 'addAnnotation',
+                              messageId,
+                              annotation,
+                            })
+                          } catch (error) {
+                            toast.error(t('toast.couldNotSaveHighlight'), {
+                              description: error instanceof Error ? error.message : 'Unknown error',
+                            })
+                            throw error
+                          }
+                        }}
+                        onRemoveAnnotation={async (messageId, annotationId) => {
+                          if (!session) return
+                          try {
+                            await window.electronAPI.sessionCommand(session.id, {
+                              type: 'removeAnnotation',
+                              messageId,
+                              annotationId,
+                            })
+                          } catch (error) {
+                            toast.error(t('toast.couldNotRemoveHighlight'), {
+                              description: error instanceof Error ? error.message : 'Unknown error',
+                            })
+                          }
+                        }}
+                        onUpdateAnnotation={async (messageId, annotationId, patch) => {
+                          if (!session) return
+                          try {
+                            await window.electronAPI.sessionCommand(session.id, {
+                              type: 'updateAnnotation',
+                              messageId,
+                              annotationId,
+                              patch,
+                            })
+                          } catch (error) {
+                            toast.error(t('toast.couldNotUpdateHighlight'), {
+                              description: error instanceof Error ? error.message : 'Unknown error',
+                            })
+                            throw error
+                          }
+                        }}
                         onSaveAndSendFollowUp={handleSaveAndSendFollowUp}
                         onAcceptPlan={() => {
                           const planMessage = session?.messages.findLast(m => m.role === 'plan')
@@ -1957,15 +1765,13 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                           }
                         }}
                       />
-                      </div>
+                      </TurnFrame>
                     )
                   })}
-                    </motion.div>
+                    </div>
                     )}
-                    </AnimatePresence>
-                  </motion.div>
-                </AnimatePresence>
-                {/* Processing Indicator - always visible while processing */}
+                </div>
+                {/* Processing Indicator (live line) - always visible while processing */}
                 {session.isProcessing && (() => {
                   // Find the last user message timestamp for accurate elapsed time
                   const lastUserMsg = [...session.messages].reverse().find(m => m.role === 'user')
@@ -1991,16 +1797,17 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
             tasks={backgroundTasks}
             sessionId={session.id}
             sessionFolderPath={sessionFolderPath}
-            onKillTask={(taskId) => killTask(taskId, backgroundTasks.find(t => t.id === taskId)?.type === 'shell' ? 'shell' : 'agent')}
-            onInsertMessage={onInputChange}
+            onStopTask={stopTask}
+            onDismissTask={dismissTask}
+            onOpenTaskOutput={handleOpenTaskOutput}
+            onRunCommand={handleRunCommand}
             sessionLabels={session.labels}
             labels={labels}
             onLabelsChange={onLabelsChange}
-            sessionStatuses={sessionStatuses}
             currentSessionStatus={session.sessionStatus || 'todo'}
-            onSessionStatusChange={onSessionStatusChange}
             inputProps={{
               placeholder,
+              previousPermissionMode,
               disabled: isInputDisabled,
               isProcessing: session.isProcessing,
               onAnimatedHeightChange: handleAnimatedHeightChange,
@@ -2011,6 +1818,9 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
               onModelChange,
               thinkingLevel,
               onThinkingLevelChange,
+              codingMode,
+              onCodingModeChange,
+              onContinueWithCodingMode: handleContinueWithCodingMode,
               enabledModes,
               enableCompactModelPicker,
               structuredInput,
@@ -2035,6 +1845,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                 isCompacting: session.currentStatus?.statusType === 'compacting',
                 inputTokens: session.tokenUsage?.inputTokens,
                 contextWindow: session.tokenUsage?.contextWindow,
+                contextUsage: session.tokenUsage?.contextUsage,
               },
               followUpItems: followUpInputItems,
               onFollowUpClick: handleFollowUpChipClick,
@@ -2154,6 +1965,29 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
         />
       )}
 
+      {/* Background task output (task chip card → Open): a command's output, or an agent's message + steps */}
+      {overlayState?.type === 'task-output' && (
+        overlayState.output.kind === 'text' ? (
+          <TerminalPreviewOverlay
+            isOpen={true}
+            onClose={handleCloseOverlay}
+            command={overlayState.title}
+            output={overlayState.output.text}
+            toolType="bash"
+            theme={isDark ? 'dark' : 'light'}
+          />
+        ) : (
+          <DocumentFormattedMarkdownOverlay
+            isOpen={true}
+            onClose={handleCloseOverlay}
+            content={agentDocument(overlayState.output, t('chat.backgroundTask.recentSteps'))}
+            onOpenUrl={onOpenUrl}
+            onOpenFile={onOpenFile}
+            typeBadge={{ icon: Bot, label: overlayState.title, variant: 'blue' }}
+          />
+        )
+      )}
+
       {/* Markdown preview overlay (pop-out, turn details) */}
       {/* forceCodeView: show raw markdown source in code viewer (used by "View as Markdown" button) */}
       {/* otherwise: render formatted markdown (used by turn details, etc.) */}
@@ -2179,312 +2013,6 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
         )
       )}
     </div>
-  )
-})
-
-/**
- * MessageBubble - Renders a single message based on its role
- *
- * Message Roles & Styles:
- * - user:      Right-aligned, blue (bg-foreground), white text
- * - assistant: Left-aligned, gray (bg-muted), markdown rendered with clickable links
- * - error:     Left-aligned, red border/bg, warning icon + error message
- * - status:    Centered pill badge with pulsing dot (e.g., t("chat.processing.thinking"))
- *
- * Note: Tool messages are rendered by TurnCard, not MessageBubble
- */
-interface MessageBubbleProps {
-  message: Message
-  onOpenFile: (path: string) => void
-  onOpenUrl: (url: string) => void
-  sessionId?: string
-  /**
-   * Markdown render mode for assistant messages
-   * @default 'minimal'
-   */
-  renderMode?: RenderMode
-  /**
-   * Callback to pop out message into a separate window
-   */
-  onPopOut?: (message: Message) => void
-  /** Compact mode - reduces padding for popover embedding */
-  compactMode?: boolean
-  /** Callback to resend the user message that preceded an error */
-  onRetry?: () => void
-
-  // --- Annotation / follow-up support for user messages ---
-  annotations?: AnnotationV1[]
-  sendMessageKey?: 'enter' | 'cmd-enter'
-  openAnnotationRequest?: {
-    messageId: string
-    annotationId: string
-    mode: 'view' | 'edit'
-    anchorX?: number
-    anchorY?: number
-    nonce: number
-  } | null
-  onAddAnnotation?: (messageId: string, annotation: AnnotationV1) => void | Promise<void>
-  onRemoveAnnotation?: (messageId: string, annotationId: string) => void | Promise<void>
-  onUpdateAnnotation?: (messageId: string, annotationId: string, patch: Partial<AnnotationV1>) => void | Promise<void>
-  onSaveAndSendFollowUp?: (target: { messageId: string; annotationId: string; note: string; selectedText: string }) => void
-}
-
-/**
- * ErrorMessage - Separate component for error messages to allow useState hook
- */
-function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Message; onOpenUrl?: (url: string) => void; sessionId?: string; onRetry?: () => void }) {
-  const { t } = useTranslation()
-  const hasDetails = (message.errorDetails && message.errorDetails.length > 0) || message.errorOriginal
-  const [detailsOpen, setDetailsOpen] = React.useState(false)
-  const actions = message.errorActions?.filter(a => {
-    if (a.action === 'open_url') return !!a.url && !!onOpenUrl
-    return true
-  })
-
-  return (
-    <div className="flex justify-start mt-4">
-      {/* Subtle bg (3% opacity) + tinted shadow for softer error appearance */}
-      <div
-        className="max-w-[80%] shadow-tinted rounded-[8px] pl-5 pr-4 pt-2 pb-2.5 break-words"
-        style={{
-          backgroundColor: 'oklch(from var(--destructive) l c h / 0.03)',
-          '--shadow-color': 'var(--destructive-rgb)',
-        } as React.CSSProperties}
-      >
-        <div className="text-xs text-destructive/50 mb-0.5 font-semibold">
-          {message.errorTitle || t('common.error')}
-        </div>
-        <p className="text-sm text-destructive">{message.content}</p>
-
-        {/* Action buttons */}
-        {actions && actions.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {actions.map((action) => (
-              <button
-                key={action.key}
-                onClick={() => {
-                  handleErrorMessageAction(action, {
-                    sessionId,
-                    onOpenUrl,
-                    onRetry,
-                  })
-                }}
-                className="text-xs px-2 py-0.5 rounded border border-destructive/20 text-destructive/70 hover:text-destructive hover:border-destructive/40 transition-colors"
-              >
-                {action.label}{action.action === 'open_url' ? ' ↗' : ''}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Collapsible Details Toggle */}
-        {hasDetails && (
-          <div className="mt-2">
-            <button
-              onClick={() => setDetailsOpen(!detailsOpen)}
-              className="flex items-center gap-1 text-xs text-destructive/70 hover:text-destructive transition-colors"
-            >
-              {detailsOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-              <span>{detailsOpen ? t('chat.hideTechnicalDetails') : t('chat.showTechnicalDetails')}</span>
-            </button>
-
-            <AnimatedCollapsibleContent isOpen={detailsOpen} className="overflow-hidden">
-              <div className="mt-2 pt-2 border-t border-destructive/20 text-xs text-destructive/60 font-mono space-y-0.5">
-                {message.errorDetails?.map((detail, i) => (
-                  <div key={i}>{detail}</div>
-                ))}
-                {message.errorOriginal && !message.errorDetails?.some(d => d.includes('Raw error:')) && (
-                  <div className="mt-1">Raw: {message.errorOriginal.slice(0, 200)}{message.errorOriginal.length > 200 ? '...' : ''}</div>
-                )}
-              </div>
-            </AnimatedCollapsibleContent>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function MessageBubble({
-  message,
-  onOpenFile,
-  onOpenUrl,
-  sessionId,
-  renderMode = 'minimal',
-  onPopOut,
-  compactMode,
-  onRetry,
-  annotations,
-  sendMessageKey,
-  openAnnotationRequest,
-  onAddAnnotation,
-  onRemoveAnnotation,
-  onUpdateAnnotation,
-  onSaveAndSendFollowUp,
-}: MessageBubbleProps) {
-  const { t } = useTranslation()
-
-  // === USER MESSAGE: Right-aligned bubble with attachments above ===
-  if (message.role === 'user') {
-    return (
-      <UserMessageBubble
-        content={message.content}
-        attachments={message.attachments}
-        badges={message.badges}
-        isPending={message.isPending}
-        isQueued={message.isQueued}
-        onUrlClick={onOpenUrl}
-        onFileClick={onOpenFile}
-        compactMode={compactMode}
-        messageId={message.id}
-        sessionId={sessionId}
-        annotations={annotations ?? message.annotations}
-        sendMessageKey={sendMessageKey}
-        openAnnotationRequest={openAnnotationRequest}
-        onAddAnnotation={onAddAnnotation}
-        onRemoveAnnotation={onRemoveAnnotation}
-        onUpdateAnnotation={onUpdateAnnotation}
-        onSaveAndSendFollowUp={onSaveAndSendFollowUp}
-      />
-    )
-  }
-
-  // === ASSISTANT MESSAGE: Left-aligned gray bubble with markdown rendering ===
-  if (message.role === 'assistant') {
-    return (
-      <div className="flex justify-start group">
-        <div className="relative max-w-[90%] bg-background shadow-minimal rounded-[8px] pl-6 pr-4 py-3 break-words min-w-0 select-text">
-          {/* Pop-out button - visible on hover */}
-          {onPopOut && !message.isStreaming && (
-            <button
-              onClick={() => onPopOut(message)}
-              data-touch-reveal="true"
-              className="absolute top-2 right-2 p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-foreground/5"
-              title={t("sidebarMenu.openInNewWindow")}
-            >
-              <ExternalLink className="w-4 h-4 text-muted-foreground hover:text-foreground" />
-            </button>
-          )}
-          {/* Use StreamingMarkdown for block-level memoization during streaming */}
-          {message.isStreaming ? (
-            <StreamingMarkdown
-              content={message.content}
-              isStreaming={true}
-              mode={renderMode}
-              onUrlClick={onOpenUrl}
-              onFileClick={onOpenFile}
-            />
-          ) : (
-            <CollapsibleMarkdownProvider>
-              <Markdown
-                mode={renderMode}
-                onUrlClick={onOpenUrl}
-                onFileClick={onOpenFile}
-                id={message.id}
-                className="text-sm"
-                collapsible
-              >
-                {message.content}
-              </Markdown>
-            </CollapsibleMarkdownProvider>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  // === ERROR MESSAGE: Red bordered bubble with warning icon and collapsible details ===
-  if (message.role === 'error') {
-    return <ErrorMessage message={message} onOpenUrl={onOpenUrl} sessionId={sessionId} onRetry={onRetry} />
-  }
-
-  // === STATUS MESSAGE: Matches ProcessingIndicator layout for visual consistency ===
-  if (message.role === 'status') {
-    return (
-      <div className="flex items-center gap-2 px-3 py-1 -mb-1 text-[13px] text-muted-foreground">
-        {/* Spinner in same location as TurnCard chevron */}
-        <div className="w-3 h-3 flex items-center justify-center shrink-0">
-          <Spinner className="text-[10px]" />
-        </div>
-        <span>{message.content}</span>
-      </div>
-    )
-  }
-
-  // === INFO MESSAGE: Icon and color based on level ===
-  if (message.role === 'info') {
-    // Compaction complete message - render as horizontal rule with centered label
-    // This persists after reload to show where context was compacted
-    if (message.statusType === 'compaction_complete') {
-      return (
-        <div className="flex items-center gap-3 my-12 px-3">
-          <div className="flex-1 h-px bg-border" />
-          <span className="text-sm text-muted-foreground/70 select-none">
-            Conversation Compacted
-          </span>
-          <div className="flex-1 h-px bg-border" />
-        </div>
-      )
-    }
-
-    const level = message.infoLevel || 'info'
-    const config = {
-      info: { icon: Info, className: 'text-muted-foreground' },
-      warning: { icon: AlertTriangle, className: 'text-info' },
-      error: { icon: CircleAlert, className: 'text-destructive' },
-      success: { icon: CheckCircle2, className: 'text-success' },
-    }[level]
-    const Icon = config.icon
-
-    return (
-      <div className={cn('flex items-center gap-2 px-3 py-1 text-[13px] select-none', config.className)}>
-        <div className="w-3 h-3 flex items-center justify-center shrink-0">
-          <Icon className="w-3 h-3" />
-        </div>
-        <span>{message.content}</span>
-      </div>
-    )
-  }
-
-  // === WARNING MESSAGE: Info themed bubble ===
-  if (message.role === 'warning') {
-    return (
-      <div className="flex justify-start">
-        <div className="max-w-[80%] bg-info/10 rounded-[8px] pl-5 pr-4 pt-2 pb-2.5 break-words select-none">
-          <div className="text-xs text-info/50 mb-0.5 font-semibold">
-            Warning
-          </div>
-          <p className="text-sm text-info">{message.content}</p>
-        </div>
-      </div>
-    )
-  }
-
-  return null
-}
-
-/**
- * MemoizedMessageBubble - Prevents re-renders of non-streaming messages
- *
- * During streaming, the entire message list gets updated on each delta.
- * This wrapper skips re-renders for messages that haven't changed,
- * significantly improving performance for long conversations.
- */
-const MemoizedMessageBubble = React.memo(MessageBubble, (prev, next) => {
-  // Always re-render streaming messages (content is changing)
-  if (prev.message.isStreaming || next.message.isStreaming) {
-    return false
-  }
-  // Skip re-render if key props unchanged. Annotations + the external open
-  // request must be compared so user-message comments render/open live.
-  return (
-    prev.message.id === next.message.id &&
-    prev.message.content === next.message.content &&
-    prev.message.role === next.message.role &&
-    prev.message.annotations === next.message.annotations &&
-    prev.annotations === next.annotations &&
-    prev.openAnnotationRequest === next.openAnnotationRequest &&
-    prev.sessionId === next.sessionId &&
-    prev.compactMode === next.compactMode
+    </RunCommandProvider>
   )
 })

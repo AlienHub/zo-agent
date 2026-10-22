@@ -6,7 +6,7 @@ describe('THINKING_TO_PI', () => {
     expect(THINKING_TO_PI.xhigh).toBe('xhigh')
   })
 
-  it('passes max through natively so Pi can clamp per model', () => {
+  it('passes max through natively (Pi clamps per model)', () => {
     expect(THINKING_TO_PI.max).toBe('max')
   })
 

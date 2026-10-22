@@ -10,8 +10,10 @@ import type { ThinkingLevel } from '../../thinking-levels.ts';
 
 /**
  * Map Craft's {@link ThinkingLevel} to Pi's `ThinkingLevel`.
- * All levels pass through 1:1. Pi clamps per model internally, so `max`
- * degrades to the model's ceiling when a model does not support it natively.
+ * All levels pass through 1:1 — Pi clamps per model internally
+ * (`clampThinkingLevel` in pi-ai), so `max` degrades to the model's
+ * ceiling on models without native max support (e.g. GPT-5.6 and GPT-6
+ * accept it natively, older GPT-5.x fall back to xhigh).
  */
 export const THINKING_TO_PI: Record<ThinkingLevel, PiThinkingLevel> = {
   off: 'off',

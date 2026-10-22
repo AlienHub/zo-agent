@@ -25,9 +25,7 @@ const MAIN_PROCESS_ALIAS: Record<string, string> = {
   "abort-controller": join(ROOT_DIR, "apps/electron/src/main/shims/abort-controller.cjs"),
 };
 
-// MCP server paths
-const SESSION_SERVER_DIR = join(ROOT_DIR, "packages/session-mcp-server");
-const SESSION_SERVER_OUTPUT = join(SESSION_SERVER_DIR, "dist/index.js");
+// Subprocess server paths
 // Pi agent server path (subprocess for Pi SDK sessions)
 const PI_AGENT_SERVER_DIR = join(ROOT_DIR, "packages/pi-agent-server");
 const PI_AGENT_SERVER_OUTPUT = join(PI_AGENT_SERVER_DIR, "dist/index.js");
@@ -243,29 +241,12 @@ async function buildWaWorker(): Promise<void> {
   }
 }
 
-// Build MCP servers for Codex sessions and Pi agent server (one-time, no watch needed)
-async function buildMcpServers(): Promise<void> {
-  console.log("🌉 Building MCP servers and Pi agent server...");
+// Build the Pi agent server subprocess (one-time, no watch needed)
+async function buildSubprocessServers(): Promise<void> {
+  console.log("🌉 Building Pi agent server...");
 
-  // Ensure dist directories exist
-  const sessionDistDir = join(SESSION_SERVER_DIR, "dist");
   const piDistDir = join(PI_AGENT_SERVER_DIR, "dist");
-  if (!existsSync(sessionDistDir)) mkdirSync(sessionDistDir, { recursive: true });
   if (!existsSync(piDistDir)) mkdirSync(piDistDir, { recursive: true });
-
-  // Build session MCP server (esbuild, packages external — deps resolve from root node_modules)
-  const sessionResult = await runEsbuild(
-    "packages/session-mcp-server/src/index.ts",
-    "packages/session-mcp-server/dist/index.js",
-    {},
-    { packagesExternal: true }
-  );
-
-  if (!sessionResult.success) {
-    console.error("❌ Session MCP server build failed:", sessionResult.error);
-    process.exit(1);
-  }
-  console.log("✅ Session MCP server built");
 
   // Build Pi agent server with bun (not esbuild) because its Pi SDK deps are ESM-only.
   // esbuild with packages:external leaves them as require() calls which fail at runtime.
@@ -304,10 +285,6 @@ function getOAuthDefines(): Record<string, string> {
 // Get environment variables for electron process
 function getElectronEnv(): Record<string, string> {
   const vitePort = process.env.CRAFT_VITE_PORT || "5173";
-
-  // Codex binary path is resolved at runtime by the binary-resolver module.
-  // It checks: CODEX_PATH env var > bundled binary > local dev fork > system PATH.
-  // You can override with CODEX_PATH env var if needed for debugging.
 
   return {
     ...process.env as Record<string, string>,
@@ -460,8 +437,8 @@ async function main(): Promise<void> {
 
   copyResources();
 
-  // Build MCP servers for Codex sessions
-  await buildMcpServers();
+  // Build the Pi agent server subprocess
+  await buildSubprocessServers();
 
   // Build WhatsApp worker bundle so the adapter can spawn it on demand
   await buildWaWorker();

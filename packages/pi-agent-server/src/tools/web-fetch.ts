@@ -1,4 +1,4 @@
-import { Type } from '@sinclair/typebox';
+import { Type } from '@earendil-works/pi-ai';
 import type { AgentToolResult } from '@earendil-works/pi-agent-core';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import TurndownService from 'turndown';
@@ -151,10 +151,12 @@ async function readResponseText(response: Response, maxSize: number): Promise<st
 // Helpers
 // ============================================================
 
-function result(text: string, isError = false): AgentToolResult<{ isError?: boolean }> {
+function result(text: string, isError = false): AgentToolResult<Record<string, never>> {
   return {
     content: [{ type: 'text', text }],
-    details: isError ? { isError: true } : {},
+    details: {},
+    // Pi >=0.99: an error result for the model and the UI, without throwing.
+    ...(isError ? { isError: true } : {}),
   };
 }
 

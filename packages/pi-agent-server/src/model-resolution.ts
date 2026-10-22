@@ -34,7 +34,7 @@ export function resolvePiModel(
   // If we know the auth provider, do an exact provider+model lookup first.
   // This avoids the getAll() ambiguity where the same model ID exists under
   // multiple providers (e.g., "gpt-5.2" under both "openai" and
-  // "azure-openai-responses") and the wrong one matches first.
+  // "azure") and the wrong one matches first.
   if (piAuthProvider) {
     const exact = modelRegistry.find(piAuthProvider, bareId);
     if (exact) {
@@ -50,7 +50,7 @@ export function resolvePiModel(
   // Fallback: search all available models.
   // When piAuthProvider is set, only return models from the same provider
   // (or 'custom-endpoint'). Without this guard, a model that exists under
-  // a different provider (e.g. "gpt-5.4" under "azure-openai-responses"
+  // a different provider (e.g. "gpt-5.4" under "azure"
   // when authed as "github-copilot") would be returned, and the Pi SDK
   // would fail with "No API key found for <wrong-provider>".
   const allModels = modelRegistry.getAll();
@@ -86,4 +86,26 @@ export function isModelNotFoundError(message: string): boolean {
     normalized.includes('is not supported') ||
     (normalized.includes('requested model') && normalized.includes('not') && normalized.includes('exist'))
   );
+}
+
+/**
+ * Stricter variant of `isModelNotFoundError` for contexts where a 400 can also mean a
+ * rejected *tool* or parameter — e.g. the ChatGPT Codex search path, where a hosted-tool
+ * refusal ("Hosted tool 'web_search' is not supported") must not be mistaken for a model
+ * rejection (that would skip the tool-type retry and burn every candidate model instead).
+ * The ambiguous phrasings ("is not supported", "does not exist") only count when the
+ * message names the requested model — the known Codex refusal quotes it verbatim
+ * ("The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account.").
+ */
+export function isModelRejectionError(message: string, modelId: string): boolean {
+  if (!isModelNotFoundError(message)) return false;
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes('model_not_found') ||
+    normalized.includes('no such model') ||
+    normalized.includes('requested model')
+  ) {
+    return true;
+  }
+  return modelId.length > 0 && normalized.includes(modelId.toLowerCase());
 }

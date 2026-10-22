@@ -8,23 +8,26 @@
  */
 
 import { join } from 'path';
-import { homedir } from 'os';
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'fs';
 import { getBundledAssetsDir } from '../utils/paths.ts';
 import { debug } from '../utils/debug.ts';
+import { CONFIG_DIR } from '../config/paths.ts';
 
-const CONFIG_DIR = join(homedir(), '.craft-agent');
 const RELEASE_NOTES_DIR = join(CONFIG_DIR, 'release-notes');
 
 let releaseNotesInitialized = false;
 
 /**
- * Only `X.Y.Z.md` files are real, displayable release notes. This excludes the
- * `next.md` accumulator (and any other stray file) so it never surfaces in the
- * UI as a bogus "vnext" entry — `parseVersion('next')` yields NaN, which sorts
- * unpredictably and could otherwise become the "latest" version.
+ * Only versioned files (`X.Y.Z.md`) are release notes. The resources folder also
+ * ships `next.md`, the pending-notes template that accumulates bullets between
+ * releases; without this filter it loaded as version "next", was synced to
+ * ~/.craft-agent/release-notes/, and hit the semver sort as NaN.
  */
-const VERSIONED_NOTE_RE = /^\d+\.\d+\.\d+\.md$/;
+const RELEASE_NOTE_FILENAME = /^\d+\.\d+\.\d+\.md$/;
+
+export function isReleaseNoteFilename(filename: string): boolean {
+  return RELEASE_NOTE_FILENAME.test(filename);
+}
 
 function getAssetsDir(): string {
   return getBundledAssetsDir('release-notes')
@@ -49,7 +52,7 @@ function loadBundledReleaseNotes(): Record<string, string> {
 
   let files: string[];
   try {
-    files = existsSync(dir) ? readdirSync(dir).filter(f => VERSIONED_NOTE_RE.test(f)) : [];
+    files = existsSync(dir) ? readdirSync(dir).filter(isReleaseNoteFilename) : [];
   } catch {
     console.warn(`[release-notes] Could not read release notes dir: ${dir}`);
     return notes;

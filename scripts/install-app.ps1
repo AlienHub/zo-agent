@@ -1,12 +1,12 @@
-# Zo Windows Installer
-# Download from https://github.com/AlienHub/craft-agents-oss/releases/latest
+# Craft Agents Windows Installer
+# Usage: irm https://thecraftagents.com/install-app.ps1 | iex
 
 & {
 $ErrorActionPreference = "Stop"
 
-$VERSIONS_URL = "https://github.com/AlienHub/craft-agents-oss/releases/latest/download"
+$VERSIONS_URL = "https://thecraftagents.com/electron"
 $DOWNLOAD_DIR = "$env:TEMP\craft-agent-install"
-$APP_NAME = "Zo"
+$APP_NAME = "Craft Agents"
 
 # Colors for output
 function Write-Info { Write-Host "> $args" -ForegroundColor Blue }
@@ -29,11 +29,11 @@ Write-Info "Detected platform: $platform (arch: $arch)"
 # Create download directory
 New-Item -ItemType Directory -Force -Path $DOWNLOAD_DIR | Out-Null
 
-# Fetch YAML manifest directly from the latest GitHub Release.
+# Fetch YAML manifest directly from /electron/latest/ (no version endpoint needed)
 Write-Info "Fetching release info..."
 $yamlPath = Join-Path $DOWNLOAD_DIR "latest.yml"
 try {
-    Invoke-WebRequest -Uri "$VERSIONS_URL/latest.yml" -OutFile $yamlPath -UseBasicParsing
+    Invoke-WebRequest -Uri "$VERSIONS_URL/latest/latest.yml" -OutFile $yamlPath -UseBasicParsing
 } catch {
     Write-Err "Failed to fetch release info: $_"
 }
@@ -58,7 +58,7 @@ Write-Info "Latest version: $version"
 # Parse YAML to extract sha512, url (filename), and size for our architecture
 # YAML format:
 #   files:
-#     - url: Zo-x64.exe
+#     - url: Craft-Agents-x64.exe
 #       sha512: <base64>
 #       size: 123456789
 #       arch: x64
@@ -108,10 +108,10 @@ if (-not $checksum -or $checksum.Length -lt 80) {
 
 # Use default filename if not found
 if (-not $filename) {
-    $filename = "Zo-$version-$arch.exe"
+    $filename = "Craft-Agents-$arch.exe"
 }
 
-$installerUrl = "$VERSIONS_URL/$filename"
+$installerUrl = "$VERSIONS_URL/latest/$filename"
 
 Write-Info "Expected sha512: $($checksum.Substring(0, 20))..."
 
@@ -192,9 +192,9 @@ if ($actualHash -ne $checksum) {
 Write-Success "Checksum verified!"
 
 # Close the app if it's running
-$process = Get-Process -Name "Zo" -ErrorAction SilentlyContinue
+$process = Get-Process -Name "Craft Agents" -ErrorAction SilentlyContinue
 if ($process) {
-    Write-Info "Closing Zo..."
+    Write-Info "Closing Craft Agents..."
     $process | Stop-Process -Force
     Start-Sleep -Seconds 2
 }
@@ -229,9 +229,9 @@ Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
 # Add command line shortcut
 Write-Info "Adding 'craft-agents' command to PATH..."
 
-$binDir = "$env:LOCALAPPDATA\Zo\bin"
+$binDir = "$env:LOCALAPPDATA\Craft Agents\bin"
 $cmdFile = "$binDir\craft-agents.cmd"
-$exePath = "$env:LOCALAPPDATA\Programs\Zo\Zo.exe"
+$exePath = "$env:LOCALAPPDATA\Programs\Craft Agents\Craft Agents.exe"
 
 # Create bin directory
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
@@ -255,7 +255,7 @@ Write-Host "--------------------------------------------------------------------
 Write-Host ""
 Write-Success "Installation complete!"
 Write-Host ""
-Write-Host "  Zo has been installed."
+Write-Host "  Craft Agents has been installed."
 Write-Host ""
 Write-Host "  Launch from:"
 Write-Host "    - Start Menu or desktop shortcut"

@@ -14,8 +14,9 @@
  */
 
 import { getProviders, getModels } from '@earendil-works/pi-ai/compat';
-import type { KnownProvider, Model, Api } from '@earendil-works/pi-ai';
+import type { Model, Api } from '@earendil-works/pi-ai';
 import type { ModelDefinition } from './models.ts';
+import { fromPiProviderId, toPiProviderId } from './pi-provider-ids.ts';
 
 // ============================================
 // PI MODEL DISCOVERY
@@ -67,19 +68,8 @@ const PI_EXCLUDED_MODEL_PREFIXES: string[] = [
   'gpt-4',
 ];
 
-export function isDeprecatedClaudeOpus46Model(modelId: string): boolean {
-  const lower = modelId.toLowerCase().replace(/^pi\//, '');
-  return lower === 'claude-opus-4-6'
-    || lower === 'claude-opus-4.6'
-    || lower === 'anthropic/claude-opus-4-6'
-    || lower === 'anthropic/claude-opus-4.6'
-    || lower.endsWith('.anthropic.claude-opus-4-6-v1')
-    || lower === 'anthropic.claude-opus-4-6-v1';
-}
-
 function isExcludedPiModel(modelId: string): boolean {
   if (PI_EXCLUDED_MODELS.has(modelId)) return true;
-  if (isDeprecatedClaudeOpus46Model(modelId)) return true;
   return PI_EXCLUDED_MODEL_PREFIXES.some(prefix => modelId.startsWith(prefix));
 }
 
@@ -99,7 +89,7 @@ function isBareBedrockClaudeModel(modelId: string): boolean {
  */
 export function getPiModelsForAuthProvider(piAuthProvider: string): ModelDefinition[] {
   try {
-    const models = getModels(piAuthProvider as KnownProvider);
+    const models = getModels(toPiProviderId(piAuthProvider) as Parameters<typeof getModels>[0]);
     if (models.length > 0) {
       return models
         .filter(m => !isExcludedPiModel(m.id))
@@ -158,9 +148,12 @@ const PI_PROVIDER_DISPLAY: Partial<Record<string, { label: string; placeholder: 
   'amazon-bedrock':         { label: 'Amazon Bedrock',     placeholder: 'AKIA...' },
   'azure-openai-responses': { label: 'Azure OpenAI',       placeholder: 'Paste your key here...' },
   'vercel-ai-gateway':      { label: 'Vercel AI Gateway',  placeholder: 'Paste your key here...' },
+  'cloudflare-ai-gateway':  { label: 'Cloudflare AI Gateway', placeholder: 'Cloudflare API token' },
   'huggingface':            { label: 'Hugging Face',       placeholder: 'hf_...' },
   'minimax':                { label: 'Minimax',            placeholder: 'Paste your key here...' },
   'kimi-coding':            { label: 'Kimi (Coding)',      placeholder: 'sk-kimi-...' },
+  'moonshotai':             { label: 'Moonshot AI',        placeholder: 'sk-...' },
+  'moonshotai-cn':          { label: 'Moonshot AI (CN)',   placeholder: 'sk-...' },
   'zai':                    { label: 'z.ai (GLM)',         placeholder: 'Paste your key here...' },
 };
 
@@ -190,6 +183,7 @@ function formatProviderName(key: string): string {
  */
 export function getPiApiKeyProviders(): PiProviderInfo[] {
   return getProviders()
+    .map(fromPiProviderId)
     .filter(p => !PI_EXCLUDED_PROVIDERS.has(p))
     .map(p => {
       const display = PI_PROVIDER_DISPLAY[p];
@@ -215,7 +209,7 @@ export function getPiApiKeyProviders(): PiProviderInfo[] {
  */
 export function getPiProviderBaseUrl(provider: string): string | undefined {
   try {
-    const models = getModels(provider as Parameters<typeof getModels>[0]);
+    const models = getModels(toPiProviderId(provider) as Parameters<typeof getModels>[0]);
     return models[0]?.baseUrl || undefined;
   } catch {
     return undefined;

@@ -6,6 +6,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
+[![Discord](https://img.shields.io/badge/Discord-Come%20join%20our%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/bwskSM82p)
 
 ## How it Works (Video)
 To understand what Zo does and how it works watch this video.
@@ -33,7 +34,7 @@ This fork continues that direction under the Zo name.
 **How do I connect to Linear, Gmail, Slack...?**
 Tell the agent "add Linear as a source." It finds public APIs and MCP servers, reads their docs, sets up credentials, and configures everything. No config files, no setup wizards.
 
-[Check out how I just connected to Slack →](https://agents.craft.do/s/DRNQEiy8w2e1v5LPgKl8b)
+[Check out how I just connected to Slack →](https://thecraftagents.com/s/DRNQEiy8w2e1v5LPgKl8b)
 
 **I already have my MCP config JSON.**
 Paste it. The agent handles the rest.
@@ -50,7 +51,7 @@ Zo connects to anything. We have it hooked up to a direct Postgres DB behind a j
 **How do I import my Claude Code skills and MCPs?**
 Tell the agent you want to import your skills from Claude Code. It handles the migration.
 
-[Here I imported all my skills in one go →](https://agents.craft.do/s/gWCFqwhObFWaNJIEJmd6j)
+[Here I imported all my skills in one go →](https://thecraftagents.com/s/gWCFqwhObFWaNJIEJmd6j)
 
 **How do I create a new skill?**
 Describe what the skill should do, give it context. The agent takes care of the rest.
@@ -68,18 +69,18 @@ Yes. That's the core idea behind agent-native software. You describe what you wa
 
 **macOS / Linux:**
 ```bash
-curl -fsSL https://agents.craft.do/install-app.sh | bash
+curl -fsSL https://thecraftagents.com/install-app.sh | bash
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://agents.craft.do/install-app.ps1 | iex
+irm https://thecraftagents.com/install-app.ps1 | iex
 ```
 
 ### Build from Source
 
 ```bash
-git clone https://github.com/lukilabs/craft-agents-oss.git
+git clone https://github.com/craft-ai-agents/craft-agents-oss.git
 cd craft-agents-oss
 bun install
 bun run electron:start
@@ -347,19 +348,29 @@ craft-cli --validate-server --url ws://127.0.0.1:9100 --token <token>
 ## Architecture
 
 ```
-craft-agent/
+craft-agents-oss/
 ├── apps/
 │   ├── cli/                   # Terminal client (CLI)
-│   └── electron/              # Desktop GUI (primary)
-│       └── src/
-│           ├── main/          # Electron main process
-│           ├── preload/       # Context bridge
-│           └── renderer/      # React UI (Vite + shadcn)
+│   ├── electron/              # Desktop GUI (primary)
+│   │   └── src/
+│   │       ├── main/          # Electron main process
+│   │       ├── preload/       # Context bridge
+│   │       ├── renderer/      # React UI (Vite + shadcn)
+│   │       └── transport/     # WebSocket RPC client
+│   ├── viewer/                # Web viewer for shared session transcripts
+│   └── webui/                 # Browser UI served by the headless server
 └── packages/
     ├── core/                  # Shared types
+    ├── messaging-gateway/     # Telegram, WhatsApp and Lark messaging gateway
+    ├── messaging-whatsapp-worker/ # WhatsApp worker subprocess
+    ├── pi-agent-server/       # Pi agent subprocess (JSONL over stdio)
+    ├── server/                # Standalone headless server
+    ├── server-core/           # RPC transport, handlers, session management
+    ├── session-tools-core/    # Session-scoped tool implementations
+    ├── ui/                    # Shared React components
     └── shared/                # Business logic
         └── src/
-            ├── agent/         # CraftAgent, permissions
+            ├── agent/         # Claude and Pi agent backends, permissions
             ├── auth/          # OAuth, tokens
             ├── config/        # Storage, preferences, themes
             ├── credentials/   # AES-256-GCM encrypted storage
@@ -429,10 +440,11 @@ Go to **APIs & Services → Library** and enable the APIs you need:
 
 1. Go to **APIs & Services → Credentials**
 2. Click **Create Credentials → OAuth Client ID**
-3. Application type: **Desktop app**
-4. Name: e.g., "Craft Agent Desktop"
-5. Click **Create**
-6. Note the **Client ID** and **Client Secret**
+3. Application type: **Web application** (not "Desktop app" — Craft Agent routes every OAuth flow through a hosted callback, which a Desktop-app client rejects with `redirect_uri_mismatch`)
+4. Name: e.g., "Craft Agent"
+5. Under **Authorized redirect URIs**, add: `https://thecraftagents.com/auth/callback`
+6. Click **Create**
+7. Note the **Client ID** and **Client Secret**
 
 #### 5. Configure in Craft Agent
 
@@ -550,7 +562,7 @@ Or configure manually in `~/.craft-agent/workspaces/{id}/automations.json`:
 
 **Supported events:** `LabelAdd`, `LabelRemove`, `PermissionModeChange`, `FlagChange`, `SessionStatusChange`, `SchedulerTick`, `PreToolUse`, `PostToolUse`, `SessionStart`, `SessionEnd`, and more.
 
-See the [Automations documentation](https://agents.craft.do/docs/automations/overview) for the full reference.
+See the [Automations documentation](https://thecraftagents.com/docs/automations/overview) for the full reference.
 
 ## Advanced Features
 

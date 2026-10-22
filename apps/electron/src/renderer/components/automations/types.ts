@@ -268,7 +268,8 @@ export const AUTOMATION_TYPE_TO_FILTER_KIND: Record<string, AutomationFilterKind
 // Execution History
 // ============================================================================
 
-export type ExecutionStatus = 'success' | 'error' | 'blocked'
+/** `skipped`: the matcher's semanticCondition was not met, so no action ran. */
+export type ExecutionStatus = 'success' | 'error' | 'blocked' | 'skipped'
 
 export interface WebhookDetails {
   method: string
@@ -351,6 +352,8 @@ export function getEventDisplayName(event: AutomationTrigger): string {
 export const PERMISSION_DISPLAY_NAMES: Record<PermissionMode, string> = {
   'safe':      'Explore',
   'ask':       'Ask',
+  // Not selectable for automations (they run unattended); listed for completeness.
+  'guarded':   'Guarded',
   'allow-all': 'Execute',
 }
 
@@ -431,7 +434,7 @@ function deriveAutomationName(event: string, matcher: AutomationsConfigMatcher):
 /** Derive a summary line from the matcher/cron/event */
 function deriveAutomationSummary(event: string, matcher: AutomationsConfigMatcher): string {
   if (matcher.cron) {
-    const runs = computeNextRuns(matcher.cron, 1)
+    const runs = computeNextRuns(matcher.cron, 1, matcher.timezone)
     if (runs.length > 0) {
       const next = runs[0]!
       const tz = matcher.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone

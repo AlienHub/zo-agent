@@ -78,6 +78,8 @@ class ModelRefreshService {
       return
     }
 
+    if (connection.compose) return
+
     // OpenCode Zen/Go compat connections have their own fetcher
     // (GET <baseUrl>/models). Falls back to the static catalog if the live fetch fails.
     if (isCompatProvider(connection.providerType) && isOpenCodePiAuthProvider(connection.piAuthProvider)) {

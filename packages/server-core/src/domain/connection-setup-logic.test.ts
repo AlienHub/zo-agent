@@ -5,6 +5,10 @@ import {
   setupTestRequiresApiKey,
   resolveCustomEndpointSetup,
   createBuiltInConnection,
+  API_KEY_MASK,
+  maskApiKey,
+  isMaskedApiKey,
+  resolveSetupTestApiKey,
 } from './connection-setup-logic'
 
 describe('validateSetupTestInput', () => {
@@ -109,33 +113,6 @@ describe('resolveCustomEndpointSetup', () => {
       customEndpointApi: 'openai-completions',
     })).toEqual({ authType: 'api_key_with_endpoint', piAuthProvider: 'openai' })
   })
-
-  it('preserves a branded piAuthProvider hint instead of deriving openai/anthropic', () => {
-    expect(resolveCustomEndpointSetup({
-      baseUrl: 'https://opencode.ai/zen/v1',
-      credential: 'sk-opencode',
-      customEndpointApi: 'anthropic-messages',
-      piAuthProviderHint: 'opencode-zen-anthropic',
-    })).toEqual({ authType: 'api_key_with_endpoint', piAuthProvider: 'opencode-zen-anthropic' })
-  })
-
-  it('preserves a branded piAuthProvider hint for openai-completions protocol', () => {
-    expect(resolveCustomEndpointSetup({
-      baseUrl: 'https://opencode.ai/zen/go/v1',
-      credential: 'sk-opencode-go',
-      customEndpointApi: 'openai-completions',
-      piAuthProviderHint: 'opencode-go-openai',
-    })).toEqual({ authType: 'api_key_with_endpoint', piAuthProvider: 'opencode-go-openai' })
-  })
-
-  it('ignores the hint for keyless loopback endpoints', () => {
-    expect(resolveCustomEndpointSetup({
-      baseUrl: 'http://localhost:11434/v1',
-      credential: undefined,
-      customEndpointApi: 'openai-completions',
-      piAuthProviderHint: 'opencode-zen-openai',
-    })).toEqual({ authType: 'none', name: 'Local Model' })
-  })
 })
 
 // New connections must persist a per-provider midStreamBehavior default so the
@@ -160,7 +137,7 @@ describe('createBuiltInConnection seeds midStreamBehavior', () => {
     expect(conn.midStreamBehavior).toBe('steer')
   })
 
-  it("Pi API key (Zo Backend) → 'steer'", () => {
+  it("Pi API key (Craft Agents Backend) → 'steer'", () => {
     const conn = createBuiltInConnection('pi-api-key')
     expect(conn.providerType).toBe('pi')
     expect(conn.midStreamBehavior).toBe('steer')
@@ -173,31 +150,63 @@ describe('createBuiltInConnection seeds midStreamBehavior', () => {
   })
 })
 
-describe('createBuiltInConnection — OpenCode Zen/Go templates', () => {
-  it('creates opencode-zen with pi_compat, no customEndpoint but seeded catalog models', () => {
-    const conn = createBuiltInConnection('opencode-zen')
-    expect(conn.slug).toBe('opencode-zen')
-    expect(conn.name).toBe('OpenCode Zen')
-    expect(conn.providerType).toBe('pi_compat')
-    expect(conn.authType).toBe('api_key_with_endpoint')
-    expect(conn.piAuthProvider).toBe('opencode-zen')
-    expect(conn.customEndpoint).toBeUndefined()
-    expect(conn.midStreamBehavior).toBe('steer')
-    expect(Array.isArray(conn.models)).toBe(true)
-    expect(conn.models!.length).toBeGreaterThan(0)
-    expect(conn.defaultModel).toBe('deepseek-v4-pro')
+describe('API key masking for the edit form', () => {
+  it('masks long keys keeping the provider prefix and the last four characters', () => {
+    expect(maskApiKey('sk-ant-api03-abcdefghijklmnop')).toBe(`sk-ant-${API_KEY_MASK}mnop`)
   })
 
-  it('creates opencode-go with pi_compat, no customEndpoint but seeded catalog models', () => {
-    const conn = createBuiltInConnection('opencode-go')
-    expect(conn.slug).toBe('opencode-go')
-    expect(conn.name).toBe('OpenCode Go')
-    expect(conn.providerType).toBe('pi_compat')
-    expect(conn.authType).toBe('api_key_with_endpoint')
-    expect(conn.piAuthProvider).toBe('opencode-go')
-    expect(conn.customEndpoint).toBeUndefined()
-    expect(Array.isArray(conn.models)).toBe(true)
-    expect(conn.models!.length).toBeGreaterThan(0)
-    expect(conn.defaultModel).toBe('glm-5.2')
+  it('masks short keys completely', () => {
+    expect(maskApiKey('short-key')).toBe(API_KEY_MASK)
+  })
+
+  it('recognizes masked values and nothing else', () => {
+    expect(isMaskedApiKey(maskApiKey('sk-ant-api03-abcdefghijklmnop'))).toBe(true)
+    expect(isMaskedApiKey(API_KEY_MASK)).toBe(true)
+    expect(isMaskedApiKey('sk-ant-api03-abcdefghijklmnop')).toBe(false)
+    expect(isMaskedApiKey('')).toBe(false)
+    expect(isMaskedApiKey(undefined)).toBe(false)
+    expect(isMaskedApiKey(null)).toBe(false)
+  })
+})
+
+// Regression for OSS #1048 (PR #1049 by Code-MonkeyZhang): editing a connection
+// and clicking Test sent the masked placeholder as the API key.
+describe('resolveSetupTestApiKey', () => {
+  const STORED = 'sk-ant-stored-key-0000000000'
+  let lookups: string[] = []
+  const store = async (slug: string) => {
+    lookups.push(slug)
+    return slug === 'anthropic' ? STORED : null
+  }
+
+  it('uses a typed key as-is and never consults the store', async () => {
+    lookups = []
+    const result = await resolveSetupTestApiKey({ apiKey: '  sk-new-key  ', connectionSlug: 'anthropic', allowEmptyApiKey: false }, store)
+    expect(result).toEqual({ ok: true, apiKey: 'sk-new-key', source: 'input' })
+    expect(lookups).toEqual([])
+  })
+
+  it('resolves the masked placeholder to the stored key of the edited connection', async () => {
+    lookups = []
+    const result = await resolveSetupTestApiKey({ apiKey: maskApiKey(STORED), connectionSlug: 'anthropic', allowEmptyApiKey: false }, store)
+    expect(result).toEqual({ ok: true, apiKey: STORED, source: 'stored' })
+    expect(lookups).toEqual(['anthropic'])
+  })
+
+  it('asks for the key when the placeholder arrives without a connection slug', async () => {
+    const result = await resolveSetupTestApiKey({ apiKey: API_KEY_MASK, allowEmptyApiKey: false }, store)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('Re-enter the API key')
+  })
+
+  it('asks for the key when nothing is stored for the slug', async () => {
+    const result = await resolveSetupTestApiKey({ apiKey: API_KEY_MASK, connectionSlug: 'missing', allowEmptyApiKey: true }, store)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('No API key is stored')
+  })
+
+  it('requires a key for remote endpoints and allows none for loopback', async () => {
+    expect(await resolveSetupTestApiKey({ apiKey: '', allowEmptyApiKey: false }, store)).toEqual({ ok: false, error: 'API key is required' })
+    expect(await resolveSetupTestApiKey({ apiKey: undefined, allowEmptyApiKey: true }, store)).toEqual({ ok: true, apiKey: '', source: 'input' })
   })
 })

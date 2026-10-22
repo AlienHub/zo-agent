@@ -1,5 +1,8 @@
-import { BrowserWindow, shell, nativeTheme, Menu, app } from 'electron'
+import { BrowserWindow, clipboard, shell, nativeTheme, Menu, app } from 'electron'
+import { i18n } from '@craft-agent/shared/i18n'
 import { windowLog } from './logger'
+import { buildContextMenuTemplate } from './context-menu'
+import { applyDefaultZoom } from './zoom'
 import { join, resolve, sep } from 'path'
 import { existsSync } from 'fs'
 import { release } from 'os'
@@ -12,27 +15,26 @@ import type { SavedWindow } from './window-state'
 // Vite dev server URL for hot reload
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 
+/** First Windows build (11 22H2) on which Electron applies `backgroundMaterial`. */
+const WINDOWS_BACKGROUND_MATERIAL_MIN_BUILD = 22621
+
 /**
- * Get the appropriate background material for Windows transparency effects
- * - Windows 11 (build 22000+): Mica effect
- * - Windows 10 1809+ (build 17763+): Acrylic effect
- * - Older versions: No transparency
+ * Mica behind the window on Windows 11 22H2+, else none. Electron ignores `backgroundMaterial` on
+ * older builds (Windows 10, Windows 11 21H2) but still makes the web contents transparent, so
+ * asking for it there would leave the translucent canvas over nothing.
  */
-function getWindowsBackgroundMaterial(): 'mica' | 'acrylic' | undefined {
+function getWindowsBackgroundMaterial(): 'mica' | undefined {
   if (process.platform !== 'win32') return undefined
 
   // os.release() returns "10.0.xxxxx" where xxxxx is the build number
   const buildNumber = parseInt(release().split('.')[2] || '0', 10)
 
-  if (buildNumber >= 22000) {
-    windowLog.info('Windows 11 detected (build ' + buildNumber + '), using Mica')
+  if (buildNumber >= WINDOWS_BACKGROUND_MATERIAL_MIN_BUILD) {
+    windowLog.info('Windows build ' + buildNumber + ': using Mica')
     return 'mica'
-  } else if (buildNumber >= 17763) {
-    windowLog.info('Windows 10 1809+ detected (build ' + buildNumber + '), using Acrylic')
-    return 'acrylic'
   }
 
-  windowLog.info('Older Windows detected (build ' + buildNumber + '), no transparency')
+  windowLog.info('Windows build ' + buildNumber + ': no background material (needs ' + WINDOWS_BACKGROUND_MATERIAL_MIN_BUILD + '+)')
   return undefined
 }
 
@@ -223,6 +225,7 @@ export class WindowManager {
     const isMac = process.platform === 'darwin'
     const isWindows = process.platform === 'win32'
     const windowsBackgroundMaterial = getWindowsBackgroundMaterial()
+    const windowVibrancy = isMac ? 'under-window' : windowsBackgroundMaterial
 
     const window = new BrowserWindow({
       width: windowWidth,
@@ -239,7 +242,7 @@ export class WindowManager {
         vibrancy: 'under-window',
         visualEffectState: 'active',
       }),
-      // Windows: use native frame with Mica/Acrylic transparency (Windows 10/11)
+      // Windows: native frame, Mica on Windows 11 22H2+
       ...(isWindows && {
         frame: true, // Keep native frame for better UX
         autoHideMenuBar: true, // Menu is null on Windows, this is just for safety
@@ -258,7 +261,9 @@ export class WindowManager {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: false,
-        webviewTag: false // Browser integration uses WebContentsView, not <webview>
+        webviewTag: false, // Browser integration uses WebContentsView, not <webview>
+        // Tell the renderer which native material sits behind the window (ThemeContext data-vibrancy)
+        additionalArguments: windowVibrancy ? [`--craft-window-vibrancy=${windowVibrancy}`] : [],
       }
     })
 
@@ -266,6 +271,9 @@ export class WindowManager {
     window.once('ready-to-show', () => {
       window.show()
     })
+
+    // Chromium resets zoom when a load commits, so the default zoom goes on after each load
+    window.webContents.on('did-finish-load', () => applyDefaultZoom(window.webContents))
 
     // Open external links in default browser, but never hand known-dangerous
     // schemes directly to shell.openExternal. Markdown normal-clicks go through
@@ -286,18 +294,17 @@ export class WindowManager {
       this.openExternalFromRenderer(url, 'will-navigate', window)
     })
 
-    // Enable right-click context menu in development
-    if (!app.isPackaged) {
-      window.webContents.on('context-menu', (_event, params) => {
-        Menu.buildFromTemplate([
-          { label: 'Inspect Element', click: () => window.webContents.inspectElement(params.x, params.y) },
-          { type: 'separator' },
-          { label: 'Cut', role: 'cut', enabled: params.editFlags.canCut },
-          { label: 'Copy', role: 'copy', enabled: params.editFlags.canCopy },
-          { label: 'Paste', role: 'paste', enabled: params.editFlags.canPaste },
-        ]).popup()
+    // Right-click menu in every build: spelling, Copy Link, edit actions (+ Inspect in dev)
+    window.webContents.on('context-menu', (_event, params) => {
+      const template = buildContextMenuTemplate(params, {
+        t: key => i18n.t(key),
+        replaceMisspelling: suggestion => window.webContents.replaceMisspelling(suggestion),
+        learnSpelling: word => window.webContents.session.addWordToSpellCheckerDictionary(word),
+        copyText: text => clipboard.writeText(text),
+        inspectElement: app.isPackaged ? undefined : (x, y) => window.webContents.inspectElement(x, y),
       })
-    }
+      if (template.length > 0) Menu.buildFromTemplate(template).popup({ window })
+    })
 
     // The renderer's index.html ships with `<title>Zo</title>`, so
     // without this Electron auto-syncs every window's title back to that on

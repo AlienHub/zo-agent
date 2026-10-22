@@ -15,11 +15,9 @@ import type { SensitiveMatch } from './types.ts';
 import { runPreToolUseChecks, type PermissionManagerLike } from '../../core/pre-tool-use.ts';
 
 const permissionManager: PermissionManagerLike = {
-  isCommandWhitelisted: () => false,
-  isDangerousCommand: () => false,
-  getBaseCommand: command => command.split(/\s+/)[0] ?? command,
-  extractDomainFromNetworkCommand: () => null,
   isDomainWhitelisted: () => false,
+  isCommandWhitelisted: () => false,
+  getBaseCommand: command => command.split(/\s+/)[0] ?? command,
 };
 
 describe('SensitiveScanner', () => {

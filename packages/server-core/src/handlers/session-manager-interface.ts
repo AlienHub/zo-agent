@@ -18,17 +18,23 @@ import type {
   FileAttachment,
   SendMessageOptions,
   PermissionResponseOptions,
-  SessionPermissionAllowances,
   CredentialResponse,
   PermissionModeState,
   UnreadSummary,
   ShareResult,
-  SessionResourceRef,
+  BackgroundTaskOutput,
+  StopBackgroundTaskResult,
 } from '@craft-agent/shared/protocol'
 import type { SessionBundle, DispatchMode } from '@craft-agent/shared/sessions'
 import type { EventSink } from '../transport'
 
 export interface ISessionManager {
+  respondToAutomationConfirmation(sessionId:string,messageId:string,confirmed:boolean):Promise<void>
+  getSessionPermissionAllowances(sessionId:string):import('@craft-agent/shared/protocol').SessionPermissionAllowances
+  addResourceAnnotation(sessionId:string,resource:import('@craft-agent/shared/sessions').SessionResourceRef,annotation:AnnotationV1):void
+  removeResourceAnnotation(sessionId:string,resource:import('@craft-agent/shared/sessions').SessionResourceRef,annotationId:string):void
+  updateResourceAnnotation(sessionId:string,resource:import('@craft-agent/shared/sessions').SessionResourceRef,annotationId:string,patch:Partial<AnnotationV1>):void
+
   // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
@@ -55,6 +61,9 @@ export interface ISessionManager {
   /** Resolved working directory of a live session (Tasks Conductor uses it so children inherit
    *  the orchestrator's cwd). */
   getSessionWorkingDirectory(sessionId: string): string | undefined
+  /** Calls `listener(sessionId)` each time a session's turn completes; returns an unsubscribe.
+   *  (The PR watcher refetches then: a turn is when pushes and `gh pr create` happen.) */
+  onTurnComplete?(listener: (sessionId: string) => void): () => void
   deleteSession(sessionId: string): Promise<void>
 
   // ---------------------------------------------------------------------------
@@ -79,6 +88,8 @@ export interface ISessionManager {
 
   setSessionPermissionMode(sessionId: string, mode: PermissionMode): void
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void
+  setSessionCodingMode(sessionId: string, enabled: boolean): void
+  continueSessionInNewSession(sessionId: string, codingMode: boolean): Promise<{ sessionId: string }>
   updateWorkingDirectory(sessionId: string, path: string): void
   setSessionSources(sessionId: string, sourceSlugs: string[]): Promise<void>
   setSessionLabels(sessionId: string, labels: string[]): void
@@ -121,8 +132,10 @@ export interface ISessionManager {
     rpcContext?: { callerClientId?: string },
   ): Promise<void>
   cancelProcessing(sessionId: string, silent?: boolean): Promise<void>
-  killShell(sessionId: string, shellId: string): Promise<{ success: boolean; error?: string }>
-  getTaskOutput(taskId: string): Promise<string | null>
+  /** What a background task of the session has written so far, digested; null when there is nothing to read. */
+  getBackgroundTaskOutput(sessionId: string, taskId: string, kind?: 'agent' | 'shell' | 'workflow'): Promise<BackgroundTaskOutput | null>
+  /** Stop one background task (shell, agent or workflow) of the session through its live agent. */
+  stopBackgroundTask(sessionId: string, taskId: string): Promise<StopBackgroundTaskResult>
 
   // --- Tasks Conductor seams (in-process; not renderer events, not agent-facing) ---
   /**
@@ -133,21 +146,13 @@ export interface ISessionManager {
   onSessionComplete(
     listener: (evt: import('../sessions/SessionManager').SessionCompletionEvent) => void,
   ): () => void
-  /** Read a session's final assistant message text (Conductor output reader). */
-  getSessionFinalText(sessionId: string): string | undefined
+  /** Called for every event a session's agent emits; lets callers time out only a stalled turn. */
+  onSessionActivity(sessionId: string, listener: () => void): () => void
   addMessageAnnotation(sessionId: string, messageId: string, annotation: AnnotationV1): void
   removeMessageAnnotation(sessionId: string, messageId: string, annotationId: string): void
   updateMessageAnnotation(
     sessionId: string,
     messageId: string,
-    annotationId: string,
-    patch: Partial<AnnotationV1>,
-  ): void
-  addResourceAnnotation(sessionId: string, resource: SessionResourceRef, annotation: AnnotationV1): void
-  removeResourceAnnotation(sessionId: string, resource: SessionResourceRef, annotationId: string): void
-  updateResourceAnnotation(
-    sessionId: string,
-    resource: SessionResourceRef,
     annotationId: string,
     patch: Partial<AnnotationV1>,
   ): void
@@ -165,14 +170,13 @@ export interface ISessionManager {
   ): boolean
   respondToCredential(sessionId: string, requestId: string, response: CredentialResponse): Promise<boolean>
   getSessionPermissionModeState(sessionId: string): PermissionModeState | null
-  getSessionPermissionAllowances(sessionId: string): SessionPermissionAllowances
 
   // ---------------------------------------------------------------------------
   // Plans
   // ---------------------------------------------------------------------------
 
   setPendingPlanExecution(sessionId: string, planPath: string, draftInputSnapshot?: string): Promise<void>
-  markPendingPlanExecutionDispatched(sessionId: string): Promise<void>
+  markPendingPlanExecutionDispatched(sessionId: string): Promise<boolean>
   clearPendingPlanExecution(sessionId: string): Promise<void>
   getPendingPlanExecution(sessionId: string): { planPath: string; draftInputSnapshot?: string; awaitingCompaction: boolean; executionDispatched: boolean } | null
   markCompactionComplete(sessionId: string): Promise<void>
@@ -258,6 +262,13 @@ export interface ISessionManager {
    */
   notifyConfigFileChange(workspaceRootPath: string, relativePath: string): void
 
+  /**
+   * Request a (re)capture of a page's preview poster. No-op unless a capturer
+   * was injected (Electron main only); headless/WebUI hosts fall back to the
+   * placeholder tile.
+   */
+  enqueuePageThumbnail(workspaceId: string, workspaceRootPath: string, slug: string): void
+
   // ---------------------------------------------------------------------------
   // Server-level observability
   // ---------------------------------------------------------------------------
@@ -281,9 +292,18 @@ export interface ISessionManager {
    */
   refreshConnectionRuntime(connectionSlug: string): Promise<void>
   completeAuthRequest(sessionId: string, result: AuthResult): Promise<void>
-  executePromptAutomation(input: ExecutePromptAutomationInput): Promise<{ sessionId: string; finalText?: string }>
-  addAutomationConfirmationToSession(input: AddAutomationConfirmationInput): Promise<{ messageId: string }>
-  respondToAutomationConfirmation(sessionId: string, messageId: string, confirmed: boolean): Promise<void>
+  /**
+   * After a successful OAuth sign-in for a source, complete the auth request of every session
+   * in the workspace waiting on it and resume each one. `boundRequests` are the cards that
+   * started or joined the sign-in. Returns the ids of the sessions it resumed.
+   */
+  completeAuthRequestsForSource(
+    workspaceId: string,
+    sourceSlug: string,
+    result: { email?: string; workspace?: string },
+    boundRequests?: Array<{ sessionId: string; authRequestId: string }>,
+  ): string[]
+  executePromptAutomation(input: ExecutePromptAutomationInput): Promise<{ sessionId: string }>
 
   /**
    * Install a callback invoked from `executePromptAutomation` after a session
@@ -316,6 +336,12 @@ export interface ExecutePromptAutomationInput {
   /** Override the workspace default thinking level for the spawned session. */
   thinkingLevel?: ThinkingLevel
   automationName?: string
+  /** Matcher id of the automation (stored on the session for the loop guard). */
+  automationId?: string
+  /** Event that fired the automation. */
+  triggerEvent?: string
+  /** Chain depth of the new session (see `automationLoopGuard`); 1 when omitted. */
+  chainDepth?: number
   /**
    * Optional Telegram forum-topic name. When set and the workspace has a
    * paired supergroup, the new session is bound to a topic of this name
@@ -330,18 +356,4 @@ export interface ExecutePromptAutomationInput {
    * still streams live and run errors are logged. Defaults to awaiting completion.
    */
   waitForCompletion?: boolean
-}
-
-export interface AddAutomationConfirmationInput {
-  sessionId: string
-  matcherId?: string
-  title: string
-  body: string
-  bodyFormat: 'markdown' | 'html'
-  confirmLabel?: string
-  cancelLabel?: string
-  onConfirmPrompt?: string
-  onCancelPrompt?: string
-  onConfirmActions?: import('@craft-agent/shared/automations').AutomationAction[]
-  continuationEnv?: Record<string, string>
 }

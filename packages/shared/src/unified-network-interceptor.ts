@@ -21,6 +21,8 @@
 // Shared infrastructure (toolMetadataStore, error capture, logging, config)
 import {
   DEBUG,
+  DEBUG_FULL_BODIES,
+  MAX_LOGGED_BODY_CHARS,
   debugLog,
   isRichToolDescriptionsEnabled,
   isExtendedPromptCacheEnabled,
@@ -721,11 +723,10 @@ const anthropicAdapter: ApiAdapter = {
       const updatedSchema = injectMetadataIntoToolSchema(tool.input_schema);
       tool.input_schema.properties = updatedSchema.properties;
       tool.input_schema.required = updatedSchema.required;
-      // External MCP servers may set additionalProperties: false which would
-      // cause the API to reject _intent/_displayName in tool inputs.
-      if ((tool.input_schema as Record<string, unknown>).additionalProperties === false) {
-        delete (tool.input_schema as Record<string, unknown>).additionalProperties;
-      }
+      // Anthropic requires additionalProperties: false on all object-type schemas.
+      // _intent and _displayName are declared in properties above, so they satisfy
+      // this constraint and must NOT be treated as additional/unknown fields.
+      (tool.input_schema as Record<string, unknown>).additionalProperties = false;
       modifiedCount++;
     }
 
@@ -987,6 +988,7 @@ export function createOpenAiSseStrippingStream(): TransformStream<Uint8Array, Ui
     }
 
     let handledToolCalls = false;
+    let strippedEmptyToolCalls = false;
 
     // Buffer tool_call argument deltas (across all choices). All upstream
     // tool_call chunks are suppressed; we emit one consolidated event per
@@ -1005,11 +1007,25 @@ export function createOpenAiSseStrippingStream(): TransformStream<Uint8Array, Ui
     //     those args to the matching phase-1 entry by walking the open calls
     //     in order rather than allocating a new bucket for them.
     for (const choice of choices) {
-      if (!choice?.delta?.tool_calls) continue;
+      // A present-but-empty tool_calls array ([]) is NOT a tool-call delta. Some
+      // OpenAI-compatible relays include `tool_calls: []` on ordinary content and
+      // even on the terminal finish_reason chunk; treating that as "handled" made
+      // us drop the chunk and starve the SDK of finish_reason (#995). Strip the
+      // empty key from the forwarded chunk too — the Pi SDK downstream is exactly
+      // the consumer with documented tool_calls-merging quirks, so it must never
+      // see the key at all.
+      const toolCalls = choice?.delta?.tool_calls;
+      if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
+        if (Array.isArray(toolCalls) && choice.delta) {
+          delete choice.delta.tool_calls;
+          strippedEmptyToolCalls = true;
+        }
+        continue;
+      }
       handledToolCalls = true;
 
       const choiceIndex = choice.index ?? 0;
-      for (const tc of choice.delta.tool_calls) {
+      for (const tc of toolCalls) {
         // Resolve the bucket key. If `tc.index` is missing, prefer the most
         // recently opened call in this choice so we don't collide on key 0.
         const fallbackIndex = lastOpenedToolIndexByChoice.get(choiceIndex);
@@ -1090,18 +1106,21 @@ export function createOpenAiSseStrippingStream(): TransformStream<Uint8Array, Ui
       return;
     }
 
+    // Forward with the empty tool_calls key removed (re-serialized), or verbatim.
+    const forwardStr = strippedEmptyToolCalls ? JSON.stringify(data) : dataStr;
+
     // On finish, flush buffered tool calls with clean args BEFORE emitting finish event
     const hasFinish = choices.some(choice => choice?.finish_reason === 'tool_calls' || choice?.finish_reason === 'stop');
     if (hasFinish) {
       if (bufferingToolCalls) {
         flushTrackedCalls(controller);
       }
-      emitSseLine(dataStr, controller);
+      emitSseLine(forwardStr, controller);
       return;
     }
 
     // Non-tool events pass through
-    emitSseLine(dataStr, controller);
+    emitSseLine(forwardStr, controller);
   }
 
   return new TransformStream<Uint8Array, Uint8Array>({
@@ -1948,9 +1967,14 @@ function headersToCurl(headers: HeadersInitType | undefined): string {
 }
 
 /**
- * Format a fetch request as a cURL command
+ * Format a fetch request as a cURL command.
+ *
+ * Request bodies are replaced by a size placeholder unless `fullBodies` is set —
+ * they carry user prompts, tool arguments and base64 image payloads, and logging
+ * them in full is what let this log grow into the tens of GiB (OSS #1033). Opt in
+ * with `CRAFT_DEBUG_FULL_BODIES=1`.
  */
-function toCurl(url: string, init?: RequestInit): string {
+export function toCurl(url: string, init?: RequestInit, fullBodies: boolean = DEBUG_FULL_BODIES): string {
   const method = init?.method?.toUpperCase() ?? 'GET';
   const headers = headersToCurl(init?.headers as HeadersInitType | undefined);
 
@@ -1959,8 +1983,16 @@ function toCurl(url: string, init?: RequestInit): string {
     curl += ` \\\n  ${headers}`;
   }
   if (init?.body && typeof init.body === 'string') {
-    const escapedBody = init.body.replace(/'/g, "'\\''");
-    curl += ` \\\n  -d '${escapedBody}'`;
+    const body = init.body;
+    if (fullBodies) {
+      const truncated = body.length > MAX_LOGGED_BODY_CHARS;
+      const shown = truncated ? body.slice(0, MAX_LOGGED_BODY_CHARS) : body;
+      const escapedBody = shown.replace(/'/g, "'\\''");
+      const marker = truncated ? `... [BODY TRUNCATED: ${body.length} chars total]` : '';
+      curl += ` \\\n  -d '${escapedBody}${marker}'`;
+    } else {
+      curl += ` \\\n  -d '[REQUEST BODY OMITTED: ${body.length} chars]'`;
+    }
   }
   curl += ` \\\n  '${url}'`;
 

@@ -1,3 +1,4 @@
+import { parseComposeFile, sandboxRead, sandboxTree } from '@craft-agent/shared/agent-compose/files'
 import { readFile, writeFile, unlink, mkdir, readdir, stat, rename, rm } from 'fs/promises'
 import { isAbsolute, join, resolve, dirname, parse as parsePath } from 'path'
 import { homedir } from 'os'
@@ -8,7 +9,7 @@ import type { StoredAttachment } from '@craft-agent/core/types'
 import { readFileAttachment, validateImageForClaudeAPI, IMAGE_LIMITS } from '@craft-agent/shared/utils'
 import { getSessionAttachmentsPath, validateSessionId } from '@craft-agent/shared/sessions'
 import { getWorkspaceByNameOrId } from '@craft-agent/shared/config'
-import { resizeImageForAPI, inspectImageBuffer } from '@craft-agent/server-core/services'
+import { resizeImageForAPI, inspectImageBuffer, isHeicMime, isHeicBuffer, decodeHeicToJpeg } from '@craft-agent/server-core/services'
 import { sanitizeFilename, validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
 import { MarkItDown } from 'markitdown-js'
 import type { RpcServer } from '@craft-agent/server-core/transport'
@@ -134,6 +135,15 @@ function expandHome(p: string): string {
 export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): void {
   // Read a file (with path validation to prevent traversal attacks)
   server.handle(RPC_CHANNELS.file.READ, async (ctx, path: string) => {
+    const remote=parseComposeFile(path)
+    if(remote) {
+      const session=await deps.sessionManager.getSession(remote.sessionId)
+      if(!session || (ctx.workspaceId && session.workspaceId!==ctx.workspaceId)) throw new Error('Sandbox session not found')
+      const sessionPath=deps.sessionManager.getSessionPath(remote.sessionId)
+      if(!sessionPath) throw new Error('Sandbox session not found')
+      const data=await sandboxRead(sessionPath,remote.relative)
+      return data.toString('utf8')
+    }
     try {
       const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
       const safePath = await validateFilePath(path, getWorkspaceAllowedDirs(workspaceId))
@@ -154,6 +164,15 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
   // Read an image file as a data URL for in-app image preview overlays.
   // Returns data:{mime};base64,{content} — used by ImagePreviewOverlay and markdown image blocks.
   server.handle(RPC_CHANNELS.file.READ_DATA_URL, async (ctx, path: string) => {
+    const remote=parseComposeFile(path)
+    if(remote) {
+      const session=await deps.sessionManager.getSession(remote.sessionId)
+      if(!session || (ctx.workspaceId && session.workspaceId!==ctx.workspaceId)) throw new Error('Sandbox session not found')
+      const sessionPath=deps.sessionManager.getSessionPath(remote.sessionId)
+      if(!sessionPath) throw new Error('Sandbox session not found')
+      const data=await sandboxRead(sessionPath,remote.relative)
+      const ext=path.split('.').pop()?.toLowerCase() || '';const mime=({png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp',svg:'image/svg+xml'} as Record<string,string>)[ext] || 'application/octet-stream';return `data:${mime};base64,${data.toString('base64')}`
+    }
     try {
       const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
       const safePath = await validateFilePath(path, getWorkspaceAllowedDirs(workspaceId))
@@ -186,6 +205,15 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
   // Read an image file as a small preview data URL for lightweight thumbnail rendering.
   // Returns a PNG data URL resized to fit within maxSize×maxSize.
   server.handle(RPC_CHANNELS.file.READ_PREVIEW_DATA_URL, async (ctx, path: string, maxSize = 64) => {
+    const remote=parseComposeFile(path)
+    if(remote) {
+      const session=await deps.sessionManager.getSession(remote.sessionId)
+      if(!session || (ctx.workspaceId && session.workspaceId!==ctx.workspaceId)) throw new Error('Sandbox session not found')
+      const sessionPath=deps.sessionManager.getSessionPath(remote.sessionId)
+      if(!sessionPath) throw new Error('Sandbox session not found')
+      const data=await sandboxRead(sessionPath,remote.relative)
+      const preview=await resizeImageForAPI(data,{maxSizeBytes:200000});if(!preview) return `data:image/png;base64,${data.toString('base64')}`;return `data:image/${preview.format};base64,${preview.buffer.toString('base64')}`
+    }
     try {
       const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
       const safePath = await validateFilePath(path, getWorkspaceAllowedDirs(workspaceId))
@@ -206,6 +234,15 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
   // Read a file as raw binary (Uint8Array) for react-pdf.
   // The WS transport codec preserves Uint8Array payloads over JSON envelopes.
   server.handle(RPC_CHANNELS.file.READ_BINARY, async (ctx, path: string) => {
+    const remote=parseComposeFile(path)
+    if(remote) {
+      const session=await deps.sessionManager.getSession(remote.sessionId)
+      if(!session || (ctx.workspaceId && session.workspaceId!==ctx.workspaceId)) throw new Error('Sandbox session not found')
+      const sessionPath=deps.sessionManager.getSessionPath(remote.sessionId)
+      if(!sessionPath) throw new Error('Sandbox session not found')
+      const data=await sandboxRead(sessionPath,remote.relative)
+      return new Uint8Array(data)
+    }
     try {
       const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
       const safePath = await validateFilePath(path, getWorkspaceAllowedDirs(workspaceId))
@@ -346,13 +383,15 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
       // Generate unique ID for this attachment
       const id = randomUUID()
       const safeName = sanitizeFilename(attachment.name)
-      const storedFileName = `${id}_${safeName}`
-      const storedPath = join(attachmentsDir, storedFileName)
+      let storedFileName = `${id}_${safeName}`
+      let storedPath = join(attachmentsDir, storedFileName)
 
       // Track if image was resized (for return value)
       let wasResized = false
       let finalSize = attachment.size
       let resizedBase64: string | undefined
+      // May change below: HEIC/HEIF is transcoded to JPEG (nothing downstream can read HEIC).
+      let finalMimeType = attachment.mimeType
 
       // 1. Save the file (with image validation and resizing)
       if (attachment.base64) {
@@ -365,6 +404,25 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
 
         // For images: validate and resize if needed for Claude API compatibility
         if (attachment.type === 'image') {
+          // HEIC/HEIF (iOS photos/screenshots) can't be decoded by Chromium, the
+          // model API, or our thumbnailer — transcode to JPEG up front so every
+          // downstream step (validate, resize, thumbnail, upload) sees plain JPEG.
+          if (isHeicMime(attachment.mimeType) || isHeicBuffer(decoded)) {
+            try {
+              decoded = await decodeHeicToJpeg(decoded)
+            } catch (heicError) {
+              const reason = heicError instanceof Error ? heicError.message : String(heicError)
+              throw new Error(`Could not decode HEIC/HEIF image "${attachment.name}": ${reason}`)
+            }
+            finalMimeType = 'image/jpeg'
+            finalSize = decoded.length
+            resizedBase64 = decoded.toString('base64')
+            // Store with a .jpg name so re-reads and the agent's Read tool see JPEG.
+            const jpegName = `${safeName.replace(/\.[^.]+$/, '')}.jpg`
+            storedFileName = `${id}_${jpegName}`
+            storedPath = join(attachmentsDir, storedFileName)
+          }
+
           const imageInspection = await inspectImageBuffer(decoded, deps.platform.imageProcessor)
           const imageSize = imageInspection.status === 'ok'
             ? { width: imageInspection.width, height: imageInspection.height }
@@ -409,7 +467,7 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
 
           // If resize is needed (either recommended or required), do it now
           if (shouldResize) {
-            const isPhoto = attachment.mimeType === 'image/jpeg'
+            const isPhoto = finalMimeType === 'image/jpeg'
 
             if (targetSize) {
               // Dimension-exceeded: resize to specific target dimensions
@@ -511,12 +569,12 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
 
       // Return StoredAttachment metadata
       // Include wasResized flag so UI can show notification
-      // Include resizedBase64 so renderer uses resized image for Claude API
+      // Include resizedBase64 so renderer uses the resized/normalized image for Claude API
       return {
         id,
         type: attachment.type,
         name: attachment.name,
-        mimeType: attachment.mimeType,
+        mimeType: finalMimeType, // May differ from input (HEIC/HEIF normalized to JPEG)
         size: finalSize, // Use final size (may differ if resized)
         originalSize: wasResized ? attachment.size : undefined, // Track original if resized
         storedPath,
@@ -524,7 +582,7 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
         thumbnailBase64,
         markdownPath,
         wasResized,
-        resizedBase64, // Only set when wasResized=true, used for Claude API
+        resizedBase64, // Set when image was resized or format-normalized (HEIC→JPEG); used for Claude API
       }
     } catch (error) {
       // Clean up any files we've written before the error
@@ -543,7 +601,24 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
   // Parallel BFS walk that skips ignored directories BEFORE entering them,
   // avoiding reading node_modules/etc. contents entirely. Uses withFileTypes
   // to get entry types without separate stat calls.
-  server.handle(RPC_CHANNELS.fs.SEARCH, async (_ctx, basePath: string, query: string) => {
+  server.handle(RPC_CHANNELS.fs.SEARCH, async (ctx, basePath: string, query: string) => {
+    const remote = parseComposeFile(basePath)
+    if (remote) {
+      const session = await deps.sessionManager.getSession(remote.sessionId)
+      if (!session || (ctx.workspaceId && session.workspaceId !== ctx.workspaceId)) throw new Error("Sandbox session not found")
+      const sessionPath = deps.sessionManager.getSessionPath(remote.sessionId)
+      if (!sessionPath) return []
+      const tree = await sandboxTree(sessionPath, remote.sessionId) ?? []
+      const results: Array<{name: string; path: string; type: string; relativePath: string}> = []
+      const visit = (items: SessionFile[]) => { for (const item of items) {
+        if (results.length >= 50) return
+        const relativePath = item.path.slice(basePath.replace(/\/$/, "").length + 1)
+        if (item.path.startsWith(basePath.replace(/\/$/, "") + "/") && relativePath.toLowerCase().includes(query.toLowerCase())) results.push({...item, relativePath})
+        if (item.children) visit(item.children)
+      } }
+      visit(tree)
+      return results
+    }
     deps.platform.logger.info('[FS_SEARCH] called:', basePath, query)
     const MAX_RESULTS = 50
 
@@ -704,7 +779,14 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
   // Recursively scan a working directory into a SessionFile[] tree.
   // Browsing is read-only metadata, so (like LIST_DIRECTORY) this only does a
   // path-format check — it is not restricted to the workspace allowed-dirs.
-  server.handle(RPC_CHANNELS.fs.SCAN_TREE, async (_ctx, rootPath: string): Promise<SessionFile[]> => {
+  server.handle(RPC_CHANNELS.fs.SCAN_TREE, async (ctx, rootPath: string): Promise<SessionFile[]> => {
+    const remote=parseComposeFile(rootPath)
+    if(remote) {
+      const session=await deps.sessionManager.getSession(remote.sessionId)
+      if(!session || (ctx.workspaceId && session.workspaceId!==ctx.workspaceId)) throw new Error('Sandbox session not found')
+      const path=deps.sessionManager.getSessionPath(remote.sessionId)
+      return path ? (await sandboxTree(path,remote.sessionId) ?? []) : []
+    }
     const expanded = expandHome(rootPath)
     const pathCheck = validatePathFormat(expanded)
     if (!pathCheck.valid) throw new Error(pathCheck.reason!)
@@ -722,6 +804,7 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
   server.handle(RPC_CHANNELS.fs.WATCH, async (ctx, rootPath: string) => {
     const clientId = ctx.clientId
     cleanupWorkingDirWatchForClient(clientId)
+    if(parseComposeFile(rootPath)) return
 
     const expanded = expandHome(rootPath)
     const pathCheck = validatePathFormat(expanded)
@@ -761,6 +844,7 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
 
   // Rename a file/folder in place (new name is sanitized → rename only, no move).
   server.handle(RPC_CHANNELS.fs.RENAME, async (ctx, oldPath: string, newName: string): Promise<{ path: string }> => {
+    if (parseComposeFile(oldPath)) throw new Error("Sandbox file browsing is read-only. Ask the agent to rename the file.")
     const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
     const allowed = getWorkspaceAllowedDirs(workspaceId)
     const safeOld = await validateFilePath(oldPath, allowed)
@@ -776,6 +860,7 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
   // provides it (Electron), else falls back to a permanent recursive remove.
   // REMOTE_ELIGIBLE: runs on whichever server owns the workspace.
   server.handle(RPC_CHANNELS.fs.DELETE, async (ctx, targetPath: string): Promise<{ trashed: boolean }> => {
+    if (parseComposeFile(targetPath)) throw new Error("Sandbox file browsing is read-only. Ask the agent to delete the file.")
     const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
     const safePath = await validateFilePath(targetPath, getWorkspaceAllowedDirs(workspaceId))
     if (deps.platform.trashItem) {

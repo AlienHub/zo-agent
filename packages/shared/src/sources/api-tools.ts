@@ -9,35 +9,17 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import type { ApiConfig } from './types.ts';
 import { debug } from '../utils/debug.ts';
+import { redactUrlForLog } from '../utils/redaction.ts';
 import { guardLargeResult } from '../utils/large-response.ts';
 import { MAX_DOWNLOAD_SIZE, formatBytes } from '../utils/binary-detection.ts';
-import type { ApiCredential, BasicAuthCredential } from './credential-manager.ts';
-import { isMultiHeaderCredential } from './credential-manager.ts';
+import type { ApiCredential } from './credential-manager.ts';
+import { appendQueryAuth, buildApiAuthHeaders } from '@craft-agent/session-tools-core/api-auth';
 
 // Re-export for convenience
 export type { ApiCredential, BasicAuthCredential } from './credential-manager.ts';
 
-/**
- * Build an Authorization header value for bearer-style authentication.
- *
- * Supports three cases:
- * - `authScheme: undefined` → defaults to "Bearer {token}"
- * - `authScheme: "Token"` → "Token {token}" (custom prefix)
- * - `authScheme: ""` → "{token}" (no prefix, for APIs that expect raw tokens)
- *
- * The empty string case is needed for APIs like some GraphQL endpoints or
- * internal services that expect the raw JWT/token without a "Bearer" prefix.
- *
- * @param authScheme - The auth scheme prefix (undefined defaults to "Bearer", empty string means no prefix)
- * @param token - The authentication token
- * @returns The full Authorization header value
- */
-export function buildAuthorizationHeader(authScheme: string | undefined, token: string): string {
-  // Use nullish coalescing (??) so empty string "" is preserved, only undefined/null falls back to 'Bearer'
-  const scheme = authScheme ?? 'Bearer';
-  // If scheme is empty string, return just the token; otherwise prefix with scheme
-  return scheme ? `${scheme} ${token}` : token;
-}
+// Authorization header assembly lives with the rest of the shared auth logic.
+export { buildAuthorizationHeader } from '@craft-agent/session-tools-core/api-auth';
 
 /**
  * API credential source — either a static credential value or a function that
@@ -64,13 +46,6 @@ export type ApiCredentialSource =
   | (() => Promise<ApiCredential | null>);
 
 /**
- * Type guard to check if credential is BasicAuthCredential
- */
-function isBasicAuthCredential(cred: ApiCredential): cred is BasicAuthCredential {
-  return typeof cred === 'object' && cred !== null && 'username' in cred && 'password' in cred;
-}
-
-/**
  * Type guard to check if credential source is a token getter function.
  * Both narrow shapes (Promise<string> and Promise<ApiCredential | null>) flow
  * through the same call site and are normalized by the caller.
@@ -86,58 +61,17 @@ export type SummarizeCallback = (prompt: string) => Promise<string | null>;
 
 
 /**
- * Build headers for an API request, injecting authentication and default headers
+ * Build headers for an API request, injecting authentication and default headers.
+ *
+ * Thin wrapper over the shared assembly in @craft-agent/session-tools-core/api-auth,
+ * which source_test uses as well, so validator and runtime cannot drift (OSS #1067).
  */
 export function buildHeaders(
   auth: ApiConfig['auth'],
   credential: ApiCredential,
   defaultHeaders?: Record<string, string>
 ): Record<string, string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    // Merge default headers (e.g., beta feature flags)
-    ...defaultHeaders,
-  };
-
-  // No auth needed for type='none' or missing auth
-  if (!auth || auth.type === 'none') {
-    return headers;
-  }
-
-  // Basic auth requires username:password credential
-  if (auth.type === 'basic') {
-    if (isBasicAuthCredential(credential)) {
-      const encoded = Buffer.from(`${credential.username}:${credential.password}`).toString('base64');
-      headers['Authorization'] = `Basic ${encoded}`;
-    }
-    return headers;
-  }
-
-  // Handle header auth (supports both single and multi-header)
-  if (auth.type === 'header') {
-    // Multi-header: credential is { headerName: value, ... }
-    if (isMultiHeaderCredential(credential)) {
-      Object.assign(headers, credential);
-    }
-    // Single header: existing behavior
-    else if (typeof credential === 'string' && credential) {
-      headers[auth.headerName || 'x-api-key'] = credential;
-    }
-    return headers;
-  }
-
-  // Other types use string credential (API key/token)
-  const apiKey = typeof credential === 'string' ? credential : '';
-  if (!apiKey) {
-    return headers;
-  }
-
-  if (auth.type === 'bearer') {
-    headers['Authorization'] = buildAuthorizationHeader(auth.authScheme, apiKey);
-  }
-  // Query type is handled in buildUrl
-
-  return headers;
+  return buildApiAuthHeaders(auth, credential, defaultHeaders);
 }
 
 /**
@@ -156,12 +90,8 @@ function buildUrl(
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   let url = `${normalizedBase}${normalizedPath}`;
 
-  // Handle query param auth (only for string credentials)
-  const apiKey = typeof credential === 'string' ? credential : '';
-  if (auth?.type === 'query' && auth.queryParam && apiKey) {
-    const separator = url.includes('?') ? '&' : '?';
-    url += `${separator}${auth.queryParam}=${encodeURIComponent(apiKey)}`;
-  }
+  // Query param auth (string credentials only), shared with source_test
+  url = appendQueryAuth(url, auth, credential);
 
   // Handle GET params in query string
   if (method === 'GET' && params && Object.keys(params).length > 0) {
@@ -184,6 +114,125 @@ function buildUrl(
   }
 
   return url;
+}
+
+/** One API request as executed against a source's baseUrl */
+export interface ApiRequestInput {
+  /** Endpoint path under the source's baseUrl */
+  path: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  /** Request body (POST/PUT/PATCH) or query parameters (GET); supports _rawBody/_contentType */
+  params?: Record<string, unknown>;
+}
+
+export interface ExecuteApiRequestOptions {
+  /** Cancels the in-flight fetch when aborted */
+  signal?: AbortSignal;
+  /** Abort automatically after this many ms (composed with `signal`) */
+  timeoutMs?: number;
+}
+
+/** Raw outcome of an API request (body not yet interpreted) */
+export interface ApiRequestOutcome {
+  /** True for 2xx responses */
+  ok: boolean;
+  status: number;
+  /** Raw response body */
+  buffer: Buffer;
+  /** Response Content-Type header, when present */
+  contentType: string | null;
+}
+
+/** Thrown before the body is loaded when Content-Length exceeds MAX_DOWNLOAD_SIZE */
+export class ApiResponseTooLargeError extends Error {
+  constructor(readonly sizeBytes: number) {
+    super(`Response too large: ${formatBytes(sizeBytes)} exceeds ${formatBytes(MAX_DOWNLOAD_SIZE)} limit. Use a streaming download tool for large files.`);
+    this.name = 'ApiResponseTooLargeError';
+  }
+}
+
+/**
+ * Execute one authenticated request against an API source.
+ *
+ * This is the single fetch path for API sources — the MCP tool handler and
+ * the Pages action bridge both go through it, so credential resolution stays
+ * lazy (resolved here, never crossing a process/IPC boundary) and
+ * cancellation works everywhere.
+ *
+ * @throws ApiResponseTooLargeError when Content-Length exceeds the download cap
+ * @throws on network failure or abort (fetch semantics)
+ */
+export async function executeApiRequest(
+  config: ApiConfig,
+  credential: ApiCredentialSource,
+  request: ApiRequestInput,
+  options?: ExecuteApiRequestOptions,
+): Promise<ApiRequestOutcome> {
+  const { path, method, params } = request;
+
+  // Resolve credential — if a getter, call it to get a fresh credential.
+  // A null result (vault has nothing for this source) is normalized to an
+  // empty string; buildHeaders / buildUrl already treat that as "no auth",
+  // letting the upstream API surface its own 401.
+  const rawCredential = isTokenGetter(credential)
+    ? await credential()
+    : credential;
+  const resolvedCredential: ApiCredential = rawCredential ?? '';
+
+  const url = buildUrl(config.baseUrl, path, method, params, config.auth, resolvedCredential);
+  const headers = buildHeaders(config.auth, resolvedCredential, config.defaultHeaders);
+
+  // Never log the full URL: for query-auth sources buildUrl embeds the
+  // credential (`?api_key=…`), and GET params may carry sensitive values too.
+  debug(`[api-tools] ${config.name}: ${method} ${redactUrlForLog(url)}`);
+
+  // Compose caller signal with the timeout signal (either aborts the fetch)
+  const signals: AbortSignal[] = [];
+  if (options?.signal) signals.push(options.signal);
+  if (options?.timeoutMs !== undefined) signals.push(AbortSignal.timeout(options.timeoutMs));
+
+  const fetchOptions: RequestInit = {
+    method,
+    headers,
+    ...(signals.length > 0 ? { signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals) } : {}),
+  };
+
+  // Add body for non-GET requests
+  if (method !== 'GET' && params && Object.keys(params).length > 0) {
+    // Support raw text bodies via _rawBody param (e.g., for endpoints expecting plain text)
+    if (typeof params._rawBody === 'string') {
+      fetchOptions.body = params._rawBody;
+      (fetchOptions.headers as Record<string, string>)['Content-Type'] =
+        typeof params._contentType === 'string' ? params._contentType : 'text/plain';
+    } else {
+      fetchOptions.body = JSON.stringify(params);
+    }
+  }
+
+  // Header VALUES are never logged — Authorization and friends are live
+  // credentials and this line used to put them in main.log under CRAFT_DEBUG.
+  debug(`[api-tools] ${config.name}: headerNames=[${Object.keys(headers).join(', ')}], bodyLength=${fetchOptions.body ? String(fetchOptions.body).length : 0}`);
+
+  const response = await fetch(url, fetchOptions);
+
+  // OOM safety: reject before loading into memory
+  const contentLength = response.headers.get('content-length');
+  if (contentLength) {
+    const size = parseInt(contentLength, 10);
+    if (!isNaN(size) && size > MAX_DOWNLOAD_SIZE) {
+      throw new ApiResponseTooLargeError(size);
+    }
+  }
+
+  // Load response as raw buffer — callers handle binary detection
+  const buffer = Buffer.from(await response.arrayBuffer());
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    buffer,
+    contentType: response.headers.get('content-type'),
+  };
 }
 
 /**
@@ -249,68 +298,16 @@ export function createApiTool(
       const { path, method, params, _intent } = args;
 
       try {
-        // Resolve credential — if a getter, call it to get a fresh credential.
-        // A null result (vault has nothing for this source) is normalized to
-        // an empty string; buildHeaders / buildUrl already treat that as
-        // "no auth", letting the upstream API surface its own 401.
-        const rawCredential = isTokenGetter(credential)
-          ? await credential()
-          : credential;
-        const resolvedCredential: ApiCredential = rawCredential ?? '';
-
-        const url = buildUrl(config.baseUrl, path, method, params, config.auth, resolvedCredential);
-        const headers = buildHeaders(config.auth, resolvedCredential, config.defaultHeaders);
-
-        debug(`[api-tools] ${config.name}: ${method} ${url}`);
-
-        const fetchOptions: RequestInit = {
-          method,
-          headers,
-        };
-
-        // Add body for non-GET requests
-        if (method !== 'GET' && params && Object.keys(params).length > 0) {
-          // Support raw text bodies via _rawBody param (e.g., for endpoints expecting plain text)
-          if (typeof params._rawBody === 'string') {
-            fetchOptions.body = params._rawBody;
-            (fetchOptions.headers as Record<string, string>)['Content-Type'] =
-              typeof params._contentType === 'string' ? params._contentType : 'text/plain';
-            debug(`[api-tools] ${config.name}: raw body (${(fetchOptions.headers as Record<string, string>)['Content-Type']}): ${params._rawBody.substring(0, 200)}`);
-          } else {
-            fetchOptions.body = JSON.stringify(params);
-          }
-        }
-
-        debug(`[api-tools] ${config.name}: headers=${JSON.stringify(fetchOptions.headers)}, bodyLength=${fetchOptions.body ? String(fetchOptions.body).length : 0}`);
-
-        const response = await fetch(url, fetchOptions);
-
-        // OOM safety: reject before loading into memory
-        const contentLength = response.headers.get('content-length');
-        if (contentLength) {
-          const size = parseInt(contentLength, 10);
-          if (!isNaN(size) && size > MAX_DOWNLOAD_SIZE) {
-            return {
-              content: [{
-                type: 'text' as const,
-                text: `Response too large: ${formatBytes(size)} exceeds ${formatBytes(MAX_DOWNLOAD_SIZE)} limit. Use a streaming download tool for large files.`,
-              }],
-              isError: true,
-            };
-          }
-        }
-
-        // Load response as raw buffer — guardLargeResult handles binary detection
-        const buffer = Buffer.from(await response.arrayBuffer());
+        const outcome = await executeApiRequest(config, credential, { path, method, params });
 
         // Check for error responses first (errors are always text)
-        if (!response.ok) {
-          const text = buffer.toString('utf-8');
-          debug(`[api-tools] ${config.name} error ${response.status}: ${text.substring(0, 200)}`);
+        if (!outcome.ok) {
+          const text = outcome.buffer.toString('utf-8');
+          debug(`[api-tools] ${config.name} error ${outcome.status}: ${text.substring(0, 200)}`);
           return {
             content: [{
               type: 'text' as const,
-              text: `API Error ${response.status}: ${text}`,
+              text: `API Error ${outcome.status}: ${text}`,
             }],
             isError: true,
           };
@@ -318,7 +315,7 @@ export function createApiTool(
 
         // Centralized binary detection + large response handling
         if (sessionPath) {
-          const guarded = await guardLargeResult(buffer, {
+          const guarded = await guardLargeResult(outcome.buffer, {
             sessionPath,
             toolName: `api_${config.name}`,
             input: params,
@@ -330,8 +327,14 @@ export function createApiTool(
           }
         }
 
-        return { content: [{ type: 'text' as const, text: buffer.toString('utf-8') }] };
+        return { content: [{ type: 'text' as const, text: outcome.buffer.toString('utf-8') }] };
       } catch (error) {
+        if (error instanceof ApiResponseTooLargeError) {
+          return {
+            content: [{ type: 'text' as const, text: error.message }],
+            isError: true,
+          };
+        }
         const message = error instanceof Error ? error.message : 'Unknown error';
         debug(`[api-tools] ${config.name} request failed: ${message}`);
         return {

@@ -26,8 +26,8 @@ export const CHANNEL_MAP = {
   deleteSession: invoke(RPC_CHANNELS.sessions.DELETE),
   sendMessage: invoke(RPC_CHANNELS.sessions.SEND_MESSAGE),
   cancelProcessing: invoke(RPC_CHANNELS.sessions.CANCEL),
-  killShell: invoke(RPC_CHANNELS.sessions.KILL_SHELL),
-  getTaskOutput: invoke(RPC_CHANNELS.tasks.GET_OUTPUT),
+  getBackgroundTaskOutput: invoke(RPC_CHANNELS.sessions.GET_BACKGROUND_TASK_OUTPUT),
+  stopBackgroundTask: invoke(RPC_CHANNELS.sessions.STOP_BACKGROUND_TASK),
 
   // Tasks (Conductor)
   validateTask: invoke(RPC_CHANNELS.tasks.VALIDATE),
@@ -163,6 +163,7 @@ export const CHANNEL_MAP = {
   getServerHomeDir: invoke(RPC_CHANNELS.server.HOME_DIR),
 
   // Server mode configuration
+  agentCompose: invoke(RPC_CHANNELS.agentCompose.REQUEST),
   getServerConfig: invoke(RPC_CHANNELS.settings.GET_SERVER_CONFIG),
   setServerConfig: invoke(RPC_CHANNELS.settings.SET_SERVER_CONFIG),
   getServerStatus: invoke(RPC_CHANNELS.settings.GET_SERVER_STATUS),
@@ -172,6 +173,10 @@ export const CHANNEL_MAP = {
   testLlmConnectionSetup: invoke(RPC_CHANNELS.settings.TEST_LLM_CONNECTION_SETUP),
   getDefaultThinkingLevel: invoke(RPC_CHANNELS.settings.GET_DEFAULT_THINKING_LEVEL),
   setDefaultThinkingLevel: invoke(RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL),
+  getAutoCompactWindow: invoke(RPC_CHANNELS.settings.GET_AUTO_COMPACT_WINDOW),
+  setAutoCompactWindow: invoke(RPC_CHANNELS.settings.SET_AUTO_COMPACT_WINDOW),
+  getSubagentModel: invoke(RPC_CHANNELS.settings.GET_SUBAGENT_MODEL),
+  setSubagentModel: invoke(RPC_CHANNELS.settings.SET_SUBAGENT_MODEL),
   getNetworkProxySettings: invoke(RPC_CHANNELS.settings.GET_NETWORK_PROXY),
   setNetworkProxySettings: invoke(RPC_CHANNELS.settings.SET_NETWORK_PROXY),
   getSensitiveContextProtectionSettings: invoke(RPC_CHANNELS.settings.GET_SENSITIVE_CONTEXT_PROTECTION),
@@ -338,6 +343,16 @@ export const CHANNEL_MAP = {
   getRtkStatus: invoke(RPC_CHANNELS.rtk.GET_STATUS),
   getRtkGain: invoke(RPC_CHANNELS.rtk.GET_GAIN),
 
+  // Decision model (Jev)
+  getDecisionLayerSettings: invoke(RPC_CHANNELS.decisions.GET_SETTINGS),
+  setDecisionLayerSettings: invoke(RPC_CHANNELS.decisions.SET_SETTINGS),
+  getDecisionLayerStatus: invoke(RPC_CHANNELS.decisions.GET_STATUS),
+  setDecisionApiKey: invoke(RPC_CHANNELS.decisions.SET_API_KEY),
+  deleteDecisionApiKey: invoke(RPC_CHANNELS.decisions.DELETE_API_KEY),
+  testDecisionConnection: invoke(RPC_CHANNELS.decisions.TEST),
+  probeDecisionServer: invoke(RPC_CHANNELS.decisions.PROBE_SERVER),
+  getDecisionUsage: invoke(RPC_CHANNELS.decisions.GET_USAGE),
+
   // Badge
   refreshBadge: invoke(RPC_CHANNELS.badge.REFRESH),
   setDockIconWithBadge: invoke(RPC_CHANNELS.badge.SET_ICON),
@@ -351,6 +366,15 @@ export const CHANNEL_MAP = {
 
   // Git
   getGitBranch: invoke(RPC_CHANNELS.git.GET_BRANCH),
+  listCodingRepos: invoke(RPC_CHANNELS.git.LIST_REPOS),
+  createCodingWorktree: invoke(RPC_CHANNELS.git.CREATE_WORKTREE),
+
+  // PR watcher (Coding mode chat-header chip)
+  prWatchSubscribe: invoke(RPC_CHANNELS.prWatch.SUBSCRIBE),
+  prWatchUnsubscribe: invoke(RPC_CHANNELS.prWatch.UNSUBSCRIBE),
+  prWatchRefresh: invoke(RPC_CHANNELS.prWatch.REFRESH),
+  prWatchGetDetails: invoke(RPC_CHANNELS.prWatch.GET_DETAILS),
+  onPrWatchChanged: listener(RPC_CHANNELS.prWatch.CHANGED),
   checkGitBash: invoke(RPC_CHANNELS.gitbash.CHECK),
   browseForGitBash: invoke(RPC_CHANNELS.gitbash.BROWSE),
   setGitBashPath: invoke(RPC_CHANNELS.gitbash.SET_PATH),
@@ -407,6 +431,32 @@ export const CHANNEL_MAP = {
   uploadProjectAsset: invoke(RPC_CHANNELS.projects.UPLOAD_ASSET),
   deleteProjectAsset: invoke(RPC_CHANNELS.projects.DELETE_ASSET),
   onProjectsChanged: listener(RPC_CHANNELS.projects.CHANGED),
+
+  // Pages
+  getPages: invoke(RPC_CHANNELS.pages.GET),
+  getPage: invoke(RPC_CHANNELS.pages.GET_ONE),
+  createPage: invoke(RPC_CHANNELS.pages.CREATE),
+  updatePage: invoke(RPC_CHANNELS.pages.UPDATE),
+  deletePage: invoke(RPC_CHANNELS.pages.DELETE),
+  getPageContent: invoke(RPC_CHANNELS.pages.GET_CONTENT),
+  setPageContent: invoke(RPC_CHANNELS.pages.SET_CONTENT),
+  getPageData: invoke(RPC_CHANNELS.pages.GET_DATA),
+  listPageGrants: invoke(RPC_CHANNELS.pages.LIST_GRANTS),
+  issuePageGrant: invoke(RPC_CHANNELS.pages.ISSUE_GRANT),
+  revokePageGrant: invoke(RPC_CHANNELS.pages.REVOKE_GRANT),
+  createPageLease: invoke(RPC_CHANNELS.pages.CREATE_LEASE),
+  releasePageLease: invoke(RPC_CHANNELS.pages.RELEASE_LEASE),
+  executePageAction: invoke(RPC_CHANNELS.pages.EXECUTE_ACTION),
+  cancelPageAction: invoke(RPC_CHANNELS.pages.CANCEL_ACTION),
+  getPageShareCapabilities: invoke(RPC_CHANNELS.pages.GET_SHARE_CAPABILITIES),
+  getPageShareDataScan: invoke(RPC_CHANNELS.pages.GET_SHARE_DATA_SCAN),
+  publishPage: invoke(RPC_CHANNELS.pages.PUBLISH),
+  setPagePublicationPassword: invoke(RPC_CHANNELS.pages.SET_PUBLICATION_PASSWORD),
+  unpublishPage: invoke(RPC_CHANNELS.pages.UNPUBLISH),
+  publishPageAsClaudeArtifact: invoke(RPC_CHANNELS.pages.PUBLISH_CLAUDE_ARTIFACT),
+  getPageThumbnail: invoke(RPC_CHANNELS.pages.GET_THUMBNAIL),
+  regeneratePageThumbnail: invoke(RPC_CHANNELS.pages.REGENERATE_THUMBNAIL),
+  onPagesChanged: listener(RPC_CHANNELS.pages.CHANGED),
 
   // Automations
   getAutomations: invoke(RPC_CHANNELS.automations.GET),

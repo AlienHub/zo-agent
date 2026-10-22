@@ -1,3 +1,6 @@
+import { basename } from 'node:path';
+import { getSensitiveContextProtectionSettings } from '../config/storage.ts';
+import { formatSensitiveProtectionNotice, guardToolResult, sensitiveAuditFilePath, writeSensitiveAuditEntry } from '../agent/guards/sensitive-context/index.ts';
 /**
  * Centralized MCP Client Pool
  *
@@ -13,19 +16,24 @@
  * - Runtime source switching without session restart
  */
 
-import { CraftMcpClient, type McpClientConfig, type PoolClient } from './client.ts';
+import {
+  CraftMcpClient,
+  type McpClientConfig,
+  type PoolCallToolOptions,
+  type PoolClient,
+  type PoolRequestOptions,
+} from './client.ts';
 import { ApiSourcePoolClient } from './api-source-pool-client.ts';
+import { proxyToolName } from './proxy-tool-name.ts';
 import type { SdkMcpServerConfig } from '../agent/backend/types.ts';
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { ContentBlock, Prompt, Resource, ResourceTemplate, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { isLocalMcpEnabled } from '../workspaces/storage.ts';
 import { guardLargeResult } from '../utils/large-response.ts';
-import { getSensitiveContextProtectionSettings } from '../config/storage.ts';
-import { formatSensitiveProtectionNotice, guardToolResult, sensitiveAuditFilePath, writeSensitiveAuditEntry } from '../agent/guards/sensitive-context/index.ts';
-import { basename } from 'node:path';
 import {
   saveBinaryResponse,
   detectExtensionFromMagic,
+  getMimeExtension,
   sanitizeFilename,
 } from '../utils/binary-detection.ts';
 
@@ -56,6 +64,97 @@ export interface McpToolResult {
   isError: boolean;
   /** Source slug for error attribution (set on failure) */
   sourceSlug?: string;
+}
+
+/** Item count from the first page of an MCP list call. */
+export interface McpListCount {
+  count: number;
+  /** The server returned a next-page cursor, so `count` is a lower bound */
+  more: boolean;
+}
+
+/**
+ * What a connected MCP server offers beyond tools, recorded when it connects so
+ * the per-turn source state can point the agent at it. A count is absent when
+ * the server did not declare the capability or the list call failed.
+ */
+export interface McpSourceFeatures {
+  /** The server's `instructions` from the initialize handshake */
+  instructions?: string;
+  resources?: McpListCount;
+  resourceTemplates?: McpListCount;
+  prompts?: McpListCount;
+}
+
+/** Resources and resource templates a source publishes. */
+export interface McpResourceListing {
+  resources: Resource[];
+  resourceTemplates: ResourceTemplate[];
+  /** Listing stopped at the page cap while the server still had pages */
+  truncated: boolean;
+}
+
+/** Prompts a source publishes. */
+export interface McpPromptListing {
+  prompts: Prompt[];
+  /** Listing stopped at the page cap while the server still had pages */
+  truncated: boolean;
+}
+
+/** Pages read per list call: a server that keeps paginating must not stall the turn. */
+const MAX_LIST_PAGES = 10;
+
+/** Timeout for each connect-time feature probe request (best effort). */
+const FEATURE_PROBE_TIMEOUT_MS = 3_000;
+
+/** Pool client methods each feature needs; API source clients have none of them. */
+const FEATURE_METHODS = {
+  resources: ['getServerCapabilities', 'listResources', 'listResourceTemplates', 'readResource'],
+  prompts: ['getServerCapabilities', 'listPrompts', 'getPrompt'],
+} as const satisfies Record<'resources' | 'prompts', ReadonlyArray<keyof PoolClient>>;
+
+interface ListPage<T> {
+  items: T[];
+  nextCursor?: string;
+}
+
+// Page readers per list kind; callers check that the client has the method.
+const resourcePages = (client: PoolClient, options?: PoolRequestOptions) =>
+  async (cursor?: string): Promise<ListPage<Resource>> => {
+    const page = await client.listResources!(cursor, options);
+    return { items: page.resources, nextCursor: page.nextCursor };
+  };
+const resourceTemplatePages = (client: PoolClient, options?: PoolRequestOptions) =>
+  async (cursor?: string): Promise<ListPage<ResourceTemplate>> => {
+    const page = await client.listResourceTemplates!(cursor, options);
+    return { items: page.resourceTemplates, nextCursor: page.nextCursor };
+  };
+const promptPages = (client: PoolClient, options?: PoolRequestOptions) =>
+  async (cursor?: string): Promise<ListPage<Prompt>> => {
+    const page = await client.listPrompts!(cursor, options);
+    return { items: page.prompts, nextCursor: page.nextCursor };
+  };
+
+/**
+ * Follow `nextCursor` up to MAX_LIST_PAGES. A cursor the server already returned
+ * ends the walk: following it would only repeat pages.
+ */
+async function readAllPages<T>(readPage: (cursor?: string) => Promise<ListPage<T>>): Promise<{ items: T[]; truncated: boolean }> {
+  const items: T[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_LIST_PAGES; page++) {
+    const result = await readPage(cursor);
+    items.push(...result.items);
+    if (!result.nextCursor || seen.has(result.nextCursor)) return { items, truncated: false };
+    seen.add(result.nextCursor);
+    cursor = result.nextCursor;
+  }
+  return { items, truncated: true };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 const LLM_TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -191,11 +290,15 @@ export class McpClientPool {
   /** Cached tool lists keyed by source slug */
   private toolCache = new Map<string, Tool[]>();
 
-  /** Proxy tool name → { slug, originalName } (e.g., "mcp__linear__createIssue" → { slug: "linear", originalName: "createIssue" }) */
-  private proxyTools = new Map<string, { slug: string; originalName: string }>();
+  /** What each MCP server offers beyond tools, recorded at connect (keyed by source slug) */
+  private features = new Map<string, McpSourceFeatures>();
 
-  /** Source slug → original tool name → safe proxy tool name */
-  private sourceToolProxyNames = new Map<string, Map<string, string>>();
+  /** In-flight feature probes (keyed by source slug); they run after the connection is usable. */
+  private featureProbes = new Map<string, Promise<void>>();
+
+  /** Proxy tool name → { slug, originalName } (e.g., "mcp__linear__createIssue" → { slug: "linear", originalName: "createIssue" }) */
+  private sourceToolProxyNames = new Map<string,Map<string,string>>();
+  private proxyTools = new Map<string, { slug: string; originalName: string }>();
 
   /** Optional debug logger */
   private debugFn: ((msg: string) => void) | undefined;
@@ -254,7 +357,62 @@ export class McpClientPool {
     }
     this.sourceToolProxyNames.set(slug, sourceProxyNames);
 
+    // In the background: a slow server must not hold up the source's tools (the probe can
+    // take its full timeout). The <sources> block shows the features once they are known.
+    const probe = this.probeFeatures(slug, client).then((features) => {
+      // A disconnect or reconnect during the probe wins: record nothing for a client that is gone.
+      if (this.clients.get(slug) !== client) return;
+      if (features) this.features.set(slug, features);
+      else this.features.delete(slug);
+    }).finally(() => {
+      if (this.featureProbes.get(slug) === probe) this.featureProbes.delete(slug);
+    });
+    this.featureProbes.set(slug, probe);
+
     this.debug(`Connected source ${slug}: ${tools.length} tools`);
+  }
+
+  /** Resolves once the source's feature probe (started at connect) has finished. */
+  async whenFeaturesProbed(slug: string): Promise<void> {
+    await this.featureProbes.get(slug);
+  }
+
+  /**
+   * Record what an MCP server offers beyond tools: its instructions (free, from
+   * the handshake) and how many resources, resource templates and prompts it
+   * lists. Counts rather than capabilities, because common server frameworks
+   * (e.g. Python FastMCP) declare resources and prompts even when they publish
+   * none. Reads one page per list, in parallel, with a short timeout; best
+   * effort, it never fails the connection.
+   */
+  private async probeFeatures(slug: string, client: PoolClient): Promise<McpSourceFeatures | undefined> {
+    const capabilities = client.getServerCapabilities?.();
+    if (!capabilities) return undefined;
+
+    const options: PoolRequestOptions = { timeoutMs: FEATURE_PROBE_TIMEOUT_MS };
+    const countFirstPage = async (label: string, readPage: (() => Promise<ListPage<unknown>>) | undefined): Promise<McpListCount | undefined> => {
+      if (!readPage) return undefined;
+      try {
+        const page = await readPage();
+        return { count: page.items.length, more: !!page.nextCursor };
+      } catch (error) {
+        this.debug(`Could not list ${label} of ${slug}: ${errorMessage(error)}`);
+        return undefined;
+      }
+    };
+    const [resources, resourceTemplates, prompts] = await Promise.all([
+      countFirstPage('resources', capabilities.resources && client.listResources ? resourcePages(client, options) : undefined),
+      countFirstPage('resource templates', capabilities.resources && client.listResourceTemplates ? resourceTemplatePages(client, options) : undefined),
+      countFirstPage('prompts', capabilities.prompts && client.listPrompts ? promptPages(client, options) : undefined),
+    ]);
+    const instructions = client.getInstructions?.()?.trim() || undefined;
+
+    return {
+      ...(instructions ? { instructions } : {}),
+      ...(resources ? { resources } : {}),
+      ...(resourceTemplates ? { resourceTemplates } : {}),
+      ...(prompts ? { prompts } : {}),
+    };
   }
 
   /**
@@ -281,6 +439,31 @@ export class McpClientPool {
   }
 
   /**
+   * Ensure one source is connected with the given config, without touching
+   * other pool members (unlike sync(), which reconciles the full set).
+   * Reconnects when the config changed (e.g. refreshed OAuth token), and
+   * applies the same local-MCP gate as sync(): stdio configs are refused
+   * when local MCP is disabled for this workspace.
+   *
+   * @throws Error for stdio configs while local MCP is disabled, and on
+   *   connection failure (propagated from connect()).
+   */
+  async ensureConnected(slug: string, config: SdkMcpServerConfig): Promise<void> {
+    if (config.type === 'stdio' && this.workspaceRootPath && !isLocalMcpEnabled(this.workspaceRootPath)) {
+      throw new Error(`Local MCP is disabled for this workspace — cannot connect stdio source "${slug}"`);
+    }
+
+    if (this.clients.has(slug)) {
+      const oldConfig = this.activeConfigs.get(slug);
+      if (!oldConfig || !mcpConfigChanged(oldConfig, config)) return;
+      this.debug(`Config changed for ${slug}, reconnecting with fresh credentials`);
+      await this.disconnect(slug);
+    }
+
+    await this.connect(slug, config);
+  }
+
+  /**
    * Disconnect a source and remove its tools from the pool.
    */
   async disconnect(slug: string): Promise<void> {
@@ -296,6 +479,7 @@ export class McpClientPool {
     }
     this.sourceToolProxyNames.delete(slug);
     this.toolCache.delete(slug);
+    this.features.delete(slug);
     this.activeConfigs.delete(slug);
     this.debug(`Disconnected source: ${slug}`);
   }
@@ -307,9 +491,10 @@ export class McpClientPool {
     const closePromises = Array.from(this.clients.values()).map(c => c.close().catch(() => {}));
     await Promise.all(closePromises);
     this.clients.clear();
-    this.toolCache.clear();
-    this.proxyTools.clear();
     this.sourceToolProxyNames.clear();
+    this.toolCache.clear();
+    this.features.clear();
+    this.proxyTools.clear();
     this.activeConfigs.clear();
     this.debug('Disconnected all MCP clients');
   }
@@ -353,48 +538,46 @@ export class McpClientPool {
     const currentSlugs = new Set(this.clients.keys());
     const failures: string[] = [];
 
-    // Disconnect sources no longer desired
-    for (const slug of currentSlugs) {
-      if (!desiredSlugs.has(slug)) {
-        await this.disconnect(slug);
-      }
-    }
+    // Disconnect sources no longer desired — run in parallel, failures are non-fatal.
+    await Promise.all(
+      [...currentSlugs].filter(slug => !desiredSlugs.has(slug)).map(slug => this.disconnect(slug))
+    );
 
-    // Connect new MCP sources + reconnect existing ones whose config changed (e.g. refreshed token)
+    // Build a list of (slug, connectFn) pairs for sources that need to come up.
+    // Changed sources (token refresh, URL change) are disconnected first, then
+    // queued alongside new sources so all connections run concurrently.
+    const toConnect: Array<{ slug: string; connectFn: () => Promise<void> }> = [];
+
     for (const [slug, config] of Object.entries(filteredMcp)) {
       if (!currentSlugs.has(slug)) {
-        try {
-          await this.connect(slug, config);
-        } catch (err) {
-          this.debug(`Failed to connect MCP source ${slug}: ${err instanceof Error ? err.message : String(err)}`);
-          failures.push(slug);
-        }
+        toConnect.push({ slug, connectFn: () => this.connect(slug, config) });
       } else {
         const oldConfig = this.activeConfigs.get(slug);
         if (oldConfig && mcpConfigChanged(oldConfig, config)) {
           this.debug(`Config changed for ${slug}, reconnecting with fresh credentials`);
           await this.disconnect(slug);
-          try {
-            await this.connect(slug, config);
-          } catch (err) {
-            this.debug(`Failed to reconnect MCP source ${slug}: ${err instanceof Error ? err.message : String(err)}`);
-            failures.push(slug);
-          }
+          toConnect.push({ slug, connectFn: () => this.connect(slug, config) });
         }
       }
     }
 
-    // Connect new API sources
     for (const [slug, server] of apiSlugs) {
       if (!currentSlugs.has(slug)) {
-        try {
-          await this.connectInProcess(slug, server);
-        } catch (err) {
-          this.debug(`Failed to connect API source ${slug}: ${err instanceof Error ? err.message : String(err)}`);
-          failures.push(slug);
-        }
+        toConnect.push({ slug, connectFn: () => this.connectInProcess(slug, server) });
       }
     }
+
+    // Connect all new/reconnected sources in parallel and collect failures.
+    const connectResults = await Promise.allSettled(toConnect.map(({ connectFn }) => connectFn()));
+    connectResults.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        const slug = toConnect[i]!.slug;
+        const msg = result.reason instanceof Error ? (result.reason as Error).message : String(result.reason);
+        console.warn(`[McpClientPool] Failed to connect source "${slug}": ${msg}`);
+        this.debug(`Failed to connect source ${slug}: ${msg}`);
+        failures.push(slug);
+      }
+    });
 
     this.onToolsChanged?.();
     return failures;
@@ -426,21 +609,12 @@ export class McpClientPool {
   }
 
   /**
-   * Resolve the LLM-facing proxy name for an original MCP tool name.
+   * What a connected MCP source offers beyond tools (instructions, resource and
+   * prompt counts), recorded when it connected. Undefined for API sources and
+   * sources that are not connected.
    */
-  getProxyToolName(slug: string, originalName: string): string | null {
-    return this.sourceToolProxyNames.get(slug)?.get(originalName) ?? null;
-  }
-
-  /**
-   * Resolve the source-local safe tool name used by SDK MCP servers.
-   */
-  getProxyToolLocalName(slug: string, originalName: string): string | null {
-    const proxyName = this.getProxyToolName(slug, originalName);
-    if (!proxyName) return null;
-
-    const prefix = `mcp__${sanitizeToolNamePart(slug)}__`;
-    return proxyName.startsWith(prefix) ? proxyName.slice(prefix.length) : proxyName;
+  getSourceFeatures(slug: string): McpSourceFeatures | undefined {
+    return this.features.get(slug);
   }
 
   /**
@@ -450,17 +624,21 @@ export class McpClientPool {
   getProxyToolDefs(slugs?: string[]): ProxyToolDef[] {
     const targetSlugs = slugs || Array.from(this.toolCache.keys());
     const defs: ProxyToolDef[] = [];
+    const seen = new Set<string>();
 
     for (const slug of targetSlugs) {
       const tools = this.toolCache.get(slug) || [];
       for (const tool of tools) {
-        const proxyName = this.getProxyToolName(slug, tool.name);
-        if (!proxyName) continue;
+        const name = this.sourceToolProxyNames.get(slug)?.get(tool.name) ?? proxyToolName(slug,tool.name);
+        // Skip a name that collided after sanitization — keep the first, matching
+        // registerClient so the emitted defs and the dispatch map stay in sync (#864).
+        if (seen.has(name)) continue;
+        seen.add(name);
         // Strip $schema — AJV (Pi agent) fails on unregistered meta-schema URIs.
         // Same pattern as getToolDefsAsJsonSchema() in tool-defs.ts.
         const { $schema, ...cleanSchema } = (tool.inputSchema as Record<string, unknown>) || {};
         defs.push({
-          name: proxyName,
+          name,
           description: tool.description || `Tool from ${slug}`,
           inputSchema: Object.keys(cleanSchema).length > 0 ? cleanSchema : { type: 'object', properties: {} },
         });
@@ -478,7 +656,7 @@ export class McpClientPool {
    * Execute an MCP tool by its proxy name (mcp__{slug}__{toolName}).
    * Returns a result matching the subprocess protocol format.
    */
-  async callTool(proxyName: string, args: Record<string, unknown>): Promise<McpToolResult> {
+  async callTool(proxyName: string, args: Record<string, unknown>, options?: PoolCallToolOptions): Promise<McpToolResult> {
     const info = this.proxyTools.get(proxyName);
     if (!info) {
       return {
@@ -499,7 +677,7 @@ export class McpClientPool {
     }
 
     try {
-      const result = await client.callTool(originalName, args) as {
+      const result = await client.callTool(originalName, args, options) as {
         content?: Array<{ type: string; text?: unknown; data?: string; mimeType?: string }>;
         isError?: boolean;
       };
@@ -516,52 +694,24 @@ export class McpClientPool {
           } else if (block.text !== undefined && block.text !== null) {
             parts.push(JSON.stringify(block.text, null, 2));
           }
-        } else if ((block.type === 'image' || block.type === 'audio') && block.data && this.sessionPath) {
-          // Decode base64 binary content and save to downloads/
-          try {
-            const buffer = Buffer.from(block.data, 'base64');
-            const ext = detectExtensionFromMagic(buffer) || '.bin';
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-            const safeName = sanitizeFilename(proxyName);
-            const filename = `${safeName}_${timestamp}${ext}`;
-            const saved = saveBinaryResponse(this.sessionPath, filename, buffer, block.mimeType ?? null);
-            if (saved.type === 'file_download') {
-              parts.push(`[${block.type.charAt(0).toUpperCase() + block.type.slice(1)} saved: ${saved.path} (${saved.sizeHuman})]`);
-            }
-          } catch {
-            // Base64 decode failed — skip this block
-          }
+        } else if ((block.type === 'image' || block.type === 'audio') && block.data) {
+          // Decode base64 binary content and save to downloads/ (skipped when it can't be saved)
+          const saved = this.saveBase64(proxyName, block.type === 'image' ? 'Image' : 'Audio', block.data, block.mimeType);
+          if (saved) parts.push(saved);
         }
       }
 
       // 2. Combine parts (fallback to JSON.stringify if no content extracted)
       const text = parts.join('\n') || JSON.stringify(result);
-      const protectedText = protectMcpResult(proxyName, slug, args, text, this.workspaceRootPath, this.sessionPath);
 
-      // 3. Centralized binary + large response handling
-      if (!result.isError && this.sessionPath) {
-        const guarded = await guardLargeResult(protectedText, {
-          sessionPath: this.sessionPath,
-          toolName: proxyName,
-          input: args,
-          summarize: this.summarizeCallback,
-        });
-        if (guarded) {
-          return { content: guarded, isError: false };
-        }
-      }
-
+      // 3. Centralized binary + large response handling (error results pass through as-is)
       return {
-        content: protectedText,
+        content: result.isError ? text : await this.guardText(text, proxyName, args, options?.intent),
         isError: !!result.isError,
       };
     } catch (err) {
-      // Upstream error text can carry secrets (e.g. an echoed `Authorization:
-      // Bearer …` header or token). Claude skips mcp__* in PostToolUse, so this
-      // is the only place these errors get redacted — run them through the guard.
-      const errorText = `MCP tool "${originalName}" (source: ${slug}) failed: ${err instanceof Error ? err.message : String(err)}`;
       return {
-        content: protectMcpResult(proxyName, slug, args, errorText, this.workspaceRootPath, this.sessionPath),
+        content: `MCP tool "${originalName}" (source: ${slug}) failed: ${err instanceof Error ? err.message : String(err)}`,
         isError: true,
         sourceSlug: slug,
       };
@@ -571,7 +721,179 @@ export class McpClientPool {
   /**
    * Check if a tool name is an MCP proxy tool managed by this pool.
    */
+  getProxyToolName(slug: string, originalName: string): string | null {
+    return this.sourceToolProxyNames.get(slug)?.get(originalName) ?? null;
+  }
+
+  /**
+   * Resolve the source-local safe tool name used by SDK MCP servers.
+   */
+  getProxyToolLocalName(slug: string, originalName: string): string | null {
+    const proxyName = this.getProxyToolName(slug, originalName);
+    if (!proxyName) return null;
+
+    const prefix = `mcp__${sanitizeToolNamePart(slug)}__`;
+    return proxyName.startsWith(prefix) ? proxyName.slice(prefix.length) : proxyName;
+  }
+
+
   isProxyTool(toolName: string): boolean {
     return this.proxyTools.has(toolName);
+  }
+
+  // ============================================================
+  // Resources & Prompts
+  // ============================================================
+
+  /**
+   * The client for a resources/prompts call on a connected source. Throws an
+   * error the agent can act on when the source is not connected, is an API
+   * source, or its server did not declare the capability (the SDK only checks
+   * capabilities in strict mode, so the call would otherwise fail with a vaguer
+   * protocol error).
+   */
+  private requireFeature(slug: string, feature: 'resources' | 'prompts'): PoolClient {
+    const client = this.clients.get(slug);
+    if (!client) {
+      throw new Error(`Source "${slug}" is not connected (it may need authentication or have failed to connect).`);
+    }
+    if (FEATURE_METHODS[feature].some(method => typeof client[method] !== 'function')) {
+      throw new Error(`Source "${slug}" is an API source; only MCP sources offer resources and prompts.`);
+    }
+    if (!client.getServerCapabilities!()?.[feature]) {
+      throw new Error(`Source "${slug}" does not offer ${feature}: its MCP server did not declare the ${feature} capability.`);
+    }
+    return client;
+  }
+
+  /**
+   * List a source's resources and resource templates, following pagination up
+   * to MAX_LIST_PAGES. Templates are optional within the resources capability
+   * (servers without any often answer "method not found"), so a failed template
+   * list yields none instead of failing the call.
+   */
+  async listResources(slug: string): Promise<McpResourceListing> {
+    const client = this.requireFeature(slug, 'resources');
+    const [resources, templates] = await Promise.allSettled([
+      readAllPages(resourcePages(client)),
+      readAllPages(resourceTemplatePages(client)),
+    ]);
+    if (resources.status === 'rejected') throw resources.reason;
+    if (templates.status === 'rejected') {
+      this.debug(`Could not list resource templates of ${slug}: ${errorMessage(templates.reason)}`);
+    }
+    const templateItems = templates.status === 'fulfilled' ? templates.value : { items: [], truncated: false };
+    return {
+      resources: resources.value.items,
+      resourceTemplates: templateItems.items,
+      truncated: resources.value.truncated || templateItems.truncated,
+    };
+  }
+
+  /**
+   * Read a resource as agent-ready text: text contents joined (with a header per
+   * item when there are several), blob contents saved to downloads/ like tool
+   * blobs, and the large-result guard tool results get.
+   */
+  async readResource(slug: string, uri: string): Promise<string> {
+    const client = this.requireFeature(slug, 'resources');
+    const { contents = [] } = await client.readResource!(uri);
+    const parts = contents.map(item => {
+      const body = 'text' in item && typeof item.text === 'string'
+        ? item.text
+        : 'blob' in item && typeof item.blob === 'string'
+          ? this.saveBase64(`${slug}_resource`, 'Resource', item.blob, item.mimeType)
+            ?? `[Binary content (${item.mimeType ?? 'unknown type'}) could not be saved]`
+          : '';
+      return contents.length > 1 ? `--- ${item.uri}${item.mimeType ? ` (${item.mimeType})` : ''} ---\n${body}` : body;
+    });
+    const text = parts.join('\n\n') || `Resource ${uri} has no content.`;
+    return this.guardText(text, 'source_read_resource', { sourceSlug: slug, uri });
+  }
+
+  /** List a source's prompts, following pagination up to MAX_LIST_PAGES. */
+  async listPrompts(slug: string): Promise<McpPromptListing> {
+    const client = this.requireFeature(slug, 'prompts');
+    const { items, truncated } = await readAllPages(promptPages(client));
+    return { prompts: items, truncated };
+  }
+
+  /**
+   * Get a prompt with its arguments filled in, rendered as text: a role header
+   * per message, text as-is, embedded text resources inlined, binary parts saved
+   * to downloads/, and the large-result guard tool results get.
+   */
+  async getPrompt(slug: string, name: string, args?: Record<string, string>): Promise<string> {
+    const client = this.requireFeature(slug, 'prompts');
+    const result = await client.getPrompt!(name, args);
+    const sections = (result.messages ?? []).map(message => `[${message.role}]\n${this.renderPromptContent(slug, message.content)}`);
+    if (sections.length === 0) return `Prompt "${name}" returned no messages.`;
+    const text = [...(result.description ? [`Description: ${result.description}`] : []), ...sections].join('\n\n');
+    return this.guardText(text, 'source_get_prompt', { sourceSlug: slug, name, ...(args ? { arguments: args } : {}) });
+  }
+
+  private renderPromptContent(slug: string, content: ContentBlock): string {
+    switch (content.type) {
+      case 'text':
+        return content.text;
+      case 'resource': {
+        const { resource } = content;
+        const label = `${resource.uri}${resource.mimeType ? ` (${resource.mimeType})` : ''}`;
+        if ('text' in resource && typeof resource.text === 'string') return `[Resource ${label}]\n${resource.text}`;
+        if ('blob' in resource && typeof resource.blob === 'string') {
+          return this.saveBase64(`${slug}_resource`, 'Resource', resource.blob, resource.mimeType)
+            ?? `[Binary resource ${label} could not be saved]`;
+        }
+        return `[Resource ${label}]`;
+      }
+      case 'image':
+      case 'audio': {
+        const kind = content.type === 'image' ? 'Image' : 'Audio';
+        return this.saveBase64(`${slug}_prompt`, kind, content.data, content.mimeType)
+          ?? `[${kind} (${content.mimeType}) could not be saved]`;
+      }
+      case 'resource_link':
+        return `[Resource link: ${content.uri}${content.name ? ` (${content.name})` : ''}. Read it with source_read_resource.]`;
+      default:
+        return `[${(content as { type?: string }).type ?? 'Unknown'} content omitted]`;
+    }
+  }
+
+  // ============================================================
+  // Content handling (shared by tool, resource and prompt results)
+  // ============================================================
+
+  /**
+   * Decode base64 MCP content (image/audio blocks, resource blobs) into the
+   * session's downloads/ folder and describe it for the agent. Null when there
+   * is no session folder or the save failed.
+   */
+  private saveBase64(label: string, kind: string, data: string, mimeType?: string): string | null {
+    if (!this.sessionPath) return null;
+    try {
+      const buffer = Buffer.from(data, 'base64');
+      const ext = detectExtensionFromMagic(buffer) || getMimeExtension(mimeType ?? null) || '.bin';
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `${sanitizeFilename(label)}_${timestamp}${ext}`;
+      const saved = saveBinaryResponse(this.sessionPath, filename, buffer, mimeType ?? null);
+      return saved.type === 'file_download' ? `[${kind} saved: ${saved.path} (${saved.sizeHuman})]` : null;
+    } catch {
+      // Base64 decode failed
+      return null;
+    }
+  }
+
+  /** Large results are saved to long_responses/ and replaced by a summary or preview. */
+  private async guardText(text: string, toolName: string, input: Record<string, unknown>, intent?: string): Promise<string> {
+    text=protectMcpResult(toolName, String(input.sourceSlug || toolName), input, text, this.workspaceRootPath, this.sessionPath);
+    if (!this.sessionPath) return text;
+    const guarded = await guardLargeResult(text, {
+      sessionPath: this.sessionPath,
+      toolName,
+      input,
+      intent,
+      summarize: this.summarizeCallback,
+    });
+    return guarded ?? text;
   }
 }

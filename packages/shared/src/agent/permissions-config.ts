@@ -12,9 +12,10 @@
  */
 
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
+import { resolveConfigDir } from '../config/paths.ts';
 import { join } from 'path';
 import { debug } from '../utils/debug.ts';
+import { isPlainMcpVerb } from './mcp-tool-names.ts';
 import { readJsonFileSync, safeJsonParse } from '../utils/files.ts';
 import { CONFIG_DIR } from '../config/paths.ts';
 import { getBundledAssetsDir } from '../utils/paths.ts';
@@ -43,12 +44,11 @@ let permissionsInitialized = false;
 
 /**
  * Get the app-level permissions directory.
- * Default permissions are stored at ~/.craft-agent/permissions/
- * Reads env var dynamically so tests can override via CRAFT_CONFIG_DIR.
+ * Default permissions are stored at <CONFIG_DIR>/permissions/
+ * Resolves the directory on every call so tests can override via CRAFT_CONFIG_DIR.
  */
 export function getAppPermissionsDir(): string {
-  const configDir = process.env.CRAFT_CONFIG_DIR || join(homedir(), '.craft-agent');
-  return join(configDir, 'permissions');
+  return join(resolveConfigDir(), 'permissions');
 }
 
 /**
@@ -258,6 +258,8 @@ export interface MergedPermissionsConfig {
   /** Command-specific hints for blocked Bash command explanations */
   blockedCommandHints: CompiledBlockedCommandHint[];
   readOnlyMcpPatterns: RegExp[];
+  /** Read verbs from the app defaults, matched as whole words (see ModeConfig.readOnlyMcpVerbs) */
+  readOnlyMcpVerbs: string[];
   /** Fine-grained API endpoint rules */
   allowedApiEndpoints: CompiledApiEndpointRule[];
   /** File paths allowed for writes in Explore mode (glob patterns) */
@@ -688,6 +690,7 @@ class PermissionsConfigCache {
       readOnlyBashPatterns: [...defaults.readOnlyBashPatterns],
       blockedCommandHints: [...(defaults.blockedCommandHints ?? [])],
       readOnlyMcpPatterns: [...defaults.readOnlyMcpPatterns],
+      readOnlyMcpVerbs: [...(defaults.readOnlyMcpVerbs ?? [])],
       allowedApiEndpoints: [],
       allowedWritePaths: [],
       displayName: defaults.displayName,
@@ -752,8 +755,14 @@ class PermissionsConfigCache {
       }
     }
 
-    // Add allowed MCP patterns
+    // Add allowed MCP patterns. Plain words ("get", "list") are read verbs matched as whole
+    // words of the tool name; as raw regexes they matched substrings of the full
+    // `mcp__<source>__<tool>` name (`delete_account` contains "count"). Real regexes stay regexes.
     for (const pattern of config.allowedMcpPatterns) {
+      if (isPlainMcpVerb(pattern)) {
+        merged.readOnlyMcpVerbs.push(pattern);
+        continue;
+      }
       const regex = validateRegex(pattern);
       if (regex) {
         merged.readOnlyMcpPatterns.push(regex);

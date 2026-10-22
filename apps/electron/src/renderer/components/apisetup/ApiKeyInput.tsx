@@ -10,7 +10,7 @@
  * Used in: Onboarding CredentialsStep, Settings API dialog
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import { Command as CommandPrimitive } from "cmdk"
 import { Input } from "@/components/ui/input"
@@ -25,7 +25,6 @@ import { cn } from "@/lib/utils"
 import { Check, ChevronDown, Eye, EyeOff, Loader2 } from "lucide-react"
 import { pickTierDefaults, resolveTierModels, type PiModelInfo } from "./tier-models"
 import {
-  isMaskedCredential,
   resolveCustomEndpointPayload,
   resolvePiAuthProviderForSubmit,
   resolvePresetStateForBaseUrlChange,
@@ -33,11 +32,7 @@ import {
 } from "./submit-helpers"
 
 import type { CustomEndpointApi, CustomEndpointConfig } from '@config/llm-connections'
-import {
-  OPENCODE_ZEN_BASE_URL,
-  OPENCODE_GO_BASE_URL,
-} from '@config/opencode-provider'
-import { getOpenCodeModelIdsForSubmit, getOpenCodeStaticModelsForPreset, isOpenCodePresetKey, resolveOpenCodeDefaultModels } from './opencode-models'
+import { CLOUDFLARE_AI_GATEWAY_PROVIDER, CLOUDFLARE_AI_GATEWAY_URL_EXAMPLE, parseCloudflareGatewayUrl } from '@config/cloudflare-gateway'
 
 export type ApiKeyStatus = 'idle' | 'validating' | 'success' | 'error'
 
@@ -92,9 +87,12 @@ export interface ApiKeyInputProps {
 interface Preset {
   key: PresetKey
   label: string
-  labelKey?: string
   url: string
   placeholder?: string
+  /** Requires the Pi SDK for authentication (e.g. OpenAI-compatible-only endpoint) — hidden in Anthropic API Key mode. */
+  piOnly?: boolean
+  /** Hint for the base URL field when the user must enter a tenant-specific endpoint. */
+  urlPlaceholder?: string
 }
 
 // Anthropic provider presets - for Claude Code backend
@@ -106,7 +104,7 @@ const ANTHROPIC_PRESETS: Preset[] = [
   { key: 'openai-us', label: 'OpenAI US', url: 'https://us.api.openai.com/v1', placeholder: 'sk-...' },
   { key: 'google', label: 'Google AI Studio', url: 'https://generativelanguage.googleapis.com/v1beta', placeholder: 'AIza...' },
   { key: 'openrouter', label: 'OpenRouter', url: 'https://openrouter.ai/api/v1', placeholder: 'sk-or-...' },
-  { key: 'azure-openai-responses', label: 'Azure OpenAI', url: '', placeholder: 'Paste your key here...' },
+  { key: 'azure-openai-responses', label: 'Azure OpenAI', url: '', placeholder: 'Paste your key here...', urlPlaceholder: 'https://<resource>.openai.azure.com/openai/v1' },
   { key: 'amazon-bedrock', label: 'Amazon Bedrock', url: 'https://bedrock-runtime.us-east-1.amazonaws.com', placeholder: 'AKIA...' },
   { key: 'groq', label: 'Groq', url: 'https://api.groq.com/openai/v1', placeholder: 'gsk_...' },
   { key: 'mistral', label: 'Mistral', url: 'https://api.mistral.ai/v1', placeholder: 'Paste your key here...' },
@@ -115,13 +113,16 @@ const ANTHROPIC_PRESETS: Preset[] = [
   { key: 'cerebras', label: 'Cerebras', url: 'https://api.cerebras.ai/v1', placeholder: 'csk-...' },
   { key: 'zai', label: 'z.ai (GLM)', url: 'https://api.z.ai/api/coding/paas/v4', placeholder: 'Paste your key here...' },
   { key: 'huggingface', label: 'Hugging Face', url: 'https://router.huggingface.co/v1', placeholder: 'hf_...' },
-  { key: 'minimax-global', label: 'Minimax Global', url: 'https://api.minimax.io/anthropic', placeholder: 'Paste your key here...' },
-  { key: 'minimax-cn', label: 'Minimax CN', url: 'https://api.minimaxi.com/anthropic', placeholder: 'Paste your key here...' },
+  { key: 'minimax-global', label: 'Minimax Global', url: 'https://api.minimax.io/anthropic', placeholder: 'Paste your key here...', piOnly: true },
+  { key: 'minimax-cn', label: 'Minimax CN', url: 'https://api.minimaxi.com/anthropic', placeholder: 'Paste your key here...', piOnly: true },
   { key: 'kimi-coding', label: 'Kimi (Coding)', url: 'https://api.kimi.com/coding', placeholder: 'sk-kimi-...' },
+  { key: 'moonshotai', label: 'Moonshot AI', url: 'https://api.moonshot.ai/v1', placeholder: 'sk-...', piOnly: true },
+  { key: 'moonshotai-cn', label: 'Moonshot AI (CN)', url: 'https://api.moonshot.cn/v1', placeholder: 'sk-...', piOnly: true },
   { key: 'vercel-ai-gateway', label: 'Vercel AI Gateway', url: 'https://ai-gateway.vercel.sh', placeholder: 'Paste your key here...' },
+  // The gateway URL carries the account and gateway ids the Pi SDK needs (cloudflare-gateway.ts).
+  { key: CLOUDFLARE_AI_GATEWAY_PROVIDER, label: 'Cloudflare AI Gateway', url: '', placeholder: 'Cloudflare API token', urlPlaceholder: CLOUDFLARE_AI_GATEWAY_URL_EXAMPLE, piOnly: true },
   { key: 'manifest', label: 'Manifest', url: 'https://app.manifest.build/v1', placeholder: 'mnfst_...' },
-  { key: 'opencode-zen', label: 'OpenCode Zen', labelKey: 'apiSetup.opencodeZen', url: OPENCODE_ZEN_BASE_URL, placeholder: 'Paste your key here...' },
-  { key: 'opencode-go', label: 'OpenCode Go', labelKey: 'apiSetup.opencodeGo', url: OPENCODE_GO_BASE_URL, placeholder: 'Paste your key here...' },
+  { key: 'opencode-go', label: 'OpenCode Go', url: 'https://opencode.ai/zen/go/v1', placeholder: 'Paste your key here...' },
   { key: 'custom', label: 'Custom', url: '', placeholder: 'Paste your key here...' },
 ]
 
@@ -130,7 +131,7 @@ const ANTHROPIC_PRESETS: Preset[] = [
  * OpenAI-compatible protocol. They behave like 'custom' on submit (customEndpoint
  * gets pinned to openai-completions) but stay branded in the dropdown.
  */
-const OPENAI_COMPAT_CUSTOM_URL_PRESETS: ReadonlySet<string> = new Set(['manifest'])
+const OPENAI_COMPAT_CUSTOM_URL_PRESETS: ReadonlySet<string> = new Set(['manifest', 'opencode-go'])
 
 // OpenAI provider presets - for Codex backend
 // Only direct OpenAI is supported; 3PP providers (OpenRouter, Vercel, Ollama) should be
@@ -141,7 +142,7 @@ const OPENAI_PRESETS: Preset[] = [
 
 // Pi provider presets - unified API for 20+ LLM providers
 const PI_PRESETS: Preset[] = [
-  { key: 'pi', label: 'Zo Backend (Direct)', url: '' },
+  { key: 'pi', label: 'Craft Agents Backend (Direct)', url: '' },
   { key: 'openrouter', label: 'OpenRouter', url: 'https://openrouter.ai/api' },
   { key: 'custom', label: 'Custom', url: '' },
 ]
@@ -151,21 +152,10 @@ const GOOGLE_PRESETS: Preset[] = [
   { key: 'google', label: 'Google AI Studio', url: '' },
 ]
 
-/** Presets that require the Pi SDK for authentication — hidden in Anthropic API Key mode.
- *  OpenCode Zen/Go presets are included because they need the pi_api_key flow's
- *  piAuthProvider routing (their preset key IS the routing slug); pure Anthropic
- *  mode would lose that slug and the OpenCode catalog would not resolve. */
-const PI_ONLY_PRESET_KEYS: ReadonlySet<string> = new Set([
-  'minimax-global',
-  'minimax-cn',
-  'opencode-zen',
-  'opencode-go',
-])
-
-const COMPAT_ANTHROPIC_DEFAULTS = 'claude-opus-4-8, claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5'
+const COMPAT_ANTHROPIC_DEFAULTS = 'claude-opus-5-5, claude-opus-4-8, claude-sonnet-5, claude-haiku-4-5'
 const COMPAT_OPENAI_DEFAULTS = 'openai/gpt-5.2-codex, openai/gpt-5.1-codex-mini'
 const COMPAT_MINIMAX_DEFAULTS = 'MiniMax-M2.5, MiniMax-M2.5-highspeed'
-const COMPAT_KIMI_DEFAULTS = 'k2p5, kimi-k2-thinking'
+const COMPAT_KIMI_DEFAULTS = 'k3, kimi-for-coding, kimi-for-coding-highspeed'
 
 function getPresetsForProvider(providerType: 'anthropic' | 'openai' | 'pi' | 'google' | 'pi_api_key'): Preset[] {
   if (providerType === 'pi_api_key') return ANTHROPIC_PRESETS
@@ -173,7 +163,7 @@ function getPresetsForProvider(providerType: 'anthropic' | 'openai' | 'pi' | 'go
   if (providerType === 'pi') return PI_PRESETS
   if (providerType === 'openai') return OPENAI_PRESETS
   // Anthropic mode: exclude presets that only work via Pi SDK
-  return ANTHROPIC_PRESETS.filter(p => !PI_ONLY_PRESET_KEYS.has(p.key))
+  return ANTHROPIC_PRESETS.filter(p => !p.piOnly)
 }
 
 function getPresetForUrl(url: string, presets: Preset[]): PresetKey {
@@ -218,7 +208,6 @@ export function ApiKeyInput({
     initialPreset !== 'custom' ? initialPreset : defaultPreset.key
   )
   const [connectionDefaultModel, setConnectionDefaultModel] = useState(initialValues?.connectionDefaultModel ?? '')
-  const [openCodeModels, setOpenCodeModels] = useState(() => getOpenCodeStaticModelsForPreset(initialPreset))
   const [customApi, setCustomApi] = useState<CustomEndpointApi>(initialValues?.customApi ?? 'openai-completions')
   const [modelError, setModelError] = useState<string | null>(null)
 
@@ -240,18 +229,14 @@ export function ApiKeyInput({
   const [tierDropdownPosition, setTierDropdownPosition] = useState<{ top: number; left: number; width: number } | null>(null)
   const tierFilterInputRef = useRef<HTMLInputElement>(null)
   const hydratedTierProviderRef = useRef<string | null>(null)
-  const openCodeModelRequestIdRef = useRef(0)
 
   const isDisabled = disabled || status === 'validating'
 
   const isPiApiKeyFlow = providerType === 'pi_api_key'
   const isBedrock = activePreset === 'amazon-bedrock'
-  const isOpenCodePreset = isOpenCodePresetKey(activePreset)
   // Hide endpoint/model fields for providers with well-known endpoints handled by the SDK
   const DEFAULT_ENDPOINT_PROVIDERS = new Set(['anthropic', 'openai', 'pi', 'google'])
   const isDefaultProviderPreset = DEFAULT_ENDPOINT_PROVIDERS.has(activePreset)
-  const openCodeStaticModels = useMemo(() => getOpenCodeStaticModelsForPreset(activePreset), [activePreset])
-  const openCodeModelOptions = openCodeModels.length > 0 ? openCodeModels : openCodeStaticModels
 
   // Provider-specific placeholders from the active preset
   const activePresetObj = presets.find(p => p.key === activePreset)
@@ -292,40 +277,6 @@ export function ApiKeyInput({
     loadPiModels(activePreset)
   }, [activePreset, loadPiModels])
 
-  useEffect(() => {
-    if (!isOpenCodePreset) {
-      setOpenCodeModels([])
-      return
-    }
-
-    setOpenCodeModels(openCodeStaticModels)
-
-    const timeout = setTimeout(() => {
-      const requestId = ++openCodeModelRequestIdRef.current
-
-      window.electronAPI.getOpenCodeProviderModels({
-        baseUrl: baseUrl.trim(),
-        apiKey: isMaskedCredential(apiKey) ? undefined : apiKey.trim() || undefined,
-        piAuthProvider: activePreset,
-      }).then((result) => {
-        if (requestId !== openCodeModelRequestIdRef.current) return
-        const liveModels = result.models.length > 0 ? result.models : openCodeStaticModels
-        setOpenCodeModels(liveModels)
-        setModelError(null)
-      }).catch((err) => {
-        if (requestId !== openCodeModelRequestIdRef.current) return
-        console.error('[ApiKeyInput] Failed to load OpenCode models for', activePreset, err)
-        setOpenCodeModels(openCodeStaticModels)
-        setModelError(null)
-      })
-    }, 300)
-
-    return () => {
-      clearTimeout(timeout)
-      openCodeModelRequestIdRef.current += 1
-    }
-  }, [activePreset, apiKey, baseUrl, isOpenCodePreset, openCodeStaticModels])
-
   // Whether to show 3 tier dropdowns instead of text input
   const hasPiModels = isPiApiKeyFlow && piModels.length > 0 && !isDefaultProviderPreset && activePreset !== 'custom' && !isBedrock
 
@@ -352,10 +303,6 @@ export function ApiKeyInput({
       setConnectionDefaultModel(COMPAT_KIMI_DEFAULTS)
     } else if (preset.key === 'manifest') {
       setConnectionDefaultModel('auto')
-    } else if (isOpenCodePresetKey(preset.key)) {
-      setConnectionDefaultModel('')
-      const models = getOpenCodeStaticModelsForPreset(preset.key)
-      setOpenCodeModels(models)
     } else if (preset.key === 'custom' || OPENAI_COMPAT_CUSTOM_URL_PRESETS.has(preset.key)) {
       setConnectionDefaultModel(providerType === 'openai' ? COMPAT_OPENAI_DEFAULTS : COMPAT_ANTHROPIC_DEFAULTS)
     } else {
@@ -385,7 +332,7 @@ export function ApiKeyInput({
         setConnectionDefaultModel(COMPAT_MINIMAX_DEFAULTS)
       } else if (presetKey === 'kimi-coding') {
         setConnectionDefaultModel(COMPAT_KIMI_DEFAULTS)
-      } else if (presetKey === 'openrouter' || presetKey === 'vercel-ai-gateway' || presetKey === 'custom') {
+      } else if (presetKey === 'openrouter' || presetKey === 'vercel-ai-gateway' || presetKey === 'custom' || OPENAI_COMPAT_CUSTOM_URL_PRESETS.has(presetKey)) {
         setConnectionDefaultModel(providerType === 'openai' ? COMPAT_OPENAI_DEFAULTS : COMPAT_ANTHROPIC_DEFAULTS)
       }
     }
@@ -393,27 +340,13 @@ export function ApiKeyInput({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    const submittedApiKey = isMaskedCredential(apiKey) ? '' : apiKey.trim()
 
     const effectivePiAuthProvider = isPiApiKeyFlow
       ? resolvePiAuthProviderForSubmit(activePreset, lastNonCustomPreset)
       : undefined
 
-    if (isOpenCodePreset) {
-      const defaults = resolveOpenCodeDefaultModels(openCodeModelOptions)
-      if (!defaults.best || !defaults.default_ || !defaults.cheap) {
-        setModelError('No OpenCode models are available.')
-        return
-      }
-      const models = getOpenCodeModelIdsForSubmit(openCodeModelOptions)
-      onSubmit({
-        apiKey: submittedApiKey,
-        baseUrl: baseUrl.trim() || undefined,
-        connectionDefaultModel: defaults.best,
-        models,
-        piAuthProvider: activePreset,
-        modelSelectionMode: 'automaticallySyncedFromProvider',
-      })
+    if (activePreset === CLOUDFLARE_AI_GATEWAY_PROVIDER && !parseCloudflareGatewayUrl(baseUrl)) {
+      setModelError(`Enter your gateway URL: ${CLOUDFLARE_AI_GATEWAY_URL_EXAMPLE}`)
       return
     }
 
@@ -425,7 +358,7 @@ export function ApiKeyInput({
       }
       const models: string[] = [bestModel, defaultModel, cheapModel]
       onSubmit({
-        apiKey: submittedApiKey,
+        apiKey: apiKey.trim(),
         baseUrl: baseUrl.trim() || undefined,
         connectionDefaultModel: bestModel,
         models,
@@ -490,7 +423,7 @@ export function ApiKeyInput({
     })
 
     onSubmit({
-      apiKey: submittedApiKey,
+      apiKey: apiKey.trim(),
       baseUrl: isUsingDefaultEndpoint ? undefined : effectiveBaseUrl,
       connectionDefaultModel: parsedModels[0],
       models: parsedModels.length > 0 ? parsedModels : undefined,
@@ -515,8 +448,7 @@ export function ApiKeyInput({
       {!isBedrock && (<div className="space-y-2">
         <Label htmlFor="api-key">API Key</Label>
         <div className={cn(
-          "relative rounded-md shadow-minimal transition-colors",
-          "bg-foreground-2 focus-within:bg-background"
+          "field-surface relative rounded-md"
         )}>
           <Input
             id="api-key"
@@ -534,8 +466,9 @@ export function ApiKeyInput({
           <button
             type="button"
             onClick={() => setShowValue(!showValue)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            className="absolute right-2 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center text-tertiary hover:text-foreground"
             tabIndex={-1}
+            aria-label={showValue ? t('common.hide') : t('common.show')}
           >
             {showValue ? (
               <EyeOff className="size-4" />
@@ -554,13 +487,10 @@ export function ApiKeyInput({
           <DropdownMenu>
             <DropdownMenuTrigger
               disabled={isDisabled}
-              className="flex h-6 items-center gap-1 rounded-[6px] bg-background shadow-minimal pl-2.5 pr-2 text-[12px] font-medium text-foreground/50 hover:bg-foreground/5 hover:text-foreground focus:outline-none"
+              className="motion-press flex h-control-sm items-center gap-1 rounded-full pl-2.5 pr-2 text-label-sm font-medium text-secondary ring-1 ring-inset ring-border hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
             >
-              {(() => {
-                const p = presets.find(p => p.key === activePreset)
-                return p?.labelKey ? t(p.labelKey) : p?.label
-              })()}
-              <ChevronDown className="size-2.5 opacity-50" />
+              {presets.find(p => p.key === activePreset)?.label}
+              <ChevronDown className="size-2.5 text-tertiary" />
             </DropdownMenuTrigger>
             <StyledDropdownMenuContent align="end" className="z-floating-menu">
               {presets.map((preset) => (
@@ -569,7 +499,7 @@ export function ApiKeyInput({
                   onClick={() => handlePresetSelect(preset)}
                   className="justify-between"
                 >
-                  {preset.labelKey ? t(preset.labelKey) : preset.label}
+                  {preset.label}
                   <Check className={cn("size-3", activePreset === preset.key ? "opacity-100" : "opacity-0")} />
                 </StyledDropdownMenuItem>
               ))}
@@ -579,15 +509,14 @@ export function ApiKeyInput({
         {/* Base URL input - hidden for default provider presets (Anthropic/OpenAI) and Bedrock */}
         {!isDefaultProviderPreset && !isBedrock && (
           <div className={cn(
-            "rounded-md shadow-minimal transition-colors",
-            "bg-foreground-2 focus-within:bg-background"
+            "field-surface rounded-md"
           )}>
             <Input
               id="base-url"
               type="text"
               value={baseUrl}
               onChange={(e) => handleBaseUrlChange(e.target.value)}
-              placeholder="https://your-api-endpoint.com"
+              placeholder={activePresetObj?.urlPlaceholder ?? "https://your-api-endpoint.com"}
               className="border-0 bg-transparent shadow-none"
               disabled={isDisabled}
             />
@@ -601,7 +530,7 @@ export function ApiKeyInput({
         <div className="space-y-2">
           <Label>Protocol</Label>
           <div className={cn(
-            "flex rounded-md shadow-minimal overflow-hidden",
+            "flex gap-0.5 rounded-md bg-fill-hover p-0.5",
             "bg-foreground-2",
             isDisabled && "opacity-50 pointer-events-none"
           )}>
@@ -615,17 +544,17 @@ export function ApiKeyInput({
                 disabled={isDisabled}
                 onClick={() => setCustomApi(value)}
                 className={cn(
-                  "flex-1 py-1.5 text-[12px] font-medium transition-colors",
+                  "flex-1 rounded-sm py-1 text-label-sm font-medium transition-colors duration-micro ease-out-subtle hover:duration-instant",
                   customApi === value
-                    ? "bg-background text-foreground shadow-minimal"
-                    : "text-foreground/50 hover:text-foreground/70"
+                    ? "bg-raised text-foreground shadow-elev-1"
+                    : "text-secondary hover:text-foreground"
                 )}
               >
                 {label}
               </button>
             ))}
           </div>
-          <p className="text-xs text-foreground/30">
+          <p className="text-label-sm text-tertiary">
             Most third-party APIs (Ollama, vLLM, DashScope) use OpenAI Compatible.
           </p>
         </div>
@@ -638,7 +567,7 @@ export function ApiKeyInput({
           <div className="space-y-2">
             <Label>Authentication</Label>
             <div className={cn(
-              "flex rounded-md shadow-minimal overflow-hidden",
+              "flex gap-0.5 rounded-md bg-fill-hover p-0.5",
               "bg-foreground-2",
               isDisabled && "opacity-50 pointer-events-none"
             )}>
@@ -652,10 +581,10 @@ export function ApiKeyInput({
                   disabled={isDisabled}
                   onClick={() => setBedrockAuthMethod(value)}
                   className={cn(
-                    "flex-1 py-1.5 text-[12px] font-medium transition-colors",
+                    "flex-1 rounded-sm py-1 text-label-sm font-medium transition-colors duration-micro ease-out-subtle hover:duration-instant",
                     bedrockAuthMethod === value
-                      ? "bg-background text-foreground shadow-minimal"
-                      : "text-foreground/50 hover:text-foreground/70"
+                      ? "bg-raised text-foreground shadow-elev-1"
+                      : "text-secondary hover:text-foreground"
                   )}
                 >
                   {label}
@@ -668,10 +597,10 @@ export function ApiKeyInput({
           {bedrockAuthMethod === 'iam_credentials' && (
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <Label htmlFor="aws-access-key-id" className="text-muted-foreground font-normal text-xs">
+                <Label htmlFor="aws-access-key-id" className="text-label-sm font-normal text-secondary">
                   Access Key ID
                 </Label>
-                <div className={cn("rounded-md shadow-minimal transition-colors", "bg-foreground-2 focus-within:bg-background")}>
+                <div className="field-surface rounded-md">
                   <Input
                     id="aws-access-key-id"
                     type="text"
@@ -685,10 +614,10 @@ export function ApiKeyInput({
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="aws-secret-key" className="text-muted-foreground font-normal text-xs">
+                <Label htmlFor="aws-secret-key" className="text-label-sm font-normal text-secondary">
                   Secret Access Key
                 </Label>
-                <div className={cn("relative rounded-md shadow-minimal transition-colors", "bg-foreground-2 focus-within:bg-background")}>
+                <div className="field-surface relative rounded-md">
                   <Input
                     id="aws-secret-key"
                     type={showValue ? 'text' : 'password'}
@@ -701,18 +630,19 @@ export function ApiKeyInput({
                   <button
                     type="button"
                     onClick={() => setShowValue(!showValue)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    className="absolute right-2 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center text-tertiary hover:text-foreground"
                     tabIndex={-1}
+                    aria-label={showValue ? t('common.hide') : t('common.show')}
                   >
                     {showValue ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="aws-session-token" className="text-muted-foreground font-normal text-xs">
-                  Session Token <span className="text-foreground/30">· optional</span>
+                <Label htmlFor="aws-session-token" className="text-label-sm font-normal text-secondary">
+                  Session Token <span className="text-tertiary">· optional</span>
                 </Label>
-                <div className={cn("rounded-md shadow-minimal transition-colors", "bg-foreground-2 focus-within:bg-background")}>
+                <div className="field-surface rounded-md">
                   <Input
                     id="aws-session-token"
                     type="text"
@@ -730,18 +660,18 @@ export function ApiKeyInput({
           {/* Environment info */}
           {bedrockAuthMethod === 'environment' && (
             <div className="rounded-md bg-foreground-2 p-3">
-              <p className="text-xs text-foreground/50">
-                Uses your existing AWS credential chain — <code className="text-foreground/70">~/.aws/credentials</code>, <code className="text-foreground/70">AWS_PROFILE</code>, IAM roles, SSO sessions, and environment variables.
+              <p className="text-label-sm text-tertiary">
+                Uses your existing AWS credential chain — <code className="text-secondary">~/.aws/credentials</code>, <code className="text-secondary">AWS_PROFILE</code>, IAM roles, SSO sessions, and environment variables.
               </p>
             </div>
           )}
 
           {/* AWS Region */}
           <div className="space-y-1.5">
-            <Label htmlFor="aws-region" className="text-muted-foreground font-normal text-xs">
+            <Label htmlFor="aws-region" className="text-label-sm font-normal text-secondary">
               AWS Region
             </Label>
-            <div className={cn("rounded-md shadow-minimal transition-colors", "bg-foreground-2 focus-within:bg-background")}>
+            <div className="field-surface rounded-md">
               <Input
                 id="aws-region"
                 type="text"
@@ -756,11 +686,11 @@ export function ApiKeyInput({
         </>
       )}
 
-      {/* Model Selection — 3-tier dropdowns for model catalogs, or text input for custom/compat */}
+      {/* Model Selection — 3 tier dropdowns for Pi providers, text input for custom/compat */}
       {hasPiModels ? (
         <div className="space-y-3">
           {piModelsLoading ? (
-            <div className="flex items-center gap-2 py-3 text-muted-foreground">
+            <div className="flex items-center gap-2 py-3 text-tertiary">
               <Loader2 className="size-3.5 animate-spin" />
               <span className="text-xs">{t("apiSetup.loadingModels")}</span>
             </div>
@@ -768,9 +698,9 @@ export function ApiKeyInput({
             <>
               {tierConfigs.map(({ label, desc, value }) => (
                 <div key={label} className="space-y-1.5">
-                  <Label className="text-muted-foreground font-normal text-xs">
+                  <Label className="text-label-sm font-normal text-secondary">
                     {label}{' '}
-                    <span className="text-foreground/30">· {desc}</span>
+                    <span className="text-tertiary">· {desc}</span>
                   </Label>
                   <button
                     type="button"
@@ -788,16 +718,14 @@ export function ApiKeyInput({
                       }
                     }}
                     className={cn(
-                      "flex h-9 w-full items-center justify-between rounded-md px-3 text-sm",
-                      "bg-foreground-2 shadow-minimal transition-colors",
-                      "hover:bg-background focus:outline-none focus:bg-background",
+                      "field-surface flex h-9 w-full items-center justify-between rounded-md px-3 text-label",
                       isDisabled && "opacity-50 pointer-events-none"
                     )}
                   >
                     <span className="truncate text-foreground">
                       {piModels.find(m => m.id === value)?.name ?? 'Select model...'}
                     </span>
-                    <ChevronDown className="size-3 opacity-50 shrink-0" />
+                    <ChevronDown className="size-3 shrink-0 text-tertiary" />
                   </button>
                 </div>
               ))}
@@ -808,7 +736,7 @@ export function ApiKeyInput({
                     onClick={() => { setOpenTier(null); setTierFilter('') }}
                   />
                   <div
-                    className="fixed z-floating-menu min-w-[200px] overflow-hidden rounded-[8px] bg-background text-foreground shadow-modal-small"
+                    className="popover-styled fixed z-floating-menu min-w-[200px] overflow-hidden text-foreground"
                     style={{
                       top: tierDropdownPosition.top,
                       left: tierDropdownPosition.left,
@@ -819,19 +747,19 @@ export function ApiKeyInput({
                       className="min-w-[200px]"
                       shouldFilter={false}
                     >
-                      <div className="border-b border-border/50 px-3 py-2">
+                      <div className="border-b border-subtle px-3 py-2">
                         <CommandPrimitive.Input
                           ref={tierFilterInputRef}
                           value={tierFilter}
                           onValueChange={setTierFilter}
                           placeholder={t("apiSetup.searchModels")}
                           autoFocus
-                          className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground placeholder:select-none"
+                          className="w-full bg-transparent text-label outline-none placeholder:text-tertiary placeholder:select-none"
                         />
                       </div>
                       <CommandPrimitive.List className="max-h-[240px] overflow-y-auto p-1">
                         {piModels
-                          .filter(m => `${m.name} ${m.id}`.toLowerCase().includes(tierFilter.toLowerCase()))
+                          .filter(m => m.name.toLowerCase().includes(tierFilter.toLowerCase()))
                           .map((model) => (
                             <CommandPrimitive.Item
                               key={model.id}
@@ -842,14 +770,14 @@ export function ApiKeyInput({
                                 setTierFilter('')
                               }}
                               className={cn(
-                                "flex cursor-pointer select-none items-center justify-between gap-3 rounded-[6px] px-3 py-2 text-[13px]",
-                                "outline-none data-[selected=true]:bg-foreground/5"
+                                "flex min-h-row-menu cursor-pointer select-none items-center justify-between gap-3 rounded-md px-3 text-label",
+                                "outline-none data-[selected=true]:bg-fill-hover"
                               )}
                             >
                               <div className="flex items-center gap-2 min-w-0">
                                 <span className="truncate">{model.name}</span>
                                 {model.reasoning && (
-                                  <span className="text-[10px] text-foreground/30 shrink-0">reasoning</span>
+                                  <span className="shrink-0 text-caption text-tertiary">reasoning</span>
                                 )}
                               </div>
                               <Check className={cn("size-3 shrink-0", activeTierConfig.value === model.id ? "opacity-100" : "opacity-0")} />
@@ -868,15 +796,14 @@ export function ApiKeyInput({
         </div>
       ) : !isDefaultProviderPreset && (
         <div className="space-y-2">
-          <Label htmlFor="connection-default-model" className="text-muted-foreground font-normal">
+          <Label htmlFor="connection-default-model" className="font-normal text-secondary">
             Default Model{' '}
-            <span className="text-foreground/30">
+            <span className="text-tertiary">
               · {!isBedrock && baseUrl.trim() ? 'required' : 'optional'}
             </span>
           </Label>
           <div className={cn(
-            "rounded-md shadow-minimal transition-colors",
-            "bg-foreground-2 focus-within:bg-background",
+            "field-surface rounded-md",
             modelError && "ring-1 ring-destructive/40"
           )}>
             <Input
@@ -887,7 +814,7 @@ export function ApiKeyInput({
                 setConnectionDefaultModel(e.target.value)
                 setModelError(null)
               }}
-              placeholder="e.g. claude-opus-4-8, claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5"
+              placeholder="e.g. claude-opus-5-5, claude-opus-4-8, claude-sonnet-5, claude-haiku-4-5"
               className="border-0 bg-transparent shadow-none"
               disabled={isDisabled}
             />
@@ -895,11 +822,11 @@ export function ApiKeyInput({
           {modelError && (
             <p className="text-xs text-destructive">{modelError}</p>
           )}
-          <p className="text-xs text-foreground/30">
+          <p className="text-label-sm text-tertiary">
             Comma-separated list. The first model is the default. The last is used for summarization.
           </p>
           {(activePreset === 'custom' || !activePreset) && (
-            <p className="text-xs text-foreground/30">
+            <p className="text-label-sm text-tertiary">
               Required for custom endpoints. Use the provider-specific model ID.
             </p>
           )}

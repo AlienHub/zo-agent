@@ -69,28 +69,6 @@ export interface PromptAction {
   thinkingLevel?: ThinkingLevel;
 }
 
-/** A confirmation action - pauses an automation run until the user approves continuing. */
-export interface ConfirmAction {
-  type: 'confirm';
-  title: string;
-  /** Markdown body shown in the confirmation card. Omit it for a compact approval card. */
-  bodyMarkdown?: string;
-  /** HTML body shown in the confirmation card. Renderers may sanitize or markdown-render it. */
-  bodyHtml?: string;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  /** Prompt sent to the same session after the user confirms. */
-  onConfirmPrompt?: string;
-  /** Optional prompt sent to the same session after the user cancels. */
-  onCancelPrompt?: string;
-  /** LLM connection slug for the created session (falls back to default if not found) */
-  llmConnection?: string;
-  /** Model ID for the created session (falls back to provider default if invalid) */
-  model?: string;
-  /** Thinking level for prompts sent after confirmation/cancellation. */
-  thinkingLevel?: ThinkingLevel;
-}
-
 /** HTTP method for webhook actions */
 export type WebhookHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -121,7 +99,39 @@ export interface WebhookAction {
   auth?: WebhookAuth;
 }
 
-export type AutomationAction = PromptAction | ConfirmAction | WebhookAction;
+/** Runtime a script action executes under (resolved via resolveScriptRuntime) */
+export type ScriptActionRuntime = 'bun' | 'node' | 'python3';
+
+/**
+ * A script action — spawns a workspace-local script via argv (never a shell).
+ *
+ * Security model (locked design):
+ * - The script path is workspace-relative and must stay within the workspace
+ *   (symlink-aware check at execution time).
+ * - argv spawn through resolveScriptRuntime — no shell interpretation.
+ * - The child env contains ONLY CRAFT_* variables (event context + workspace
+ *   paths + pass-through of the user's CRAFT_* exports), never full process.env.
+ * - Runs of the same matcher never overlap (per-matcher concurrency lock).
+ */
+export interface ScriptAction {
+  type: 'script';
+  /** Script path relative to the workspace root */
+  script: string;
+  /** Extra argv appended after the script path */
+  args?: string[];
+  /** Script runtime (default: 'bun') */
+  runtime?: ScriptActionRuntime;
+  /** Per-run timeout in ms (default 60_000, clamped to [1_000, 900_000]) */
+  timeoutMs?: number;
+  /**
+   * Page slug this script refreshes. When set, the executor injects
+   * CRAFT_PAGE_* env vars and records the outcome on the page's page.json
+   * (the completion marker the config watcher turns into `pages:changed`).
+   */
+  page?: string;
+}
+
+export type AutomationAction = ConfirmAction | PromptAction | WebhookAction | ScriptAction;
 
 // ============================================================================
 // Condition Types
@@ -166,6 +176,18 @@ export interface LogicalCondition {
 /** Union of all condition types */
 export type AutomationCondition = TimeCondition | StateCondition | LogicalCondition;
 
+/**
+ * Yes/no question the decision model answers before a prompt action starts a
+ * session (Settings > AI > Decision model, toggle `automationConditions`). The
+ * run is skipped when the "yes" probability is below `threshold` (default 0.5).
+ * Inert when the decision model is off or unavailable: the automation runs as
+ * it would without the condition.
+ */
+export interface SemanticCondition {
+  question: string;
+  threshold?: number;
+}
+
 // ============================================================================
 // Matcher Definition
 // ============================================================================
@@ -189,6 +211,8 @@ export interface AutomationMatcher {
   enabled?: boolean;
   /** Optional conditions that must all pass (AND) after matcher matches, before actions fire */
   conditions?: AutomationCondition[];
+  /** Optional decision-model condition checked before prompt actions start a session */
+  semanticCondition?: SemanticCondition;
   /**
    * Optional Telegram forum-topic name. When set, sessions spawned by this
    * matcher are bound to a forum topic of this name in the workspace's paired
@@ -251,10 +275,37 @@ export interface WebhookActionResult {
   responseBody?: string;
 }
 
-export type ActionExecutionResult = PromptActionResult | WebhookActionResult;
+/** Result of a script action */
+export interface ScriptActionResult {
+  type: 'script';
+  /** Workspace-relative script path as configured */
+  script: string;
+  /** Whether the run completed with exit code 0 */
+  success: boolean;
+  /** Exit code, or null when the process was killed (timeout) or never spawned */
+  exitCode: number | null;
+  /** True when the run was rejected before spawning (path/runtime violation) */
+  blocked?: boolean;
+  /** True when the run was skipped because the matcher was still running */
+  skipped?: boolean;
+  /** True when the process was killed after exceeding its timeout */
+  timedOut?: boolean;
+  /** Captured stdout (capped) */
+  stdout: string;
+  /** Captured stderr, or the block/spawn error (capped) */
+  stderr: string;
+  durationMs: number;
+  /** Page slug when this run refreshed a page */
+  page?: string;
+}
+
+export type ActionExecutionResult = PromptActionResult | WebhookActionResult | ScriptActionResult;
 
 /** A pending prompt with its metadata */
 export interface PendingPrompt {
+  confirmation?: ConfirmAction;
+  onConfirmActions?: AutomationAction[];
+  continuationEnv?: Record<string,string>;
   /** The session ID this prompt should be sent to */
   sessionId: string | undefined;
   /** The automation matcher ID this prompt originated from */
@@ -280,12 +331,12 @@ export interface PendingPrompt {
   thinkingLevel?: ThinkingLevel;
   /** Forum-topic name to bind the new session to (Telegram supergroup, when paired). */
   telegramTopic?: string;
-  /** Confirmation gate to show after this prompt finishes, if the matcher has a prompt -> confirm pipeline. */
-  confirmation?: ConfirmAction;
-  /** Actions to execute only after the confirmation gate is approved. */
-  onConfirmActions?: AutomationAction[];
-  /** Event env captured when the automation was triggered. */
-  continuationEnv?: Record<string, string>;
+  /** Decision-model condition from the matcher, with the event it is judged against. */
+  semanticCondition?: SemanticCondition;
+  /** Event that fired the matcher (for `semanticCondition`). */
+  event?: string;
+  /** Event payload (for `semanticCondition`). */
+  eventPayload?: Record<string, unknown>;
 }
 
 export interface AutomationResult {
@@ -370,4 +421,25 @@ export interface SessionMetadataSnapshot {
   sessionStatus?: string;
   /** Session name (user-defined or auto-generated) */
   sessionName?: string;
+}
+
+export interface ConfirmAction {
+  type: 'confirm';
+  title: string;
+  /** Markdown body shown in the confirmation card. Omit it for a compact approval card. */
+  bodyMarkdown?: string;
+  /** HTML body shown in the confirmation card. Renderers may sanitize or markdown-render it. */
+  bodyHtml?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  /** Prompt sent to the same session after the user confirms. */
+  onConfirmPrompt?: string;
+  /** Optional prompt sent to the same session after the user cancels. */
+  onCancelPrompt?: string;
+  /** LLM connection slug for the created session (falls back to default if not found) */
+  llmConnection?: string;
+  /** Model ID for the created session (falls back to provider default if invalid) */
+  model?: string;
+  /** Thinking level for prompts sent after confirmation/cancellation. */
+  thinkingLevel?: ThinkingLevel;
 }

@@ -29,6 +29,8 @@ export interface SessionMeta {
   lastReadMessageId?: string
   workingDirectory?: string
   enabledSourceSlugs?: string[]
+  /** Coding mode: lean coding prompt and session tools (shown as a glyph in the session list) */
+  codingMode?: boolean
   /** Shared viewer URL (if shared via viewer) */
   sharedUrl?: string
   /** Shared session ID in viewer (for revoke) */
@@ -43,7 +45,7 @@ export interface SessionMeta {
   hasUnread?: boolean
   /** Labels for filtering (additive tags, many-per-session) */
   labels?: string[]
-  /** Permission mode ('safe', 'ask', 'allow-all') — used by view expressions */
+  /** Permission mode ('safe', 'ask', 'guarded', 'allow-all') — used by view expressions */
   permissionMode?: string
   /** Session status for filtering */
   sessionStatus?: string
@@ -700,12 +702,14 @@ export const forceSessionMessagesReloadAtom = atom(
 /**
  * Lifecycle status of a background task chip.
  * - `running`  — backgrounded, no terminal signal yet (chip shows a spinner + live elapsed).
+ * - `stale` — no lifecycle signal arrived within the renderer timeout. The task may
+ *   still be running, so the chip shows an unknown state and remains recoverable.
  * - `completed`/`failed`/`stopped` — a real task_completed notification arrived.
  * - `orphaned` — the turn that owned the task ended before it finished, so it was
  *   terminated with that turn's subprocess. Shown distinctly instead of a false
  *   "running". Not produced once WS2 keep-alive is enabled.
  */
-export type BackgroundTaskStatus = 'running' | 'completed' | 'failed' | 'stopped' | 'orphaned'
+export type BackgroundTaskStatus = 'running' | 'stale' | 'completed' | 'failed' | 'stopped' | 'orphaned'
 
 export interface BackgroundTask {
   /** Task or shell ID */
@@ -722,6 +726,8 @@ export interface BackgroundTask {
   startTime: number
   /** Elapsed seconds (from progress events; the chip also derives it from startTime) */
   elapsedSeconds: number
+  /** Last renderer-observed lifecycle/progress signal; falls back to startTime. */
+  lastSignalAt?: number
   /** Task intent/description */
   intent?: string
   /** Lifecycle status; defaults to 'running' when added */
@@ -732,6 +738,10 @@ export interface BackgroundTask {
   outputFile?: string
   /** Short summary, set when task_completed arrives */
   summary?: string
+  /** What a running task is doing (task_activity): the agent's one-line summary, its last tool, its step count */
+  activity?: { summary?: string; lastToolName?: string; toolUses?: number }
+  /** A stop was requested; the stopped status arrives as task_completed */
+  stopping?: boolean
 }
 
 /**

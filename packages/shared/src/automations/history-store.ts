@@ -12,7 +12,7 @@
  * prevents concurrent file corruption.
  */
 
-import { appendFile, readFile, writeFile } from 'fs/promises';
+import { appendFile, readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'path';
 import { createLogger } from '../utils/debug.ts';
@@ -62,6 +62,7 @@ export async function appendAutomationHistoryEntry(
   const historyPath = join(getWorkspaceDataPath(workspaceRootPath), AUTOMATIONS_HISTORY_FILE);
 
   await withMutex(workspaceRootPath, async () => {
+    await mkdir(getWorkspaceDataPath(workspaceRootPath),{recursive:true});
     await appendFile(historyPath, JSON.stringify(entry) + '\n', 'utf-8');
 
     const count = (appendCounters.get(workspaceRootPath) ?? 0) + 1;

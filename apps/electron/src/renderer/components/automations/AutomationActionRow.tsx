@@ -10,9 +10,9 @@
 
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { Badge } from '@/components/ui/badge'
+import { Info_Badge } from '@/components/info/Info_Badge'
 import { THINKING_LEVELS } from '@craft-agent/shared/agent/thinking-levels'
-import type { AutomationAction, ConfirmAction, PromptAction } from './types'
+import type { AutomationAction, PromptAction } from './types'
 import { ActionTypeIcon } from './ActionTypeIcon'
 import { DEFAULT_WEBHOOK_METHOD } from './constants'
 
@@ -26,10 +26,10 @@ export interface AutomationActionRowProps {
  * Highlight @mentions in prompt strings
  */
 function PromptText({ text, t }: { text: string; t: (key: string) => string }) {
-  if (!text) return <span className="text-sm text-muted-foreground italic">{t('automations.emptyPrompt')}</span>
+  if (!text) return <span className="text-label italic text-tertiary">{t('automations.emptyPrompt')}</span>
   const parts = text.split(/(@\w[\w-]*)/g)
   return (
-    <span className="text-sm break-words">
+    <span className="break-words text-label text-foreground">
       {parts.map((part, i) =>
         part.startsWith('@') ? (
           <span key={i} className="text-accent font-medium">{part}</span>
@@ -44,23 +44,13 @@ function PromptText({ text, t }: { text: string; t: (key: string) => string }) {
 function WebhookText({ action }: { action: Extract<AutomationAction, { type: 'webhook' }> }) {
   const method = action.method ?? DEFAULT_WEBHOOK_METHOD
   return (
-    <span className="text-sm break-words">
-      <span className="font-mono font-medium text-accent">{method}</span>{' '}
-      <span className="text-foreground/70">{action.url}</span>
+    <span className="break-words text-label">
+      <span className="font-mono text-mono-ui font-medium text-accent">{method}</span>{' '}
+      <span className="text-secondary [overflow-wrap:anywhere]">{action.url}</span>
       {action.bodyFormat && (
-        <span className="text-foreground/40 ml-1">({action.bodyFormat})</span>
+        <span className="ml-1 text-tertiary">({action.bodyFormat})</span>
       )}
     </span>
-  )
-}
-
-function ConfirmText({ action }: { action: ConfirmAction }) {
-  const body = action.bodyMarkdown ?? action.bodyHtml
-  return (
-    <div className="space-y-1">
-      <div className="text-sm break-words font-medium text-foreground/80">{action.title}</div>
-      {body && <div className="text-xs text-foreground/60 line-clamp-2 break-words">{body}</div>}
-    </div>
   )
 }
 
@@ -83,31 +73,31 @@ function PromptActionBadges({ action, t }: { action: PromptAction; t: (key: stri
   return (
     <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
       {llmConnection && (
-        <Badge
-          variant="secondary"
-          className="font-mono text-[10px] px-1.5 py-0 font-normal"
+        <Info_Badge
+          color="default"
+          className="font-mono font-normal"
           title={`${t('automations.labelConnection')}: ${llmConnection}`}
         >
           {llmConnection}
-        </Badge>
+        </Info_Badge>
       )}
       {model && (
-        <Badge
-          variant="secondary"
-          className="font-mono text-[10px] px-1.5 py-0 font-normal max-w-[14rem] truncate"
+        <Info_Badge
+          color="default"
+          className="max-w-[14rem] font-mono font-normal"
           title={`${t('automations.labelModel')}: ${model}`}
         >
-          {model}
-        </Badge>
+          <span className="truncate">{model}</span>
+        </Info_Badge>
       )}
       {thinkingLevel && (
-        <Badge
-          variant="secondary"
-          className="text-[10px] px-1.5 py-0 font-normal"
+        <Info_Badge
+          color="default"
+          className="font-normal"
           title={`${t('automations.labelThinking')}: ${thinkingLabel}`}
         >
           {thinkingLabel}
-        </Badge>
+        </Info_Badge>
       )}
     </div>
   )
@@ -115,24 +105,23 @@ function PromptActionBadges({ action, t }: { action: PromptAction; t: (key: stri
 
 export function AutomationActionRow({ action, index, className }: AutomationActionRowProps) {
   const { t } = useTranslation()
+  const isWebhook = action.type === 'webhook'
 
   return (
-    <div className={cn('flex items-start gap-3 px-4 py-3', className)}>
-      {/* Index + icon — h-5 matches the first line height of text-sm content */}
-      <div className="flex items-center gap-2 shrink-0 h-5 mt-[3px]">
-        <span className="text-xs text-muted-foreground tabular-nums w-4 text-right">
+    <div className={cn('flex items-start gap-3 px-3.5 py-3', className)}>
+      {/* Index + icon — h-[18px] matches the first line height of text-label content */}
+      <div className="flex h-[18px] shrink-0 items-center gap-2">
+        <span className="w-4 text-right text-label-sm text-tertiary tabular-nums">
           {index + 1}.
         </span>
         <ActionTypeIcon type={action.type} className="h-3.5 w-3.5" />
       </div>
 
-      {/* Content */}
-      <div className="flex-1 min-w-0">
-        {action.type === 'webhook' ? (
+      {/* Content — text-label on the block so the line box matches the 18px index column */}
+      <div className="flex-1 min-w-0 text-label">
+        {isWebhook ? (
           <WebhookText action={action} />
-        ) : action.type === 'confirm' ? (
-          <ConfirmText action={action} />
-        ) : (
+        ) : action.type === 'confirm' ? <span>{action.title}</span> : (
           <>
             <PromptText text={action.prompt} t={t} />
             <PromptActionBadges action={action} t={t} />

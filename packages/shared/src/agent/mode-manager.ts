@@ -8,6 +8,7 @@
  * - 'safe': Read-only exploration mode (blocks writes, never prompts)
  * - 'ask': Ask for permission on dangerous operations (default interactive behavior)
  * - 'allow-all': Skip all permission checks (everything allowed)
+ * - 'guarded': Like 'allow-all', plus the decision model's risk check (core/guarded-mode.ts)
  */
 
 /// <reference path="../types/incr-regex-package.d.ts" />
@@ -15,6 +16,7 @@
 import { homedir } from 'os';
 import { existsSync, realpathSync } from 'fs';
 import { debug } from '../utils/debug.ts';
+import { isReadOnlyMcpToolName } from './mcp-tool-names.ts';
 import { dirname, isAbsolute, relative, resolve } from 'path';
 import { getSessionSafeAllowedToolNames } from '@craft-agent/session-tools-core';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
@@ -34,6 +36,7 @@ import {
   type PowerShellValidationResult,
   type PowerShellValidationReason,
 } from './powershell-validator.ts';
+import { sanitizePromptLine } from '../prompts/prompt-sanitize.ts';
 import {
   type PermissionMode,
   type ModeConfig,
@@ -42,6 +45,12 @@ import {
   type CompiledBlockedCommandHint,
   type MismatchAnalysis,
   PERMISSION_MODE_ORDER,
+  DEFAULT_PERMISSION_MODES,
+  availablePermissionModes,
+  isAutonomousPermissionMode,
+  isPermissionMode,
+  planExecutionMode,
+  clampPermissionMode,
   PERMISSION_MODE_CONFIG,
   SAFE_MODE_CONFIG,
   type PermissionModeCanonical,
@@ -63,6 +72,12 @@ export {
   type CompiledBlockedCommandHint,
   type MismatchAnalysis,
   PERMISSION_MODE_ORDER,
+  DEFAULT_PERMISSION_MODES,
+  availablePermissionModes,
+  isAutonomousPermissionMode,
+  isPermissionMode,
+  planExecutionMode,
+  clampPermissionMode,
   PERMISSION_MODE_CONFIG,
   SAFE_MODE_CONFIG,
   toCanonicalPermissionMode,
@@ -127,8 +142,12 @@ function expandHome(path: string): string {
  * Supports: ** (recursive), * (single segment), ? (single char)
  */
 function globToRegex(pattern: string): RegExp {
-  // Expand ~ in pattern
-  const expandedPattern = expandHome(pattern);
+  // Expand ~ then apply the same case/separator normalization used on paths so
+  // that patterns match on Windows (backslash separators, case-insensitive FS).
+  const expanded = expandHome(pattern);
+  const expandedPattern = process.platform === 'win32'
+    ? expanded.replace(/\\/g, '/').toLowerCase()
+    : expanded;
 
   // Escape special regex chars except glob wildcards
   let regex = expandedPattern
@@ -142,9 +161,13 @@ function globToRegex(pattern: string): RegExp {
 }
 
 /**
- * Check if a path matches any of the allowed write path patterns
+ * Whether a file path matches any of the workspace's `allowedWritePaths` globs.
+ *
+ * Exported so Ask mode (`core/pre-tool-use.ts:shouldPromptInAskMode`) suppresses
+ * the write prompt for exactly the paths Explore mode auto-allows: one matcher,
+ * one allowlist semantics.
  */
-function matchesAllowedWritePath(filePath: string, allowedPaths: string[]): boolean {
+export function matchesAllowedWritePath(filePath: string, allowedPaths: string[]): boolean {
   // Normalize path (expand ~, resolve, and use forward slashes)
   const normalizedPath = normalizeForComparison(expandHome(filePath));
 
@@ -405,10 +428,40 @@ export function consumeUserModeSignal(sessionId: string): void {
   modeManager.consumeUserModeSignal(sessionId);
 }
 
+// ============================================================
+// Guarded mode availability
+// ============================================================
+
+/**
+ * Whether Guarded mode's risk check can run (decision layer on + `guardedMode` feature).
+ * The host installs it (`SessionManager.initialize`); until then Guarded is treated as Ask.
+ */
+let guardedModeActiveResolver: () => boolean = () => false;
+
+/** Install (or reset with `null`) how Guarded mode learns whether its check can run. */
+export function setGuardedModeActiveResolver(resolver: (() => boolean) | null): void {
+  guardedModeActiveResolver = resolver ?? (() => false);
+}
+
+/**
+ * The mode permission checks apply. Guarded promises "risky actions ask first"; when its
+ * check cannot run at all (feature or decision layer off), it keeps that promise by
+ * behaving as Ask instead of silently running as Execute. A one-off missing answer while
+ * the check is on still runs the call (the model only ever adds prompts).
+ */
+export function resolveEffectivePermissionMode(mode: PermissionMode): PermissionMode {
+  if (mode !== 'guarded') return mode;
+  try {
+    return guardedModeActiveResolver() ? 'guarded' : 'ask';
+  } catch {
+    return 'ask';
+  }
+}
+
 /**
  * Cycle to the next permission mode (for SHIFT+TAB)
  * @param sessionId - The session to cycle mode for
- * @param enabledModes - Optional list of enabled modes to cycle through (defaults to all 3)
+ * @param enabledModes - Optional list of enabled modes to cycle through (defaults to Explore, Ask, Execute)
  * Returns the new mode
  */
 export function cyclePermissionMode(
@@ -416,8 +469,8 @@ export function cyclePermissionMode(
   enabledModes?: PermissionMode[]
 ): PermissionMode {
   const currentMode = getPermissionMode(sessionId);
-  // Use provided modes or default to all modes
-  const modes = enabledModes && enabledModes.length >= 2 ? enabledModes : PERMISSION_MODE_ORDER;
+  // Use provided modes or default to the three base modes (Guarded only when listed)
+  const modes = enabledModes && enabledModes.length >= 2 ? enabledModes : DEFAULT_PERMISSION_MODES;
   const currentIndex = modes.indexOf(currentMode);
 
   // If current mode not in enabled list, jump to first enabled mode
@@ -1717,7 +1770,8 @@ export function getPathHint(targetPath: string, plansFolderPath: string, dataFol
  * Check if an MCP tool is read-only using the given config
  */
 function isReadOnlyMcpToolWithConfig(toolName: string, config: ToolCheckConfig): boolean {
-  return config.readOnlyMcpPatterns.some(pattern => pattern.test(toolName));
+  return isReadOnlyMcpToolName(toolName, config.readOnlyMcpVerbs ?? [])
+    || config.readOnlyMcpPatterns.some(pattern => pattern.test(toolName));
 }
 
 /**
@@ -1774,7 +1828,7 @@ export function isApiEndpointAllowed(
  */
 const ALWAYS_ALLOWED_TOOLS = new Set([
   'Read', 'Glob', 'Grep',           // File reading
-  'Task', 'TaskOutput',             // Agent orchestration
+  'Task',                           // Agent orchestration (TaskOutput was removed in Claude Code 2.1.269)
   'WebFetch', 'WebSearch',          // Web research
   'TodoWrite',                      // Task tracking
   'SubmitPlan',                     // Plan submission
@@ -1798,7 +1852,7 @@ export type ToolCheckResult =
  * Returns different results based on the permission mode:
  * - 'safe': Block writes entirely (no prompting)
  * - 'ask': Allow but may require permission for dangerous operations
- * - 'allow-all': Allow everything
+ * - 'guarded' / 'allow-all': Allow everything
  */
 export function shouldAllowToolInMode(
   toolName: string,
@@ -1821,8 +1875,9 @@ export function shouldAllowToolInMode(
     config = SAFE_MODE_CONFIG;
   }
 
-  // In 'allow-all' mode, all tools are allowed (no restrictions)
-  if (mode === 'allow-all') {
+  // In 'allow-all' and 'guarded' mode, all tools are allowed (no restrictions;
+  // Guarded's risk check runs after the pre-tool-use pipeline, see core/guarded-mode.ts)
+  if (isAutonomousPermissionMode(mode)) {
     return { allowed: true };
   }
 
@@ -2004,16 +2059,14 @@ export function shouldAllowToolInMode(
 
   // Handle MCP tools - allow read-only, block write operations
   if (toolName.startsWith('mcp__')) {
-    // Always allow documentation tools (read-only, always available)
-    if (toolName.startsWith('mcp__craft-agents-docs__')) {
-      return { allowed: true };
-    }
-
     // Handle session-scoped tools - derive safe-mode behavior from canonical session-tools-core metadata
     if (toolName.startsWith('mcp__session__')) {
       const safeAllowedSessionTools = getSessionSafeAllowedToolNames({
         prefix: 'mcp__session__',
         includeDeveloperFeedback: FEATURE_FLAGS.developerFeedback,
+        // Classification, not visibility: `decide` is read-only and Explore-safe
+        // whenever the backend advertised it.
+        includeDecide: true,
       });
 
       if (safeAllowedSessionTools.has(toolName)) {
@@ -2100,11 +2153,17 @@ function getBlockReasonWithConfig(toolName: string, config: ToolCheckConfig): st
  * errorResponse() in packages/session-tools-core/src/response.ts for the
  * full explanation of the OpenAI Responses API limitation.
  *
+ * Must NOT set `continue: false`: since Claude CLI 2.1.212 (SDK 0.3.220)
+ * that halts the entire turn before the model sees the reason, so it can
+ * never react (e.g. suggest a mode switch or submit a plan). With
+ * `continue: true`, `decision: 'block'` feeds the reason back to the
+ * model as a tool error and the turn continues.
+ *
  * @param reason - The reason for blocking (from shouldAllowToolInMode)
  */
 export function blockWithReason(reason: string) {
   return {
-    continue: false,
+    continue: true,
     decision: 'block' as const,
     reason: `[ERROR] ${reason}`,
   };
@@ -2135,7 +2194,8 @@ export function formatSessionState(
 
   // Use canonical user-facing mode tokens to avoid terminology drift.
   const modeName = toCanonicalPermissionMode(diagnostics.permissionMode);
-  let result = `<session_state>\nsessionId: ${sessionId}\npermissionMode: ${modeName}`;
+  const sessionStateTags = ['session_state'] as const;
+  let result = `<session_state>\nsessionId: ${sanitizePromptLine(sessionId, sessionStateTags)}\npermissionMode: ${modeName}`;
 
   if (diagnostics.transitionDisplay) {
     result += `\nmodeTransition: ${diagnostics.transitionDisplay}`;
@@ -2157,12 +2217,12 @@ export function formatSessionState(
 
   // Always include plans folder path so agent knows where plans are stored
   if (options?.plansFolderPath) {
-    result += `\nplansFolderPath: ${options.plansFolderPath}`;
+    result += `\nplansFolderPath: ${sanitizePromptLine(options.plansFolderPath, sessionStateTags)}`;
   }
 
   // Include data folder path so agent knows where transform_data output goes
   if (options?.dataFolderPath) {
-    result += `\ndataFolderPath: ${options.dataFolderPath}`;
+    result += `\ndataFolderPath: ${sanitizePromptLine(options.dataFolderPath, sessionStateTags)}`;
   }
 
   result += '\n</session_state>';

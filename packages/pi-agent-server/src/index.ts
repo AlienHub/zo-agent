@@ -24,8 +24,8 @@ import { homedir } from 'node:os';
 import {
   createAgentSession,
   SessionManager as PiSessionManager,
-  AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
+  ModelRuntime as PiModelRuntime,
   createReadToolDefinition,
   createBashToolDefinition,
   createEditToolDefinition,
@@ -38,12 +38,12 @@ import type {
   AgentSession,
   AgentSessionEvent,
   AgentToolResult,
-  AuthCredential,
   CreateAgentSessionOptions,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 
 // Pi AI types
+import { InMemoryCredentialStore, InMemoryModelsStore } from '@earendil-works/pi-ai';
 import type { TextContent as PiTextContent } from '@earendil-works/pi-ai';
 
 // Pre-register the Bedrock provider module so the Pi SDK doesn't attempt a
@@ -55,54 +55,67 @@ import { setBedrockProviderModule } from '@earendil-works/pi-ai/api/bedrock-conv
 import { bedrockProviderModule } from '@earendil-works/pi-ai/bedrock-provider';
 setBedrockProviderModule(bedrockProviderModule);
 
+// Same single-file-bundle problem for OAuth flows: lazyOAuth loads flow modules
+// through a bundler-opaque variable-specifier dynamic import, so toAuth/refresh
+// on any oauth credential (openai-codex, github-copilot) throws
+// "Cannot find module './<flow>.js'" at runtime — surfaced as
+// "OAuth auth derivation failed". Statically register all flows instead.
+import { registerBunOAuthFlows } from '@earendil-works/pi-ai/bun-oauth';
+registerBunOAuthFlows();
+
 // Model resolution (extracted for testability + custom-endpoint precedence)
-import { resolvePiModel, isDeniedMiniModelId, isModelNotFoundError } from './model-resolution.ts';
+import { resolvePiModel, isDeniedMiniModelId } from './model-resolution.ts';
 import { pickProviderAppropriateMiniModel } from './pick-mini-model.ts';
-import { normalizePiToolInputForPreToolUse } from './tool-input-normalization.ts';
+import { queryMiniModel } from './mini-model-query.ts';
+import {
+  CRAFT_PI_EPHEMERAL_QUERY_DEADLINE_MS,
+  createCraftSettingsManager,
+} from './session-settings.ts';
+import {
+  EphemeralQueryCancelledError,
+  EphemeralQueryCoordinator,
+  isEphemeralQueryCancellation,
+  type EphemeralQueryContext,
+  type EphemeralQueryResource,
+} from './ephemeral-query-lifecycle.ts';
 import {
   buildCustomEndpointModelDef,
   normalizeCustomEndpointModelEntry,
   stripPiPrefix,
+  type CustomEndpointApi,
+  type CustomEndpointConfig,
   type CustomEndpointModelEntry,
   type CustomEndpointModelOverrides,
 } from './custom-endpoint-models.ts';
 
 // Direct source imports from shared (bundled by bun build)
-import { handleLargeResponse, estimateTokens, tokenLimitFor } from '../../shared/src/utils/large-response.ts';
+import { handleLargeResponse, estimateTokens, tokenLimitFor, setLargeResultFilter } from '../../shared/src/utils/large-response.ts';
 import { getSessionPlansPath, getSessionPath } from '../../shared/src/sessions/storage.ts';
-import { buildCallLlmRequest, withTimeout, LLM_QUERY_TIMEOUT_MS } from '../../shared/src/agent/llm-tool.ts';
+import { buildCallLlmRequest } from '../../shared/src/agent/llm-tool.ts';
 import type { LLMQueryRequest, LLMQueryResult } from '../../shared/src/agent/llm-tool.ts';
 import { PI_TOOL_NAME_MAP, THINKING_TO_PI } from '../../shared/src/agent/backend/pi/constants.ts';
 import { getDefaultSummarizationModel } from '../../shared/src/config/models.ts';
-import { OPENCODE_MODEL_API_MAP } from '../../shared/src/config/opencode-provider.ts';
-import { isOpenCodePiAuthProvider } from '../../shared/src/config/llm-connections.ts';
-import {
-  createSensitiveAuditEntry,
-  sensitiveAuditFilePath,
-  writeSensitiveAuditEntry,
-  formatSensitiveProtectionNotice,
-  guardToolResult,
-} from '../../shared/src/agent/guards/sensitive-context/index.ts';
-import type { PermissionMode, SensitiveProtectionMode } from '../../shared/src/agent/guards/sensitive-context/index.ts';
-import type { SensitiveContextProtectionSettings } from '../../shared/src/config/types.ts';
 import { createWebFetchTool } from './tools/web-fetch.ts';
 import { resolveSearchProvider } from './tools/search/resolve-provider.ts';
 import { createSearchTool } from './tools/search/create-search-tool.ts';
 import { allowCraftMetadataProperties, stripCraftMetadata } from './craft-metadata-schema.ts';
-import { applySystemPromptOverride } from './system-prompt-override.ts';
+import {
+  createCraftResourceLoader,
+  createSystemPromptOverride,
+  type SystemPromptOverride,
+} from './system-prompt-override.ts';
+import { readContextUsage, deferContextUsage } from './context-usage.ts';
+import { waitForCompaction, MANUAL_COMPACT_WAIT_MS, PROMPT_COMPACT_WAIT_MS } from './compaction-wait.ts';
+import type { PiCompactResult, PiContextUsagePayload, PiLargeResultGateRequest, PiLargeResultGateResponse } from '../../shared/src/agent/backend/pi/protocol.ts';
+import { createLargeResultGateClient } from './large-result-gate.ts';
+import { adaptCredentialForPiSdk, type PiCredential } from './adapt-credential.ts';
+import { resolveCraftAgentDir } from './agent-dir.ts';
+import { toPiProviderId } from '../../shared/src/config/pi-provider-ids.ts';
+import { providerEndpointEnv } from './provider-endpoint-env.ts';
 
 // ============================================================
 // Types — JSONL Protocol
 // ============================================================
-
-/** Credential union used in init and token_update messages */
-type PiCredential =
-  | { type: 'api_key'; key: string }
-  | { type: 'oauth'; access: string; refresh: string; expires: number }
-  | { type: 'iam'; accessKeyId: string; secretAccessKey: string; region?: string; sessionToken?: string };
-
-/** Custom endpoint protocol — determines which streaming adapter Pi SDK uses */
-type CustomEndpointApi = 'openai-completions' | 'anthropic-messages';
 
 /** Init message from main process — configures the Pi agent server */
 interface InitMessage {
@@ -116,8 +129,6 @@ interface InitMessage {
   sessionPath: string;
   workingDirectory: string;
   plansFolderPath: string;
-  permissionMode?: PermissionMode;
-  sensitiveContextProtection?: SensitiveContextProtectionSettings;
   miniModel?: string;
   agentDir?: string;
   providerType?: string;
@@ -127,8 +138,10 @@ interface InitMessage {
   branchFromSdkSessionId?: string;
   branchFromSessionPath?: string;
   branchFromSdkTurnId?: string;
-  customEndpoint?: { api?: CustomEndpointApi; supportsImages?: boolean };
+  customEndpoint?: CustomEndpointConfig;
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
+  /** Compact once context reaches this many tokens (config.json `autoCompactWindow`). */
+  autoCompactWindow?: number;
   piAuth?: { provider: string; credential: PiCredential };
 }
 
@@ -139,7 +152,7 @@ interface RuntimeConfigUpdateMessage {
   providerType?: string;
   authType?: string;
   baseUrl?: string;
-  customEndpoint?: { api?: CustomEndpointApi; supportsImages?: boolean };
+  customEndpoint?: CustomEndpointConfig;
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
 }
 
@@ -150,9 +163,11 @@ type InboundMessage =
   | { type: 'register_tools'; tools: ProxyToolDef[] }
   | { type: 'tool_execute_response'; requestId: string; result: { content: string; isError: boolean } }
   | { type: 'pre_tool_use_response'; requestId: string; action: 'allow' | 'block' | 'modify'; input?: Record<string, unknown>; reason?: string }
+  | PiLargeResultGateResponse
   | { type: 'abort' }
   | { type: 'mini_completion'; id: string; prompt: string }
   | { type: 'llm_query'; id: string; request: LLMQueryRequest }
+  | { type: 'cancel_ephemeral_query'; id: string }
   | { type: 'ensure_session_ready'; id: string }
   | { type: 'set_model'; model: string }
   | { type: 'set_thinking_level'; level: string }
@@ -181,7 +196,7 @@ type EnrichedToolExecutionStartEvent = Extract<AgentSessionEvent, { type: 'tool_
   toolMetadata?: ToolExecutionMetadata;
 };
 
-type OutboundAgentEvent = AgentSessionEvent | EnrichedToolExecutionStartEvent;
+type OutboundAgentEvent = (AgentSessionEvent | EnrichedToolExecutionStartEvent | { type: 'context_usage' }) & PiContextUsagePayload;
 
 /** Messages to main process (stdout) */
 interface OutboundReady { type: 'ready'; sessionId: string | null; callbackPort: number }
@@ -193,7 +208,7 @@ interface OutboundPreToolUseReq {
   toolCallId?: string;
   input: Record<string, unknown>;
 }
-interface OutboundToolExecReq { type: 'tool_execute_request'; requestId: string; toolName: string; args: Record<string, unknown> }
+interface OutboundToolExecReq { type: 'tool_execute_request'; requestId: string; toolName: string; toolCallId?: string; args: Record<string, unknown> }
 interface OutboundSessionToolCompleted { type: 'session_tool_completed'; toolName: string; args: Record<string, unknown>; isError: boolean }
 interface OutboundMiniResult { type: 'mini_completion_result'; id: string; text: string | null }
 interface OutboundLlmQueryResult {
@@ -212,7 +227,7 @@ interface OutboundCompactResult {
   type: 'compact_result';
   id: string;
   success: boolean;
-  result?: { summary: string; firstKeptEntryId: string; tokensBefore: number };
+  result?: PiCompactResult;
   errorMessage?: string;
 }
 interface OutboundSetAutoCompactionResult {
@@ -230,7 +245,7 @@ interface OutboundRuntimeConfigUpdateResult {
   errorMessage?: string;
 }
 interface OutboundSessionIdUpdate { type: 'session_id_update'; sessionId: string }
-interface OutboundError { type: 'error'; message: string; code?: string }
+interface OutboundError { type: 'error'; message: string; code?: string; id?: string }
 
 type OutboundMessage =
   | OutboundReady
@@ -245,6 +260,7 @@ type OutboundMessage =
   | OutboundSetAutoCompactionResult
   | OutboundRuntimeConfigUpdateResult
   | OutboundSessionIdUpdate
+  | PiLargeResultGateRequest
   | OutboundError;
 
 // ============================================================
@@ -252,9 +268,29 @@ type OutboundMessage =
 // ============================================================
 
 let piSession: AgentSession | null = null;
+// Forces Craft's system prompt onto piSession (see system-prompt-override.ts);
+// recreated together with the session.
+let piSessionPromptOverride: SystemPromptOverride | null = null;
+// A stop must also cancel a manual compact still waiting for auto-compaction.
+let compactionEpoch = 0;
 let piModelRegistry: PiModelRegistry | null = null;
-let moduleAuthStorage: PiAuthStorage | null = null;
+let moduleCredentialStore: InMemoryCredentialStore | null = null;
+// Cached runtime build shared by the main session and ephemeral queryLlm
+// sessions — see createAuthenticatedRuntime. Cached as a promise so concurrent
+// first callers coalesce onto one build instead of racing.
+let moduleRuntimePromise: Promise<{
+  modelRuntime: PiModelRuntime;
+  modelRegistry: PiModelRegistry;
+}> | null = null;
 let unsubscribeEvents: (() => void) | null = null;
+
+const ephemeralQueries = new EphemeralQueryCoordinator();
+let localEphemeralQueryCounter = 0;
+
+function nextLocalEphemeralQueryId(source: string): string {
+  localEphemeralQueryCounter += 1;
+  return `${source}-${localEphemeralQueryCounter}`;
+}
 
 // Init config (set on 'init' message)
 let initConfig: Extract<InboundMessage, { type: 'init' }> | null = null;
@@ -304,6 +340,11 @@ function debugLog(message: string): void {
   // Write debug messages to stderr so they don't interfere with JSONL protocol
   process.stderr.write(`[pi-server] ${message}\n`);
 }
+
+// Large tool results (decision model, toggle `largeResults`): handleLargeResponse asks the
+// main process for the parts the agent's intent needs before summarizing.
+const largeResultGate = createLargeResultGateClient(send);
+setLargeResultFilter(largeResultGate.filter);
 
 /** Find the most recent .jsonl session file in a directory. */
 function findMostRecentSessionFile(sessionDir: string): string | null {
@@ -452,7 +493,7 @@ const customModelOverrides = new Map<string, CustomEndpointModelOverrides>();
 
 function registerCustomEndpointModels(
   registry: PiModelRegistry,
-  api: CustomEndpointApi | undefined,
+  api: CustomEndpointApi,
   baseUrl: string,
   models: CustomEndpointModelEntry[],
 ): void {
@@ -466,76 +507,107 @@ function registerCustomEndpointModels(
     }
   }
   const allIds = [...customEndpointModelIds];
-  const modelsWithApi = allIds.map(id => {
-    const modelApi = api ?? OPENCODE_MODEL_API_MAP[id];
-    if (!modelApi) {
-      debugLog(`[custom-endpoint] Warning: no api for model ${id} — skipping`);
-      return null;
-    }
-    return buildCustomEndpointModelDef(
-      id,
-      { supportsImages: initConfig?.customEndpoint?.supportsImages === true },
-      customModelOverrides.get(id),
-      modelApi,
-    );
-  }).filter((m): m is ReturnType<typeof buildCustomEndpointModelDef> => m !== null);
   registry.registerProvider('custom-endpoint', {
     baseUrl,
     apiKey: resolveCustomEndpointApiKey(),
-    ...(api ? { api } : {}),
+    api,
     authHeader: true,
-    models: modelsWithApi,
+    models: allIds.map(id => buildCustomEndpointModelDef(
+      id,
+      {
+        supportsImages: initConfig?.customEndpoint?.supportsImages === true,
+        maxTokens: initConfig?.customEndpoint?.maxTokens,
+      },
+      customModelOverrides.get(id),
+      api,
+    )),
   });
-  debugLog(`Registered custom endpoint: ${baseUrl} with ${modelsWithApi.length} model(s) [${allIds.join(', ')}]${api ? `, api: ${api}` : ', per-model api'}`);
+  debugLog(`Registered custom endpoint: ${baseUrl} with ${allIds.length} model(s) [${allIds.join(', ')}], api: ${api}`);
 }
 
 /**
- * Create an in-memory auth storage pre-loaded with the user's credentials
- * and a model registry backed by it. Used by both the main session and
+ * Get the shared credential store + model runtime + registry, (re-)injecting
+ * the user's credentials on every call. Used by both the main session and
  * ephemeral queryLlm sessions.
+ *
+ * The runtime + registry are cached at module scope: ModelRuntime.create
+ * composes the full builtin provider catalog and runs an availability refresh,
+ * which is pure waste to repeat per queryLlm call. Sharing is safe because
+ * the SDK's RuntimeCredentials wrapper reads through to the store without
+ * caching — the credential writes below (and token_update's) are immediately
+ * visible through the cached runtime. Sharing one registry also means
+ * set_model / update_runtime_config mutate the registry every consumer
+ * resolves from, instead of only the main session's copy.
  */
-function createAuthenticatedRegistry(): {
-  authStorage: PiAuthStorage;
+async function createAuthenticatedRuntime(): Promise<{
+  modelRuntime: PiModelRuntime;
   modelRegistry: PiModelRegistry;
-} {
-  // Reuse module-level authStorage if already created (allows token_update to mutate it).
-  // Only create a new one on first call or after re-init.
-  if (!moduleAuthStorage) {
-    moduleAuthStorage = PiAuthStorage.inMemory();
+}> {
+  // Reuse the module-level credential store if already created (allows token_update
+  // to mutate it). Only create a new one on first call or after re-init.
+  if (!moduleCredentialStore) {
+    moduleCredentialStore = new InMemoryCredentialStore();
   }
-  const authStorage = moduleAuthStorage;
+  const credentials = moduleCredentialStore;
   if (initConfig?.piAuth) {
     const { provider, credential } = initConfig.piAuth;
-    // Pi SDK 0.70.0's AuthCredential union (ApiKeyCredential | OAuthCredential) doesn't
-    // include 'iam' as a first-class member, but the auth storage accepts it at runtime
-    // — the Bedrock provider module reads AWS env directly; this `set` keeps Pi SDK's
-    // internal provider-tracking consistent regardless of credential shape.
-    authStorage.set(provider, credential as unknown as AuthCredential);
-    debugLog(`Injected ${credential.type} credential for provider: ${provider}`);
+    const adapted = adaptCredentialForPiSdk(provider, credential);
+    if (adapted) {
+      await credentials.modify(provider, async () => adapted);
+      debugLog(`Injected ${credential.type} credential for provider: ${provider}${
+        adapted.type !== credential.type ? ` (stored as ${adapted.type} for SDK resolution)` : ''}`);
+    } else {
+      debugLog(`Not storing ${credential.type} credential for provider: ${provider} — resolves ambiently from env`);
+    }
   } else if (initConfig?.apiKey) {
-    authStorage.set('anthropic', { type: 'api_key', key: initConfig.apiKey });
-    debugLog('Injected API key into auth storage (legacy fallback)');
+    const apiKey = initConfig.apiKey;
+    await credentials.modify('anthropic', async () => ({ type: 'api_key', key: apiKey }));
+    debugLog('Injected API key into credential store (legacy fallback)');
   }
 
-  const modelRegistry = PiModelRegistry.inMemory(authStorage);
+  if (!moduleRuntimePromise) {
+    const build = async (): Promise<{
+      modelRuntime: PiModelRuntime;
+      modelRegistry: PiModelRegistry;
+    }> => {
+      // In-memory runtime: no auth.json/models.json file IO, no create-time network refresh.
+      const modelRuntime = await PiModelRuntime.create({
+        credentials,
+        modelsPath: null,
+        modelsStore: new InMemoryModelsStore(),
+      });
+      const modelRegistry = new PiModelRegistry(modelRuntime);
 
-  // Register custom endpoint models dynamically via Pi SDK's registerProvider API.
-  // This makes arbitrary OpenAI/Anthropic-compatible endpoints work through the Pi SDK
-  // by creating synthetic Model<Api> objects that the SDK requires.
-  const hasCustomEndpoint = !!initConfig?.baseUrl?.trim();
-  if (hasCustomEndpoint && initConfig?.customEndpoint) {
-    const { api } = initConfig.customEndpoint;
-    const modelEntries: CustomEndpointModelEntry[] = (initConfig.customModels?.length
-      ? initConfig.customModels
-      : [initConfig.model || 'default']
-    ).map(normalizeCustomEndpointModelEntry);
-    customEndpointModelIds = new Set();  // Reset on fresh registry creation
-    registerCustomEndpointModels(modelRegistry, api, initConfig.baseUrl!.trim(), modelEntries);
-  } else if (hasCustomEndpoint && !initConfig?.customEndpoint) {
-    debugLog('Custom endpoint without protocol config — models may not resolve. Set customEndpoint.api for proper routing.');
+      // Register custom endpoint models dynamically via Pi SDK's registerProvider API.
+      // This makes arbitrary OpenAI/Anthropic-compatible endpoints work through the Pi SDK
+      // by creating synthetic Model<Api> objects that the SDK requires. One-time per cache
+      // lifetime: later config changes re-register via update_runtime_config, which
+      // operates on this same shared registry.
+      const hasCustomEndpoint = !!initConfig?.baseUrl?.trim();
+      if (hasCustomEndpoint && initConfig?.customEndpoint) {
+        const { api } = initConfig.customEndpoint;
+        const modelEntries: CustomEndpointModelEntry[] = (initConfig.customModels?.length
+          ? initConfig.customModels
+          : [initConfig.model || 'default']
+        ).map(normalizeCustomEndpointModelEntry);
+        customEndpointModelIds = new Set();  // Reset on fresh registry creation
+        registerCustomEndpointModels(modelRegistry, api, initConfig.baseUrl!.trim(), modelEntries);
+      } else if (hasCustomEndpoint && !initConfig?.customEndpoint) {
+        debugLog('Custom endpoint without protocol config — models may not resolve. Set customEndpoint.api for proper routing.');
+      }
+
+      // Publish at creation (not in ensureSession) so update_runtime_config can
+      // re-register custom endpoint models even before any session exists.
+      piModelRegistry = modelRegistry;
+      return { modelRuntime, modelRegistry };
+    };
+    moduleRuntimePromise = build().catch((error) => {
+      // Don't cache a failed build — let the next caller retry.
+      moduleRuntimePromise = null;
+      throw error;
+    });
   }
-
-  return { authStorage, modelRegistry };
+  return moduleRuntimePromise;
 }
 
 async function ensureSession(): Promise<AgentSession> {
@@ -544,9 +616,7 @@ async function ensureSession(): Promise<AgentSession> {
 
   const cwd = resolvedCwd();
 
-  const { authStorage, modelRegistry } = createAuthenticatedRegistry();
-  // Store at module scope for set_model handler
-  piModelRegistry = modelRegistry;
+  const { modelRuntime, modelRegistry } = await createAuthenticatedRuntime();
 
   // Build tools: coding tools + web tools wrapped with permission hooks + proxy tools.
   // Search provider is selected based on the user's LLM connection:
@@ -557,12 +627,16 @@ async function ensureSession(): Promise<AgentSession> {
   //
   // IMPORTANT: resolve dynamically on each search call so token_update refreshes
   // are used without recreating the session.
+  // The active model is passed so the ChatGPT backend search provider uses a model the
+  // account supports instead of a hardcoded one (craft-agents-oss#1023). Resolved per call
+  // (alongside the provider) so set_model / token_update refreshes are picked up live.
+  const activeSearchModel = () => (initConfig?.model ? stripPiPrefix(initConfig.model) : undefined);
   const searchProvider = {
     get name() {
-      return resolveSearchProvider(initConfig?.piAuth).name;
+      return resolveSearchProvider(initConfig?.piAuth, activeSearchModel()).name;
     },
     async search(query: string, count: number) {
-      return resolveSearchProvider(initConfig?.piAuth).search(query, count);
+      return resolveSearchProvider(initConfig?.piAuth, activeSearchModel()).search(query, count);
     },
   };
   const searchTool = createSearchTool(searchProvider);
@@ -571,15 +645,17 @@ async function ensureSession(): Promise<AgentSession> {
   );
   const webTools = [searchTool, webFetchTool];
 
-  // Pi SDK 0.70.0 registration contract:
-  //   - `customTools` accepts ToolDefinition[] — our hook-wrapped objects go here
-  //   - `tools` is a string[] name allowlist — MUST include every tool we want active,
-  //     otherwise Pi SDK defaults to the built-in [read, bash, edit, write] set and
-  //     silently filters out everything else. Custom tool names with matching built-in
-  //     names override the SDK's raw implementation inside _refreshToolRegistry, so
-  //     our hooked versions take effect (permissions + large-response summarization).
-  //   - Do NOT pass tool *objects* to `tools` — `allowedToolNames = new Set(options.tools)`
-  //     then `.has(name)` returns false for every string lookup → zero tools active.
+  // Pi SDK tool registration contract (1.x):
+  //   - `customTools` accepts ToolDefinition[] — our hook-wrapped objects go here.
+  //     A custom tool replaces the built-in of the same name in _refreshToolRegistry,
+  //     so our hooked versions take effect (permissions + large-response summarization).
+  //   - `tools` is an allowlist of tool names (`*` patterns and `+name`/`-name`
+  //     modifiers also exist — keep plain names) and MUST name every tool we want
+  //     active: unlisted built-in, custom and extension tools are filtered out, and a
+  //     named tool is activated even when it is not a default. Our source proxies are
+  //     `mcp__<slug>__<tool>`, so the allowlist also filters Pi-side MCP tools.
+  //   - Do NOT pass tool *objects* to `tools` — names are matched as strings, so
+  //     objects match nothing → zero tools active.
   const builtinDefs = [
     createReadToolDefinition(cwd),
     createBashToolDefinition(cwd),
@@ -594,22 +670,23 @@ async function ensureSession(): Promise<AgentSession> {
   const toolAllowlist = wrappedAll.map(t => t.name);
   debugLog(`Session tools: ${builtinDefs.length} builtin + ${webTools.length} web + ${proxyTools.length} proxy = ${wrappedAll.length} total`);
 
-  // Build session options
+  // Build session options.
+  // settingsManager: explicit in-memory settings (retry policy, compaction)
+  // instead of the SDK default that merges `<cwd>/.pi/settings.json` from the
+  // user's working directory and writes to `<agentDir>/settings.json`.
+  const settingsManager = createCraftSettingsManager('main', { autoCompactWindow: initConfig.autoCompactWindow });
+  // Resource isolation: never resolve extensions/skills from ~/.pi/agent.
+  const agentDir = resolveCraftAgentDir(initConfig);
   const sessionOptions: CreateAgentSessionOptions = {
     cwd,
-    authStorage,
-    modelRegistry,
+    agentDir,
+    modelRuntime,
     customTools: wrappedAll,
     tools: toolAllowlist,
+    settingsManager,
   };
 
-  // Extension isolation: set agentDir to a temp directory under session path
-  // to prevent loading global Pi extensions from ~/.pi/agent
   if (initConfig.sessionPath) {
-    const agentDir = initConfig.agentDir || join(initConfig.sessionPath, '.pi-agent');
-    mkdirSync(agentDir, { recursive: true });
-    sessionOptions.agentDir = agentDir;
-
     // Session resume: use a per-Craft-session directory so the Pi SDK can
     // persist and resume its own session across subprocess restarts.
     // continueRecent() loads the existing session if one exists, otherwise
@@ -654,7 +731,7 @@ async function ensureSession(): Promise<AgentSession> {
       const piModel = resolvePiModel(modelRegistry, initConfig.model, initConfig.piAuth?.provider, shouldPreferCustomEndpoint());
       if (piModel) {
         // Verify resolved model's provider is compatible with the authenticated provider.
-        // Without this, a model that resolves to a different provider (e.g. azure-openai-responses
+        // Without this, a model that resolves to a different provider (e.g. azure
         // when authed as github-copilot) would cause "No API key found" at runtime.
         const resolvedProvider = (piModel as any)?.provider;
         const isCompatible = !initConfig.piAuth ||
@@ -684,9 +761,21 @@ async function ensureSession(): Promise<AgentSession> {
     sessionOptions.thinkingLevel = piThinkingLevel;
   }
 
+  // Craft's system prompt is forced through a before_agent_start extension
+  // registered on the resource loader (see system-prompt-override.ts). The
+  // loader otherwise mirrors the one createAgentSession would build itself.
+  const systemPromptOverride = createSystemPromptOverride();
+  sessionOptions.resourceLoader = await createCraftResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    systemPromptOverride,
+  });
+
   // Create the session — tools flow through customTools + allowlist (see comment above).
   const { session } = await createAgentSession(sessionOptions);
   piSession = session;
+  piSessionPromptOverride = systemPromptOverride;
 
   toolsChanged = false;
   debugLog(`Created Pi session: ${session.sessionId} (${wrappedAll.length} tools)`);
@@ -742,86 +831,6 @@ function wrapToolsWithHooks(tools: ToolDefinition<any, any>[]): ToolDefinition<a
   return tools.map(tool => wrapSingleTool(tool));
 }
 
-function makeErrorResult(message: string): AgentToolResult<any> {
-  return {
-    content: [{ type: 'text', text: message }],
-    details: { isError: true },
-  };
-}
-
-function extractSourceSlug(toolName: string): string | undefined {
-  const parts = toolName.split('__');
-  if (parts.length >= 3 && parts[0] === 'mcp') {
-    return parts[1];
-  }
-  return undefined;
-}
-
-function auditSensitiveDecision(
-  toolName: string,
-  action: 'allow' | 'redact' | 'block' | 'prompt',
-  policyMode: SensitiveProtectionMode,
-  findings: Parameters<typeof createSensitiveAuditEntry>[0]['findings'],
-) {
-  if (!initConfig) return;
-
-  const sessionDir = initConfig.sessionPath || getSessionPath(initConfig.workspaceRootPath, initConfig.sessionId);
-  writeSensitiveAuditEntry({
-    auditFilePath: sensitiveAuditFilePath(sessionDir),
-    auditEnabled: initConfig.sensitiveContextProtection?.audit?.enabled !== false,
-    sessionId: initConfig.sessionId,
-    toolName,
-    sourceSlug: extractSourceSlug(toolName),
-    action,
-    policyMode,
-    findings,
-  });
-}
-
-function protectToolResult(
-  toolName: string,
-  inputObj: Record<string, unknown>,
-  result: AgentToolResult<any>,
-): AgentToolResult<any> {
-  if (!initConfig) return result;
-
-  const resultText = result.content
-    .filter((c): c is PiTextContent => c.type === 'text')
-    .map(c => c.text)
-    .join('');
-
-  if (!resultText) return result;
-
-  const guarded = guardToolResult({
-    sessionId: initConfig.sessionId,
-    toolName,
-    toolInput: inputObj,
-    resultText,
-    permissionMode: initConfig.permissionMode ?? 'ask',
-    sourceSlug: extractSourceSlug(toolName),
-    workingDirectory: initConfig.workingDirectory,
-    config: initConfig.sensitiveContextProtection,
-  });
-
-  auditSensitiveDecision(toolName, guarded.action, guarded.policyMode, guarded.findings);
-
-  if (guarded.action === 'allow') {
-    return result;
-  }
-
-  if (guarded.action === 'block') {
-    return {
-      content: [{ type: 'text', text: guarded.reason }],
-      details: result.details,
-    };
-  }
-
-  return {
-    content: [{ type: 'text', text: `${formatSensitiveProtectionNotice(guarded)}${guarded.text ?? ''}` }],
-    details: result.details,
-  };
-}
-
 function wrapSingleTool(tool: ToolDefinition<any, any>): ToolDefinition<any, any> {
   const originalExecute = tool.execute;
   const parameters = allowCraftMetadataProperties(tool.parameters);
@@ -839,8 +848,11 @@ function wrapSingleTool(tool: ToolDefinition<any, any>): ToolDefinition<any, any
     // Extract intent before main process strips metadata (used for summarization)
     const intent = typeof inputObj._intent === 'string' ? inputObj._intent : undefined;
 
-    // Normalize Pi SDK parameter names before pre-tool-use guards run.
-    inputObj = normalizePiToolInputForPreToolUse(sdkToolName, inputObj);
+    // Normalize Pi SDK parameter names: path → file_path
+    if ((sdkToolName === 'Write' || sdkToolName === 'Edit' || sdkToolName === 'MultiEdit' || sdkToolName === 'NotebookEdit')
+        && typeof inputObj.path === 'string' && !inputObj.file_path) {
+      inputObj = { ...inputObj, file_path: inputObj.path };
+    }
 
     // Send to main process for permission checking + transforms
     inputObj = await requestPreToolUseApproval(sdkToolName, inputObj, toolCallId);
@@ -851,8 +863,7 @@ function wrapSingleTool(tool: ToolDefinition<any, any>): ToolDefinition<any, any
     inputObj = stripCraftMetadata(inputObj);
 
     // Execute original tool with (potentially modified) input
-    let result = await originalExecute(toolCallId, inputObj, signal, onUpdate, ctx);
-    result = protectToolResult(sdkToolName, inputObj, result);
+    const result = await originalExecute(toolCallId, inputObj, signal, onUpdate, ctx);
 
     // --- Post-execute: large response summarization ---
 
@@ -889,6 +900,7 @@ function wrapSingleTool(tool: ToolDefinition<any, any>): ToolDefinition<any, any
           return {
             content: [{ type: 'text', text: largeResult.message }],
             details: result.details,
+            ...(result.isError ? { isError: true } : {}),
           };
         }
       } catch (error) {
@@ -911,6 +923,20 @@ function wrapSingleTool(tool: ToolDefinition<any, any>): ToolDefinition<any, any
 // ============================================================
 // Proxy Tools (tools executed in main process)
 // ============================================================
+
+/**
+ * A main-process tool result as a Pi tool result. Failures are flagged with
+ * `isError` (Pi >=0.99) so the model gets an error tool result and
+ * `tool_execution_end.isError` marks the call failed in Craft, as a thrown error
+ * would; before, they reached both as successes.
+ */
+function proxyToolResult(result: { content: string; isError: boolean }): AgentToolResult<undefined> {
+  return {
+    content: [{ type: 'text', text: result.content }],
+    details: undefined,
+    ...(result.isError ? { isError: true } : {}),
+  };
+}
 
 function buildProxyTools(): ToolDefinition<any, any>[] {
   debugLog(`Building proxy tools from ${proxyToolDefs.length} definitions: ${proxyToolDefs.map(t => t.name).join(', ')}`);
@@ -941,10 +967,7 @@ function buildProxyTools(): ToolDefinition<any, any>[] {
         prefetchCache.delete(toolCallId);
         debugLog(`Prefetch cache hit for ${def.name} (toolCallId: ${toolCallId})`);
         const result = await prefetched;
-        return protectToolResult(def.name, params as Record<string, unknown>, {
-          content: [{ type: 'text', text: result.content }],
-          details: result.isError ? { isError: true } : undefined,
-        });
+        return proxyToolResult(result);
       }
 
       const inputObj = params as Record<string, unknown>;
@@ -959,6 +982,7 @@ function buildProxyTools(): ToolDefinition<any, any>[] {
         type: 'tool_execute_request',
         requestId,
         toolName: def.name,
+        toolCallId,
         args: approvedInput,
       });
 
@@ -966,10 +990,7 @@ function buildProxyTools(): ToolDefinition<any, any>[] {
         pendingToolExecutions.set(requestId, { resolve });
       });
 
-      return protectToolResult(def.name, approvedInput, {
-        content: [{ type: 'text', text: result.content }],
-        details: result.isError ? { isError: true } : undefined,
-      });
+      return proxyToolResult(result);
     },
   }));
 }
@@ -978,7 +999,11 @@ function buildProxyTools(): ToolDefinition<any, any>[] {
 // LLM Query (ephemeral session for call_llm + mini completions)
 // ============================================================
 
-async function queryLlm(request: LLMQueryRequest): Promise<LLMQueryResult> {
+async function queryLlm(
+  request: LLMQueryRequest,
+  lifecycle: EphemeralQueryContext,
+): Promise<LLMQueryResult> {
+  lifecycle.throwIfCancelled();
   if (!initConfig) throw new Error('Cannot run queryLlm: init not received');
 
   debugLog('[queryLlm] Starting');
@@ -989,15 +1014,16 @@ async function queryLlm(request: LLMQueryRequest): Promise<LLMQueryResult> {
   // the same provider family.
   let model = request.model ?? initConfig.miniModel ?? getDefaultSummarizationModel();
 
-  // Create authenticated registry upfront — used by both the provider guard and the ephemeral session.
-  const { authStorage, modelRegistry } = createAuthenticatedRegistry();
+  // Create authenticated runtime upfront — used by both the provider guard and the ephemeral session.
+  const { modelRuntime, modelRegistry } = await createAuthenticatedRuntime();
+  lifecycle.throwIfCancelled();
 
   const piAuthProvider = initConfig.piAuth?.provider;
 
   // If piAuth is set, ensure the mini model uses the same provider.
   // Pi SDK will fail with "No API key found" if the model requires a different provider.
   // Exception: 'custom-endpoint' provider is always compatible because it has its own
-  // API key configured via resolveCustomEndpointApiKey() and doesn't use authStorage.
+  // API key configured via resolveCustomEndpointApiKey() and doesn't use the credential store.
   if (initConfig.piAuth) {
     const authProvider = initConfig.piAuth.provider;
     const bareModel = model.startsWith('pi/') ? model.slice(3) : model;
@@ -1018,6 +1044,7 @@ async function queryLlm(request: LLMQueryRequest): Promise<LLMQueryResult> {
   }
 
   const runQueryWithModel = async (modelId: string): Promise<string> => {
+    lifecycle.throwIfCancelled();
     debugLog(`[queryLlm] Using model: ${modelId}`);
 
     // Resolve model — fail fast if unresolvable so we don't let the Pi SDK
@@ -1031,45 +1058,64 @@ async function queryLlm(request: LLMQueryRequest): Promise<LLMQueryResult> {
       );
     }
 
-    // Create minimal ephemeral session
+    // Create minimal ephemeral session: no tools (an empty allowlist also keeps
+    // extension and MCP tools out), and the same isolated agentDir as the main
+    // session plus the system-prompt override.
+    const ephemeralSettings = createCraftSettingsManager('ephemeral');
+    const ephemeralPromptOverride = createSystemPromptOverride();
+    const ephemeralAgentDir = resolveCraftAgentDir(initConfig!);
     const ephemeralOptions: CreateAgentSessionOptions = {
       cwd: resolvedCwd(),
-      authStorage,
-      modelRegistry,
+      agentDir: ephemeralAgentDir,
+      modelRuntime,
       tools: [],
       sessionManager: PiSessionManager.inMemory(),
+      settingsManager: ephemeralSettings,
       model: piModel,
+      resourceLoader: await createCraftResourceLoader({
+        cwd: resolvedCwd(),
+        agentDir: ephemeralAgentDir,
+        settingsManager: ephemeralSettings,
+        systemPromptOverride: ephemeralPromptOverride,
+      }),
     };
 
     const { session: ephemeralSession } = await createAgentSession(ephemeralOptions);
+    const resource: EphemeralQueryResource = {
+      abort: () => ephemeralSession.abort(),
+      dispose: () => ephemeralSession.dispose(),
+    };
+    lifecycle.setResource(resource);
 
-    // Pi SDK ignores options.model for ephemeral sessions (same issue as options.tools).
-    // Explicitly set the model after creation to ensure the mini model is used.
+    let unsub: (() => void) | undefined;
     try {
-      await ephemeralSession.setModel(piModel);
-    } catch {
-      debugLog(`[queryLlm] Failed to set model on ephemeral session, proceeding with default`);
-    }
+      // Pi SDK ignores options.model for ephemeral sessions (same issue as options.tools).
+      // Explicitly set the model after creation to ensure the mini model is used.
+      try {
+        await ephemeralSession.setModel(piModel);
+      } catch {
+        debugLog(`[queryLlm] Failed to set model on ephemeral session, proceeding with default`);
+      }
+      lifecycle.throwIfCancelled();
 
-    debugLog(`[queryLlm] Created ephemeral session: ${ephemeralSession.sessionId}`);
+      debugLog(`[queryLlm] Created ephemeral session: ${ephemeralSession.sessionId}`);
 
-    // Force the system prompt — see system-prompt-override.ts for why direct
-    // assignment to `state.systemPrompt` doesn't survive `session.prompt()`.
-    const promptForSession =
-      request.systemPrompt ?? 'Reply with ONLY the requested text. No explanation.';
-    applySystemPromptOverride(ephemeralSession, promptForSession);
+      // Force the system prompt via the before_agent_start override registered
+      // on this session's resource loader (see system-prompt-override.ts).
+      const promptForSession =
+        request.systemPrompt ?? 'Reply with ONLY the requested text. No explanation.';
+      ephemeralPromptOverride.set(promptForSession);
 
-    // Collect response text and errors from events
-    let result = '';
-    let lastError = '';
-    let completionResolve: () => void;
-    const completionPromise = new Promise<void>((resolve) => {
-      completionResolve = resolve;
-    });
+      // Collect response text and errors from events. `prompt()` resolves only
+      // after SDK retries/continuations settle, so the request-level coordinator
+      // owns the one actual deadline around this call.
+      let result = '';
+      let lastError = '';
 
-    const unsub = ephemeralSession.subscribe((event: AgentSessionEvent) => {
-      if (event.type === 'message_end') {
-        // Only capture assistant messages — Pi SDK emits message_end for user messages too
+      unsub = ephemeralSession.subscribe((event: AgentSessionEvent) => {
+        if (event.type !== 'message_end') return;
+
+        // Only capture assistant messages — Pi SDK emits message_end for user messages too.
         const msg = event.message as {
           role?: string;
           content?: string | Array<{ type: string; text?: string }>;
@@ -1078,7 +1124,7 @@ async function queryLlm(request: LLMQueryRequest): Promise<LLMQueryResult> {
         };
         if (msg.role !== 'assistant') return;
 
-        // Capture API errors from message_end (e.g. auth failures, model errors)
+        // Capture API errors from message_end (e.g. auth failures, model errors).
         if (msg.stopReason === 'error' && msg.errorMessage) {
           lastError = msg.errorMessage;
           debugLog(`[queryLlm] API error in message_end: ${msg.errorMessage}`);
@@ -1092,82 +1138,48 @@ async function queryLlm(request: LLMQueryRequest): Promise<LLMQueryResult> {
             .map((c) => c.text!)
             .join('');
         }
-      }
-      if (event.type === 'agent_end') {
-        completionResolve();
-      }
-    });
+      });
 
-    try {
+      lifecycle.throwIfCancelled();
       await ephemeralSession.prompt(request.prompt);
-      await withTimeout(
-        completionPromise,
-        LLM_QUERY_TIMEOUT_MS,
-        `queryLlm timed out after ${LLM_QUERY_TIMEOUT_MS / 1000}s`
-      );
+      lifecycle.throwIfCancelled();
       debugLog(`[queryLlm] Result length: ${result.trim().length}`);
 
-      // If we got no text but captured an error, throw so callers see the real issue
+      // If we got no text but captured an error, throw so callers see the real issue.
       if (!result.trim() && lastError) {
         throw new Error(lastError);
       }
 
       return result.trim();
     } finally {
-      unsub();
+      unsub?.();
+      lifecycle.clearResource(resource);
       ephemeralSession.dispose();
     }
   };
 
-  const fallbackCandidates = [
-    // Removed 'pi/gpt-5.1-codex-mini' (#596) — stale on several OpenAI catalogs.
-    // The connection-configured miniModel is still tried via `initConfig.miniModel`.
-    'pi/gpt-5-mini',
-    initConfig.miniModel,
-    getDefaultSummarizationModel(),
-  ].filter((candidate): candidate is string => !!candidate && !isDeniedMiniModelId(candidate, piAuthProvider));
+  return queryMiniModel({
+    model,
+    miniModel: initConfig.miniModel,
+    sessionModel: initConfig.model,
+    authProvider: piAuthProvider,
+    modelRegistry,
+    preferCustomEndpoint: shouldPreferCustomEndpoint(),
+    onFallback: (rejectedModel, retryModel) => {
+      debugLog(`[queryLlm] Model ${rejectedModel} unavailable, retrying with ${retryModel}`);
+    },
+  }, runQueryWithModel);
+}
 
-  const triedModels = new Set<string>();
-  let currentModel = model;
-
-  while (true) {
-    triedModels.add(currentModel);
-    try {
-      const text = await runQueryWithModel(currentModel);
-      return { text, model: currentModel };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      const shouldRetry = isModelNotFoundError(errorMsg);
-
-      if (!shouldRetry) {
-        throw error;
-      }
-
-      const retryModel = fallbackCandidates.find(candidate => {
-        if (triedModels.has(candidate)) return false;
-        try {
-          const resolved = resolvePiModel(modelRegistry, candidate, initConfig!.piAuth?.provider, shouldPreferCustomEndpoint());
-          if (!resolved) return false;
-          if (initConfig!.piAuth) {
-            const rp = (resolved as any).provider;
-            if (rp !== initConfig!.piAuth.provider && rp !== 'custom-endpoint') {
-              return false;
-            }
-          }
-          return true;
-        } catch {
-          return false;
-        }
-      });
-
-      if (!retryModel) {
-        throw error;
-      }
-
-      debugLog(`[queryLlm] Model ${currentModel} not found, retrying with ${retryModel}`);
-      currentModel = retryModel;
-    }
-  }
+function runEphemeralLlmQuery(
+  id: string,
+  request: LLMQueryRequest,
+): Promise<LLMQueryResult> {
+  return ephemeralQueries.run(
+    id,
+    CRAFT_PI_EPHEMERAL_QUERY_DEADLINE_MS,
+    lifecycle => queryLlm(request, lifecycle),
+  );
 }
 
 async function preExecuteCallLlm(input: Record<string, unknown>): Promise<LLMQueryResult> {
@@ -1175,12 +1187,15 @@ async function preExecuteCallLlm(input: Record<string, unknown>): Promise<LLMQue
     ? getSessionPath(initConfig.workspaceRootPath, initConfig.sessionId)
     : undefined;
   const request = await buildCallLlmRequest(input, { backendName: 'Pi', sessionPath });
-  return queryLlm(request);
+  return runEphemeralLlmQuery(nextLocalEphemeralQueryId('callback'), request);
 }
 
 async function runMiniCompletion(prompt: string): Promise<string | null> {
   try {
-    const result = await queryLlm({ prompt });
+    const result = await runEphemeralLlmQuery(
+      nextLocalEphemeralQueryId('summary'),
+      { prompt },
+    );
     const text = result.text || null;
     debugLog(`[runMiniCompletion] Result: ${text ? `"${text.slice(0, 200)}"` : 'null'}`);
     return text;
@@ -1220,6 +1235,11 @@ function handleSessionEvent(event: AgentSessionEvent): void {
     }
 
     if (msg?.role === 'assistant' && piSession) {
+      // The SDK's post-compaction usage gate reads the journal, which is only
+      // appended after this callback returns. Defer rather than report an old count.
+      deferContextUsage(piSession, () => piSession, (payload) => {
+        send({ type: 'event', event: { type: 'context_usage', ...payload } });
+      });
       // CRITICAL: do NOT read `getLeafId()` here.
       //
       // The Pi SDK fires `message_end` synchronously BEFORE calling
@@ -1273,10 +1293,7 @@ function handleSessionEvent(event: AgentSessionEvent): void {
           (c) => c.type === 'toolCall' && c.name && isPrefetchableTool(c.name),
         );
         if (prefetchableToolCalls.length >= 2) {
-          const firstPrefetchableToolCallName = prefetchableToolCalls[0]?.name ?? 'tool';
-          debugLog(
-            `Prefetching ${prefetchableToolCalls.length} parallel ${firstPrefetchableToolCallName} calls`,
-          );
+          debugLog(`Prefetching ${prefetchableToolCalls.length} parallel ${prefetchableToolCalls[0].name} calls`);
           for (const tc of prefetchableToolCalls) {
             const requestId = `prefetch-${tc.id}`;
             const promise = new Promise<{ content: string; isError: boolean }>((resolve) => {
@@ -1286,6 +1303,7 @@ function handleSessionEvent(event: AgentSessionEvent): void {
               type: 'tool_execute_request',
               requestId,
               toolName: tc.name!,
+              toolCallId: tc.id,
               args: (tc.arguments ?? {}) as Record<string, unknown>,
             });
             prefetchCache.set(tc.id!, promise);
@@ -1328,6 +1346,12 @@ function handleSessionEvent(event: AgentSessionEvent): void {
     }
   }
 
+  // These boundaries already have committed SDK history; keep metadata inline
+  // so agent_end cannot close the host queue before occupancy reaches it.
+  if (piSession && (event.type === 'turn_end' || event.type === 'agent_end' || event.type === 'compaction_end')) {
+    forwardedEvent = { ...forwardedEvent, ...readContextUsage(piSession) };
+  }
+
   // Forward all events to main process
   send({ type: 'event', event: forwardedEvent });
 }
@@ -1336,7 +1360,31 @@ function handleSessionEvent(event: AgentSessionEvent): void {
 // Command Handlers
 // ============================================================
 
+/**
+ * Tenant-specific endpoints (Azure OpenAI, Cloudflare AI Gateway) reach the Pi SDK
+ * through env vars derived from the connection's base URL. Re-applied on runtime
+ * config updates so an edited endpoint takes effect without a subprocess restart.
+ */
+function applyProviderEndpointEnv(config: InitMessage): void {
+  const env = providerEndpointEnv(config.piAuth?.provider, config.baseUrl);
+  for (const [key, value] of Object.entries(env)) {
+    process.env[key] = value;
+    debugLog(`Set ${key}=${value}`);
+  }
+  if (config.piAuth?.provider === 'cloudflare-ai-gateway' && !env.CLOUDFLARE_GATEWAY_ID) {
+    debugLog(`Cloudflare AI Gateway: base URL ${config.baseUrl ?? '(none)'} has no account/gateway id`);
+  }
+}
+
+/** Craft wire auth with the provider id the Pi SDK knows (see pi-provider-ids.ts). */
+function toPiAuth(piAuth: NonNullable<InitMessage['piAuth']>): NonNullable<InitMessage['piAuth']> {
+  return { ...piAuth, provider: toPiProviderId(piAuth.provider) };
+}
+
 async function handleInit(msg: Extract<InboundMessage, { type: 'init' }>): Promise<void> {
+  // A re-init invalidates every utility query created under the old credentials.
+  ephemeralQueries.cancelAll(new EphemeralQueryCancelledError('Pi server reinitialized'));
+
   // Clean up any existing session from a previous init
   if (piSession) {
     if (unsubscribeEvents) {
@@ -1345,18 +1393,20 @@ async function handleInit(msg: Extract<InboundMessage, { type: 'init' }>): Promi
     }
     piSession.dispose();
     piSession = null;
-    moduleAuthStorage = null; // Reset so createAuthenticatedRegistry() creates fresh storage
+    moduleCredentialStore = null; // Reset so createAuthenticatedRuntime() creates a fresh store
     debugLog('Cleaned up existing session for re-init');
   }
 
-  initConfig = msg;
+  // Drop the cached runtime on every (re-)init: provider/custom-endpoint config
+  // may have changed, and the next createAuthenticatedRuntime() must rebuild
+  // from the new initConfig. piModelRegistry points into the same cache.
+  moduleRuntimePromise = null;
+  piModelRegistry = null;
 
-  // Azure OpenAI requires a tenant-specific endpoint URL.
-  // The Pi SDK (via Vercel AI SDK) reads AZURE_OPENAI_BASE_URL from env.
-  if (msg.piAuth?.provider === 'azure-openai-responses' && msg.baseUrl) {
-    process.env.AZURE_OPENAI_BASE_URL = msg.baseUrl;
-    debugLog(`Set AZURE_OPENAI_BASE_URL=${msg.baseUrl}`);
-  }
+  // Craft's stored provider ids → Pi SDK ids, once, so every consumer below
+  // (credential store, model resolution, search) sees the SDK's id.
+  initConfig = msg.piAuth ? { ...msg, piAuth: toPiAuth(msg.piAuth) } : msg;
+  applyProviderEndpointEnv(initConfig);
 
   // Start callback server for call_llm (idempotent — skips if already running)
   await startCallbackServer();
@@ -1366,30 +1416,6 @@ async function handleInit(msg: Extract<InboundMessage, { type: 'init' }>): Promi
     sessionId: null,
     callbackPort,
   });
-}
-
-/**
- * Wait for any in-flight compaction to finish before sending a prompt or
- * starting another compaction. Prevents a race in the Pi SDK where concurrent
- * _runAutoCompaction calls crash on a shared AbortController
- * (see craft-agents-oss#464). Default timeout matches the RPC compact timeout
- * in PiAgent.requestCompact (300 s), since GPT compactions can legitimately
- * take 60–120 s.
- */
-async function waitForCompaction(session: { isCompacting: boolean }, timeoutMs = 300_000): Promise<void> {
-  if (!session.isCompacting) return;
-  debugLog('Waiting for in-flight compaction to finish before prompt...');
-  const start = Date.now();
-  while (session.isCompacting) {
-    if (Date.now() - start > timeoutMs) {
-      debugLog(`Compaction wait timed out after ${Math.floor(timeoutMs / 1000)}s, proceeding anyway`);
-      break;
-    }
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }
-  if (Date.now() - start < timeoutMs) {
-    debugLog('Compaction finished, proceeding with prompt');
-  }
 }
 
 async function handlePrompt(msg: Extract<InboundMessage, { type: 'prompt' }>): Promise<void> {
@@ -1411,11 +1437,10 @@ async function handlePrompt(msg: Extract<InboundMessage, { type: 'prompt' }>): P
 
     const session = await ensureSession();
 
-    // Force the Craft-built system prompt onto the Pi session. Direct assignment
-    // to `state.systemPrompt` is wiped on every `session.prompt()` call by the Pi
-    // SDK (see system-prompt-override.ts).
+    // Force the Craft-built system prompt onto the Pi session through the
+    // before_agent_start override created with it (see system-prompt-override.ts).
     if (msg.systemPrompt) {
-      applySystemPromptOverride(session, msg.systemPrompt);
+      piSessionPromptOverride?.set(msg.systemPrompt);
     }
 
     // Wire up event handler
@@ -1425,7 +1450,10 @@ async function handlePrompt(msg: Extract<InboundMessage, { type: 'prompt' }>): P
     unsubscribeEvents = session.subscribe(handleSessionEvent);
 
     // Wait for any in-flight auto-compaction to avoid race (craft-agents-oss#464)
-    await waitForCompaction(session);
+    const compactionWait = await waitForCompaction(session, { timeoutMs: PROMPT_COMPACT_WAIT_MS, log: debugLog });
+    if (compactionWait.timedOut) {
+      debugLog('Proceeding with prompt while the compaction flag is still set');
+    }
 
     // Fire prompt — use followUp when session is already streaming so the
     // message is queued instead of throwing "Agent is already processing".
@@ -1490,7 +1518,18 @@ function handlePreToolUseResponse(msg: Extract<InboundMessage, { type: 'pre_tool
   }
 }
 
+function handleCancelEphemeralQuery(
+  msg: Extract<InboundMessage, { type: 'cancel_ephemeral_query' }>,
+): void {
+  const cancelled = ephemeralQueries.cancel(
+    msg.id,
+    new EphemeralQueryCancelledError(`Ephemeral query cancelled by host: ${msg.id}`),
+  );
+  debugLog(`${cancelled ? 'Cancelled' : 'No active'} ephemeral query: ${msg.id}`);
+}
+
 async function handleAbort(): Promise<void> {
+  compactionEpoch++;
   if (piSession) {
     try {
       await piSession.abort();
@@ -1514,12 +1553,17 @@ async function handleMiniCompletion(msg: Extract<InboundMessage, { type: 'mini_c
   // as 'error' messages instead of being swallowed and returned as null.
   // runMiniCompletion is kept for the summarize callback where null is acceptable.
   try {
-    const result = await queryLlm({ prompt: msg.prompt });
+    const result = await runEphemeralLlmQuery(msg.id, { prompt: msg.prompt });
     send({ type: 'mini_completion_result', id: msg.id, text: result.text || null });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     debugLog(`[handleMiniCompletion] Error: ${errorMsg}`);
-    send({ type: 'error', message: errorMsg, code: 'mini_completion_error' });
+    if (isEphemeralQueryCancellation(error)) {
+      // Mini completions are best-effort; preserve their null-on-timeout contract.
+      send({ type: 'mini_completion_result', id: msg.id, text: null });
+    } else {
+      send({ type: 'error', id: msg.id, message: errorMsg, code: 'mini_completion_error' });
+    }
   }
 }
 
@@ -1529,15 +1573,15 @@ async function handleMiniCompletion(msg: Extract<InboundMessage, { type: 'mini_c
 // request-propagation + request-honoring are independent (see #596).
 async function handleLlmQuery(msg: Extract<InboundMessage, { type: 'llm_query' }>): Promise<void> {
   try {
-    const result = await queryLlm(msg.request);
+    const result = await runEphemeralLlmQuery(msg.id, msg.request);
     send({ type: 'llm_query_result', id: msg.id, result });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     debugLog(`[handleLlmQuery] Error: ${errorMsg}`);
     // Dual-emit: the generic `error` channel drives main-process OAuth
     // auth-refresh detection (centralized in PiAgent), while the targeted
-    // `llm_query_result` rejects the pending promise for this specific call.
-    send({ type: 'error', message: errorMsg, code: 'llm_query_error' });
+    // `llm_query_result` rejects only this pending call.
+    send({ type: 'error', id: msg.id, message: errorMsg, code: 'llm_query_error' });
     send({ type: 'llm_query_result', id: msg.id, result: null, errorMessage: errorMsg, errorCode: 'llm_query_error' });
   }
 }
@@ -1552,16 +1596,27 @@ async function handleEnsureSessionReady(msg: Extract<InboundMessage, { type: 'en
 }
 
 async function handleCompact(msg: Extract<InboundMessage, { type: 'compact' }>): Promise<void> {
+  const epoch = compactionEpoch;
+  const startedAt = Date.now();
   try {
     const session = await ensureSession();
-    // Serialize manual /compact behind any in-flight auto-compaction. Public
+    // Serialize manual /compact behind an in-flight auto-compaction. Public
     // session.compact() calls agent.abort() and uses its own controller; if
     // it runs while _runAutoCompaction is suspended, agent state churns and
-    // the SDK's race surface widens. Wait for the auto-compaction to drain
-    // before starting a manual one. waitForCompaction has its own timeout
-    // fallback so we don't deadlock on a stuck subprocess.
-    await waitForCompaction(session);
+    // the SDK's race surface widens. The wait is capped well under the host's
+    // 300 s RPC deadline: a stuck compaction used to eat the whole budget
+    // before compact() even started (craft-agents-oss#1060). Proceeding after
+    // the cap is deliberate, since compact() begins with abort() and thereby
+    // cancels the stale compaction.
+    const wait = await waitForCompaction(session, { timeoutMs: MANUAL_COMPACT_WAIT_MS, log: debugLog });
+    if (piSession !== session || epoch !== compactionEpoch) throw new Error('Compaction aborted or session replaced');
+    debugLog(
+      `[compact] Starting manual compaction after ${wait.waitedMs}ms wait` +
+        (wait.timedOut ? ' (prior compaction still flagged; compact() aborts it)' : ''),
+    );
     const result = await session.compact(msg.customInstructions);
+    if (piSession !== session || epoch !== compactionEpoch) throw new Error('Compaction aborted or session replaced');
+    debugLog(`[compact] Done in ${Date.now() - startedAt}ms: ${result.tokensBefore} -> ~${result.estimatedTokensAfter} tokens`);
     send({
       type: 'compact_result',
       id: msg.id,
@@ -1570,11 +1625,13 @@ async function handleCompact(msg: Extract<InboundMessage, { type: 'compact' }>):
         summary: result.summary,
         firstKeptEntryId: result.firstKeptEntryId,
         tokensBefore: result.tokensBefore,
+        estimatedTokensAfter: result.estimatedTokensAfter,
+        ...readContextUsage(session),
       },
     });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    debugLog(`[compact] Failed: ${errorMsg}`);
+    debugLog(`[compact] Failed after ${Date.now() - startedAt}ms: ${errorMsg}`);
     send({
       type: 'compact_result',
       id: msg.id,
@@ -1622,6 +1679,7 @@ async function handleUpdateRuntimeConfig(msg: RuntimeConfigUpdateMessage): Promi
       customEndpoint: msg.customEndpoint,
       customModels: msg.customModels,
     };
+    applyProviderEndpointEnv(initConfig);
 
     if (piModelRegistry && initConfig.baseUrl?.trim() && initConfig.customEndpoint) {
       const modelEntries: CustomEndpointModelEntry[] = (initConfig.customModels?.length
@@ -1688,6 +1746,9 @@ async function handleSetModel(msg: Extract<InboundMessage, { type: 'set_model' }
   try {
     await piSession.setModel(piModel);
     setInterceptorApiHints(piModel as { api?: string; provider?: string; baseUrl?: string });
+    // Keep initConfig.model current so downstream consumers that read it (e.g. the web-search
+    // provider's model derivation, #1023) reflect the switch — setModel alone didn't update it.
+    if (initConfig) initConfig.model = msg.model;
     debugLog(`[set_model] Model changed to: ${msg.model} (resolved: ${piModel.provider}/${piModel.id})`);
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
@@ -1720,6 +1781,9 @@ async function handleSetThinkingLevel(msg: Extract<InboundMessage, { type: 'set_
 
 function handleShutdown(): void {
   debugLog('Shutdown requested');
+
+  // Abort utility sessions independently from the main chat session.
+  ephemeralQueries.cancelAll(new EphemeralQueryCancelledError('Pi server shutting down'));
 
   // Unsubscribe events
   if (unsubscribeEvents) {
@@ -1776,6 +1840,10 @@ async function processMessage(msg: InboundMessage): Promise<void> {
       handlePreToolUseResponse(msg);
       break;
 
+    case 'large_result_gate_response':
+      largeResultGate.handleResponse(msg.requestId, msg.excerpt);
+      break;
+
     case 'abort':
       await handleAbort();
       break;
@@ -1786,6 +1854,10 @@ async function processMessage(msg: InboundMessage): Promise<void> {
 
     case 'llm_query':
       await handleLlmQuery(msg);
+      break;
+
+    case 'cancel_ephemeral_query':
+      handleCancelEphemeralQuery(msg);
       break;
 
     case 'ensure_session_ready':
@@ -1822,16 +1894,19 @@ async function processMessage(msg: InboundMessage): Promise<void> {
       break;
 
     case 'token_update':
-      if (moduleAuthStorage) {
-        const { provider, credential } = msg.piAuth;
-        // See ambient comment at the initial `authStorage.set` call — same shape reason.
-        moduleAuthStorage.set(provider, credential as unknown as AuthCredential);
+      if (moduleCredentialStore) {
+        const piAuth = toPiAuth(msg.piAuth);
+        const { provider, credential } = piAuth;
+        const adapted = adaptCredentialForPiSdk(provider, credential);
+        if (adapted) {
+          await moduleCredentialStore.modify(provider, async () => adapted);
+        }
         if (initConfig) {
-          initConfig.piAuth = msg.piAuth;
+          initConfig.piAuth = piAuth;
         }
         debugLog(`Updated ${credential.type} credential for provider: ${provider}`);
       } else {
-        debugLog('token_update received but no authStorage initialized');
+        debugLog('token_update received but no credential store initialized');
       }
       break;
 

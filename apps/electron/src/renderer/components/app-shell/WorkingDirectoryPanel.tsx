@@ -116,6 +116,7 @@ function WorkingDirTreeItem({
   const isExpanded = expandedPaths.has(file.path)
   const hasChildren = isDirectory && !!file.children && file.children.length > 0
   const fileManagerName = getFileManagerName()
+  const isSandbox = file.path.startsWith("/__agent_compose__/")
 
   const handleClick = () => {
     if (isDirectory) {
@@ -168,7 +169,7 @@ function WorkingDirTreeItem({
 
   return (
     <div className="group/section min-w-0">
-      <ContextMenu>
+      {isSandbox ? buttonElement : <ContextMenu>
         <ContextMenuTrigger asChild>{buttonElement}</ContextMenuTrigger>
         <StyledContextMenuContent>
           {file.type !== 'directory' && (
@@ -194,7 +195,7 @@ function WorkingDirTreeItem({
             {t('workingDir.delete')}
           </StyledContextMenuItem>
         </StyledContextMenuContent>
-      </ContextMenu>
+      </ContextMenu>}
 
       {hasChildren && (
         <AnimatePresence initial={false}>
@@ -288,6 +289,7 @@ export function WorkingDirectoryPanel({ workingDirectory, onOpenFile: onOpenFile
   const onOpenFile = onOpenFileProp ?? ctxOpenFile
   const [tree, setTree] = useState<SessionFile[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
   const [dialogState, setDialogState] = useState<DialogState>(null)
   const [nameInput, setNameInput] = useState('')
@@ -316,12 +318,13 @@ export function WorkingDirectoryPanel({ workingDirectory, onOpenFile: onOpenFile
       return
     }
     setIsLoading(true)
+    setLoadError(false)
     try {
       const entries = await window.electronAPI.scanWorkingDirectory(workingDirectory)
       if (mountedRef.current) setTree(entries)
     } catch (error) {
       console.error('Failed to scan working directory:', error)
-      if (mountedRef.current) setTree([])
+      if (mountedRef.current) { setTree([]); setLoadError(true) }
     } finally {
       if (mountedRef.current) setIsLoading(false)
     }
@@ -428,7 +431,8 @@ export function WorkingDirectoryPanel({ workingDirectory, onOpenFile: onOpenFile
     )
   }
 
-  const dirName = baseName(workingDirectory)
+  const isSandbox = workingDirectory.startsWith("/__agent_compose__/")
+  const dirName = isSandbox ? "/workspace" : baseName(workingDirectory)
 
   return (
     <div className={cn('flex flex-col h-full min-h-0 p-2', className)}>
@@ -447,14 +451,14 @@ export function WorkingDirectoryPanel({ workingDirectory, onOpenFile: onOpenFile
             >
               <RefreshCw className={cn('h-3.5 w-3.5', isLoading && 'animate-spin')} />
             </button>
-            <button
+            {!isSandbox && <button
               type="button"
               onClick={() => handleReveal(workingDirectory)}
               className="p-1 rounded-[5px] text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-colors"
               title={t('chat.showInFileManager', { fileManager: fileManagerName })}
             >
               <FolderOpen className="h-3.5 w-3.5" />
-            </button>
+            </button>}
             {onClose && (
               <button
                 type="button"
@@ -473,7 +477,7 @@ export function WorkingDirectoryPanel({ workingDirectory, onOpenFile: onOpenFile
           {tree.length === 0 ? (
             <div className="px-4 text-muted-foreground select-none">
               <p className="text-xs">
-                {isLoading ? t('workingDir.loading') : t('workingDir.empty')}
+                {isLoading ? t('workingDir.loading') : loadError ? t('workingDir.loadError') : t('workingDir.empty')}
               </p>
             </div>
           ) : (

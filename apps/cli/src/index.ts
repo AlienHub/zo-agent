@@ -29,6 +29,8 @@ export interface CliArgs {
   mode: string
   outputFormat: string
   noCleanup: boolean
+  /** Start the `run` session in coding mode (lean coding prompt + session tools) */
+  coding: boolean
   noSpinner: boolean
   verbose: boolean
   serverEntry?: string
@@ -55,6 +57,7 @@ export function parseArgs(argv: string[]): CliArgs {
   let mode = ''
   let outputFormat = 'text'
   let noCleanup = false
+  let coding = false
   let noSpinner = false
   let verbose = false
   let serverEntry: string | undefined
@@ -99,6 +102,9 @@ export function parseArgs(argv: string[]): CliArgs {
         break
       case '--no-cleanup':
         noCleanup = true
+        break
+      case '--coding':
+        coding = true
         break
       case '--disable-spinner':
       case '--no-spinner':
@@ -154,7 +160,7 @@ export function parseArgs(argv: string[]): CliArgs {
   if (!apiKey) apiKey = process.env.LLM_API_KEY ?? ''
   if (!baseUrl) baseUrl = process.env.LLM_BASE_URL ?? ''
 
-  return { url, token, workspace, timeout, json, tlsCa, sendTimeout, command, rest, sources, mode, outputFormat, noCleanup, noSpinner, verbose, serverEntry, workspaceDir, provider, model, apiKey, baseUrl }
+  return { url, token, workspace, timeout, json, tlsCa, sendTimeout, command, rest, sources, mode, outputFormat, noCleanup, coding, noSpinner, verbose, serverEntry, workspaceDir, provider, model, apiKey, baseUrl }
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +405,7 @@ async function readPrompt(words: string[], restArgs?: string[]): Promise<string>
  * Subscribe to session events, send the message, stream output, wait for completion.
  * Returns the exit code (0 = success, 1 = error, 130 = interrupted).
  */
-async function sendAndStream(
+export async function sendAndStream(
   client: CliRpcClient,
   sessionId: string,
   message: string,
@@ -421,6 +427,14 @@ async function sendAndStream(
       case 'text_delta':
         if (!streamJson) process.stdout.write(ev.delta as string)
         break
+      case 'text_discard':
+        // Plain terminal output cannot be retracted. Delimit the discarded
+        // partial so a retried answer never appears to be its continuation.
+        if (!streamJson) process.stdout.write('\n[incomplete response discarded]\n')
+        break
+      case 'retry':
+        if (!streamJson && ev.phase === 'backoff') process.stdout.write(`[${ev.message}]\n`)
+        break
       case 'tool_start':
         if (!streamJson) process.stdout.write(`\n[tool: ${ev.toolName}${ev.toolIntent ? ` — ${ev.toolIntent}` : ''}]\n`)
         break
@@ -435,11 +449,16 @@ async function sendAndStream(
         }
         break
       }
-      case 'error':
-        if (!streamJson) err(String(ev.error))
+      case 'typed_error':
+      case 'error': {
+        if (!streamJson) {
+          const detail = ev.error as { title?: string; message?: string } | undefined
+          err(typeof ev.error === 'string' ? ev.error : [detail?.title, detail?.message].filter(Boolean).join(': '))
+        }
         exitCode = 1
         finished = true
         break
+      }
       case 'complete':
         if (!streamJson) process.stdout.write('\n')
         finished = true
@@ -692,6 +711,10 @@ async function cmdRun(args: CliArgs): Promise<void> {
     const session = (await client.invoke('sessions:create', workspaceId, {
       permissionMode: args.mode || 'allow-all',
       enabledSourceSlugs: args.sources.length > 0 ? args.sources : undefined,
+      // `craft run` cannot answer permission prompts (sendAndStream ignores them).
+      unattended: true,
+      // Only when asked: omitting it lets the workspace default apply
+      ...(args.coding ? { codingMode: true } : {}),
     })) as { id: string }
     sessionId = session.id
 
@@ -1779,6 +1802,10 @@ export async function runValidation(
             bufferedPrompt = clean.length > 100 ? clean.slice(0, 100) + '…' : clean
             break
           }
+          case 'text_discard':
+            accText = ''
+            textFlushed = false
+            break
           // Agent text — stop spinner, show header + prompt + text
           case 'text_delta':
             ensureHeader()
@@ -1917,6 +1944,7 @@ Commands:
                          --mode <mode>       Permission mode (default: allow-all)
                          --output-format     text or stream-json (default: text)
                          --no-cleanup        Keep session after completion
+                         --coding            Coding mode: lean coding prompt and tools
                          --server-entry      Path to server/index.ts
   ping                   Verify connectivity (clientId + latency)
   health                 Check credential store health
@@ -1942,7 +1970,7 @@ Examples:
   craft-cli run --provider openai --model gpt-4o "Summarize this repo"
   OPENAI_API_KEY=sk-... craft-cli run --provider openai "Hello"
   GOOGLE_API_KEY=... craft-cli run --provider google --model gemini-2.0-flash "Hello"
-  DEEPSEEK_API_KEY=sk-... craft-cli run --provider deepseek --model deepseek-v4-flash "Hello"
+  DEEPSEEK_API_KEY=sk-... craft-cli run --provider deepseek --model deepseek-flash "Hello"
   echo "Analyze this code" | craft-cli run
   craft-cli ping
   craft-cli sessions

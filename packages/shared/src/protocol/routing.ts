@@ -203,8 +203,6 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
   RPC_CHANNELS.onboarding.DEFER_SETUP,
   RPC_CHANNELS.settings.GET_NETWORK_PROXY,
   RPC_CHANNELS.settings.SET_NETWORK_PROXY,
-  RPC_CHANNELS.settings.GET_SENSITIVE_CONTEXT_PROTECTION,
-  RPC_CHANNELS.settings.SET_SENSITIVE_CONTEXT_PROTECTION,
 
   // server config — local embedded server settings
   RPC_CHANNELS.settings.GET_SERVER_CONFIG,
@@ -217,6 +215,20 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
 // ---------------------------------------------------------------------------
 
 export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
+  RPC_CHANNELS.sessions.GET_PERMISSION_ALLOWANCES,
+  RPC_CHANNELS.fs.SCAN_TREE,
+  RPC_CHANNELS.fs.WATCH,
+  RPC_CHANNELS.fs.UNWATCH,
+  RPC_CHANNELS.fs.CHANGED,
+  RPC_CHANNELS.fs.RENAME,
+  RPC_CHANNELS.fs.DELETE,
+  RPC_CHANNELS.llmConnections.GET_OPEN_CODE_MODELS,
+  RPC_CHANNELS.settings.GET_SENSITIVE_CONTEXT_PROTECTION,
+  RPC_CHANNELS.settings.SET_SENSITIVE_CONTEXT_PROTECTION,
+  RPC_CHANNELS.settings.GET_SENSITIVE_PATH_ALLOW_RULES,
+  RPC_CHANNELS.settings.REMOVE_SENSITIVE_PATH_ALLOW_RULE,
+
+  RPC_CHANNELS.agentCompose.REQUEST,
   // server — server-level operations (no workspace context needed)
   RPC_CHANNELS.server.GET_WORKSPACES,
   RPC_CHANNELS.server.CREATE_WORKSPACE,
@@ -238,12 +250,13 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.sessions.SEND_MESSAGE,
   RPC_CHANNELS.sessions.CANCEL,
   RPC_CHANNELS.sessions.KILL_SHELL,
+  RPC_CHANNELS.sessions.GET_BACKGROUND_TASK_OUTPUT,
+  RPC_CHANNELS.sessions.STOP_BACKGROUND_TASK,
   RPC_CHANNELS.sessions.RESPOND_TO_PERMISSION,
   RPC_CHANNELS.sessions.RESPOND_TO_CREDENTIAL,
   RPC_CHANNELS.sessions.COMMAND,
   RPC_CHANNELS.sessions.GET_PENDING_PLAN_EXECUTION,
   RPC_CHANNELS.sessions.GET_PERMISSION_MODE_STATE,
-  RPC_CHANNELS.sessions.GET_PERMISSION_ALLOWANCES,
   RPC_CHANNELS.sessions.EVENT,
   RPC_CHANNELS.sessions.GET_MODEL,
   RPC_CHANNELS.sessions.SET_MODEL,
@@ -266,7 +279,6 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.transfer.ABORT,
 
   // tasks — workspace content (Conductor DAG runs on the workspace server)
-  RPC_CHANNELS.tasks.GET_OUTPUT,
   RPC_CHANNELS.tasks.VALIDATE,
   RPC_CHANNELS.tasks.CREATE,
   RPC_CHANNELS.tasks.GENERATE,
@@ -291,12 +303,6 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   // fs — workspace filesystem
   RPC_CHANNELS.fs.SEARCH,
   RPC_CHANNELS.fs.LIST_DIRECTORY,
-  RPC_CHANNELS.fs.SCAN_TREE,
-  RPC_CHANNELS.fs.WATCH,
-  RPC_CHANNELS.fs.UNWATCH,
-  RPC_CHANNELS.fs.CHANGED,
-  RPC_CHANNELS.fs.RENAME,
-  RPC_CHANNELS.fs.DELETE,
 
   // credentials — remote server's credential state
   RPC_CHANNELS.credentials.HEALTH_CHECK,
@@ -312,7 +318,6 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.llmConnections.SET_DEFAULT,
   RPC_CHANNELS.llmConnections.SET_WORKSPACE_DEFAULT,
   RPC_CHANNELS.llmConnections.REFRESH_MODELS,
-  RPC_CHANNELS.llmConnections.GET_OPEN_CODE_MODELS,
   RPC_CHANNELS.llmConnections.CHANGED,
 
   // chatgpt — OAuth via capability passthrough
@@ -342,13 +347,21 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.settings.TEST_LLM_CONNECTION_SETUP,
   RPC_CHANNELS.settings.GET_DEFAULT_THINKING_LEVEL,
   RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL,
-  // sensitive-path allow rules are workspace content: keyed by workspaceId and
-  // persisted in <workspaceRoot>/<dataDir>/redaction.json, and the guard that
-  // consumes them runs server-side with the agent. For a remote workspace the
-  // rules live on the remote server, so these must follow the workspace.
-  // (The global getSensitiveContextProtection toggle has no workspace and stays LOCAL_ONLY.)
-  RPC_CHANNELS.settings.GET_SENSITIVE_PATH_ALLOW_RULES,
-  RPC_CHANNELS.settings.REMOVE_SENSITIVE_PATH_ALLOW_RULE,
+  RPC_CHANNELS.settings.GET_AUTO_COMPACT_WINDOW,
+  RPC_CHANNELS.settings.SET_AUTO_COMPACT_WINDOW,
+  RPC_CHANNELS.settings.GET_SUBAGENT_MODEL,
+  RPC_CHANNELS.settings.SET_SUBAGENT_MODEL,
+
+  // decisions — the decision layer's settings and keys live on the server whose sessions ask the
+  // model (it can reuse that server's LLM connections); the Laya probe tests what that server reaches
+  RPC_CHANNELS.decisions.GET_SETTINGS,
+  RPC_CHANNELS.decisions.SET_SETTINGS,
+  RPC_CHANNELS.decisions.GET_STATUS,
+  RPC_CHANNELS.decisions.SET_API_KEY,
+  RPC_CHANNELS.decisions.DELETE_API_KEY,
+  RPC_CHANNELS.decisions.TEST,
+  RPC_CHANNELS.decisions.PROBE_SERVER,
+  RPC_CHANNELS.decisions.GET_USAGE,
 
   // pi — provider config on workspace server
   RPC_CHANNELS.pi.GET_API_KEY_PROVIDERS,
@@ -379,6 +392,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.oauth.START,
   RPC_CHANNELS.oauth.COMPLETE,
   RPC_CHANNELS.oauth.CANCEL,
+  RPC_CHANNELS.oauth.STATUS,
   RPC_CHANNELS.oauth.REVOKE,
 
   // workspace — workspace config + images (sharp on headless)
@@ -441,8 +455,48 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.projects.DELETE_ASSET,
   RPC_CHANNELS.projects.CHANGED,
 
+  // pages — workspace pages (mini dashboards)
+  RPC_CHANNELS.pages.GET,
+  RPC_CHANNELS.pages.GET_ONE,
+  RPC_CHANNELS.pages.CREATE,
+  RPC_CHANNELS.pages.UPDATE,
+  RPC_CHANNELS.pages.DELETE,
+  RPC_CHANNELS.pages.GET_CONTENT,
+  RPC_CHANNELS.pages.SET_CONTENT,
+  RPC_CHANNELS.pages.GET_DATA,
+  RPC_CHANNELS.pages.LIST_GRANTS,
+  RPC_CHANNELS.pages.ISSUE_GRANT,
+  RPC_CHANNELS.pages.REVOKE_GRANT,
+  RPC_CHANNELS.pages.CREATE_LEASE,
+  RPC_CHANNELS.pages.RELEASE_LEASE,
+  RPC_CHANNELS.pages.EXECUTE_ACTION,
+  RPC_CHANNELS.pages.CANCEL_ACTION,
+  // Sharing runs on the workspace server: it holds the page files, the vault
+  // token, and evaluates the CRAFT_FEATURE_PAGES_SHARING flag.
+  RPC_CHANNELS.pages.GET_SHARE_CAPABILITIES,
+  RPC_CHANNELS.pages.GET_SHARE_DATA_SCAN,
+  RPC_CHANNELS.pages.PUBLISH,
+  RPC_CHANNELS.pages.SET_PUBLICATION_PASSWORD,
+  RPC_CHANNELS.pages.UNPUBLISH,
+  // claude.ai artifact: runs Claude Code where the page files and the Claude credential live.
+  RPC_CHANNELS.pages.PUBLISH_CLAUDE_ARTIFACT,
+  // Thumbnails: the poster file lives on the workspace server; regeneration is
+  // a no-op unless that host injected a capturer (Electron main).
+  RPC_CHANNELS.pages.GET_THUMBNAIL,
+  RPC_CHANNELS.pages.REGENERATE_THUMBNAIL,
+  RPC_CHANNELS.pages.CHANGED,
+
   // git — workspace filesystem
   RPC_CHANNELS.git.GET_BRANCH,
+  RPC_CHANNELS.git.LIST_REPOS,
+  RPC_CHANNELS.git.CREATE_WORKTREE,
+
+  // prWatch — the PR watcher runs where the session's repo, source credentials and `gh` live
+  RPC_CHANNELS.prWatch.SUBSCRIBE,
+  RPC_CHANNELS.prWatch.UNSUBSCRIBE,
+  RPC_CHANNELS.prWatch.REFRESH,
+  RPC_CHANNELS.prWatch.GET_DETAILS,
+  RPC_CHANNELS.prWatch.CHANGED,
 
   // resources — workspace resource export/import
   RPC_CHANNELS.resources.EXPORT,

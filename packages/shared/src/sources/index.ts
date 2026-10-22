@@ -63,6 +63,7 @@ export {
   sourceExists,
   // Parsing utilities
   parseGuideMarkdown,
+  extractTagline,
 } from './storage.ts';
 
 // Credential Manager (unified credential operations)
@@ -70,11 +71,15 @@ export {
   SourceCredentialManager,
   getSourceCredentialManager,
   getSourcesNeedingAuth,
+  isMultiHeaderCredential,
+  parseStoredApiCredential,
+  serializeHeaderCredential,
 } from './credential-manager.ts';
 export type {
   AuthResult,
   ApiCredential,
   BasicAuthCredential,
+  MultiHeaderCredential,
 } from './credential-manager.ts';
 
 // Server Builder (builds MCP/API servers from sources)
@@ -90,15 +95,16 @@ export type {
   BuiltServers,
 } from './server-builder.ts';
 
-// Built-in Sources (always available in every workspace)
-export {
-  getDocsSource,
-  getBuiltinSources,
-  isBuiltinSource,
-} from './builtin-sources.ts';
-
 // API Tools (types)
 export type { SummarizeCallback } from './api-tools.ts';
+export {
+  executeApiRequest,
+  ApiResponseTooLargeError,
+  type ApiRequestInput,
+  type ExecuteApiRequestOptions,
+  type ApiRequestOutcome,
+  type ApiCredentialSource,
+} from './api-tools.ts';
 
 // Token Refresh Manager (handles OAuth token refresh with rate limiting)
 export {

@@ -52,7 +52,7 @@ describe('sendMessage OAuth refresh ordering (#710)', () => {
   }
 
   function writeOAuthSource(slug: string, isAuthenticated: boolean) {
-    const dir = join(tmpRoot, 'sources', slug)
+    const dir = join(tmpRoot, '.zo', 'sources', slug)
     mkdirSync(dir, { recursive: true })
     writeFileSync(
       join(dir, 'config.json'),

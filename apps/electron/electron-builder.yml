@@ -16,9 +16,6 @@ files:
   - "!dist/renderer/src/**"
   - "!**/*.map"
   - package.json
-  # Include bundled MCP servers (bridge + session) for Codex sessions
-  - resources/bridge-mcp-server/**/*
-  - resources/session-mcp-server/**/*
   # Include Pi agent server subprocess for Pi SDK sessions
   - resources/pi-agent-server/**/*
   # Note: Bundled assets (docs, themes, permissions, tool-icons) are in resources/
@@ -54,30 +51,30 @@ files:
   - resources/bin/linux-x64/**/*
   # Include bundled Bun runtime (platform-specific, set by build script)
   - vendor/bun/**/*
-  # Exclude everything from node_modules; afterPack copies required runtime deps.
+  # Exclude everything from node_modules (will use extraResources for SDK)
   - "!node_modules/**/*"
 
 # Since SDK 0.2.113 the SDK ships a thin core (`@anthropic-ai/claude-agent-sdk`)
 # and a per-platform optional dependency (`-darwin-arm64`, `-darwin-x64`, etc.)
-# containing the ~210 MB native `claude` binary. The afterPack hook copies the
-# core SDK, target-arch native binary alias, and ripgrep into the packaged app
-# for each platform/arch, and fails the build if any required runtime file is
-# missing.
+# containing the ~210 MB native `claude` binary. We bundle both as extraResources
+# below — only the binary matching the build target is shipped per artifact, so
+# the platform `files` rules below also exclude the wrong-platform binaries.
 #
 # Why extraResources instead of `files`: since electron-builder v20.15.2,
-# `node_modules` directories are auto-excluded from `files`. The afterPack copy
-# bypasses that while still selecting the right native package per arch. See:
-# https://github.com/electron-userland/electron-builder/issues/3104
+# `node_modules` directories are auto-excluded from `files`. extraResources
+# bypasses that. See: https://github.com/electron-userland/electron-builder/issues/3104
+#
+# Ripgrep is sourced from `@vscode/ripgrep` (was previously bundled inside the
+# SDK as `vendor/ripgrep/<platform>/rg`; removed in 0.2.113).
 
 extraMetadata:
   main: dist/main.cjs
 
-# Auto-update: electron-updater fetches release manifests from this fork's GitHub Releases.
+# Auto-update: electron-updater fetches from this URL for update manifests (.yml files)
 publish:
   provider: github
   owner: AlienHub
-  repo: craft-agents-oss
-  releaseType: release
+  repo: zo-agent
 
 # Disable ASAR to avoid decompression overhead and click delays
 asar: false
@@ -97,39 +94,55 @@ mac:
     - target: dmg
       arch:
         - arm64
+        - x64
     - target: zip
       arch:
         - arm64
-  # MUST be false for unsigned / ad-hoc builds. Hardened runtime is only valid for
-  # Developer-ID-signed + notarized apps; enabling it on an ad-hoc-signed app makes
-  # the signature claim sealed resources that aren't present, so macOS reports
-  # "code has no resources but signature indicates they must be present" and blocks
-  # launch (even "Open Anyway" fails). Re-enable (true) only when signing is added.
-  hardenedRuntime: false
+        - x64
+  hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extraResources:
+    # Thin core SDK (sdk.mjs + types). ~4 MB — present on every platform.
+    - from: node_modules/@anthropic-ai/claude-agent-sdk
+      to: app/node_modules/@anthropic-ai/claude-agent-sdk
+    # Stable alias pointing at the target-arch native binary package.
+    # Populated by build-dmg.sh / build-linux.sh / build-win.ps1 before
+    # electron-builder runs (`apps/electron/node_modules/@anthropic-ai/claude-agent-sdk-binary/`).
+    # The runtime resolver (runtime-resolver.ts) looks here first.
+    - from: node_modules/@anthropic-ai/claude-agent-sdk-binary
+      to: app/node_modules/@anthropic-ai/claude-agent-sdk-binary
+    # ripgrep (used by packages/server-core/src/services/search.ts).
+    - from: node_modules/@vscode/ripgrep
+      to: app/node_modules/@vscode/ripgrep
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).
     - from: ../../packages/messaging-whatsapp-worker/dist/worker.cjs
       to: messaging-whatsapp-worker/worker.cjs
   # Exclude binaries for other platforms
   files:
+    - dist/**/*
+    - resources/**/*
+    - vendor/bun/**/*
+    - packages/shared/src/*.ts
+    - package.json
+    - "!src/**/*"
+    - "!scripts/**/*"
+    - "!**/__tests__/**"
+    - "!**/*.test.*"
+    - "!**/*.map"
+    - "!**/.env*"
     - "!**/resources/bin/win32-*/**"
     - "!**/resources/bin/linux-*/**"
   # Use predictable naming for macOS packages (applies to zip; dmg uses its own config below)
   artifactName: "Zo-${version}-${arch}.${ext}"
-  # This fork ships UNSIGNED macOS builds — CI has no Apple Developer credentials.
-  # `identity: null` skips code signing and `notarize: false` skips notarization,
-  # so the dmg/zip build succeeds without signing secrets (users see a Gatekeeper
-  # prompt on first launch). To ship SIGNED + NOTARIZED releases: add the
-  # MAC_CSC_LINK / MAC_CSC_KEY_PASSWORD and APPLE_* CI secrets (see
-  # release-electron.yml), then remove `identity: null`, set `notarize: true`,
-  # and set `hardenedRuntime: true` above.
-  identity: null
-  notarize: false
+  # Code signing & notarization (disabled by default for local builds)
+  # To enable: set CSC_LINK, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+  # notarize:
+  #   teamId: ${APPLE_TEAM_ID}
 
 dmg:
+  # Use predictable naming: Craft-Agents-arm64.dmg, Craft-Agents-x64.dmg
   artifactName: "Zo-${version}-${arch}.dmg"
   # Custom background (multi-resolution TIFF with 1x+2x for retina support)
   background: resources/dmg-background.tiff
@@ -154,21 +167,29 @@ win:
     - target: nsis
       arch:
         - x64
+  # Use predictable naming: Craft-Agents-x64.exe
   artifactName: "Zo-${version}-${arch}.${ext}"
   files:
     # Exclude binaries for other platforms
     - "!**/resources/bin/darwin-*/**"
     - "!**/resources/bin/linux-*/**"
-    # WORKAROUND: Exclude uv from regular files on Windows.
+    # WORKAROUND: Exclude bun and uv from regular files on Windows.
     # electron-builder's npm node module collector causes EBUSY errors when copying
     # .exe files because it scans/locks files while simultaneously trying to copy them.
-    # Moving uv to extraResources avoids this by copying before the collector runs.
-    # Bun is copied by afterPack directly into the final app runtime.
+    # Moving them to extraResources avoids this by copying before the collector runs.
     # See: https://github.com/electron-userland/electron-builder/issues/8250
     - "!vendor/bun/**/*"
     - "!**/resources/bin/win32-x64/**"
   # Copy executables as extraResources to avoid EBUSY file locking (see comment above)
   extraResources:
+    - from: node_modules/@anthropic-ai/claude-agent-sdk
+      to: app/node_modules/@anthropic-ai/claude-agent-sdk
+    - from: node_modules/@anthropic-ai/claude-agent-sdk-binary
+      to: app/node_modules/@anthropic-ai/claude-agent-sdk-binary
+    - from: node_modules/@vscode/ripgrep
+      to: app/node_modules/@vscode/ripgrep
+    - from: vendor/bun/bun.exe
+      to: vendor/bun/bun.exe
     - from: resources/bin/win32-x64
       to: app/resources/bin/win32-x64
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).
@@ -192,6 +213,12 @@ linux:
         - x64
   artifactName: "Zo-${version}-${arch}.${ext}"
   extraResources:
+    - from: node_modules/@anthropic-ai/claude-agent-sdk
+      to: app/node_modules/@anthropic-ai/claude-agent-sdk
+    - from: node_modules/@anthropic-ai/claude-agent-sdk-binary
+      to: app/node_modules/@anthropic-ai/claude-agent-sdk-binary
+    - from: node_modules/@vscode/ripgrep
+      to: app/node_modules/@vscode/ripgrep
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).
     - from: ../../packages/messaging-whatsapp-worker/dist/worker.cjs
       to: messaging-whatsapp-worker/worker.cjs

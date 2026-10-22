@@ -294,8 +294,8 @@ describe('phase4 backend abstraction APIs', () => {
       provider: 'pi',
       baseUrl: 'https://opencode.ai/zen/go/v1',
       piAuthProvider: 'opencode-go',
-      customEndpoint: {},
-    })).toEqual({ providerType: 'pi_compat', piAuthProvider: 'opencode-go', customEndpoint: {} });
+      customEndpoint: { api: 'openai-completions' },
+    })).toEqual({ providerType: 'pi_compat', piAuthProvider: 'opencode-go', customEndpoint: { api: 'openai-completions' } });
   });
 
   it('fetchBackendModels dispatches for pi provider', async () => {

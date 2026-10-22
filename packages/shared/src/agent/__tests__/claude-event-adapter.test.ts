@@ -5,7 +5,7 @@
  * Each test provides mock SDKMessage objects and verifies the AgentEvents produced.
  */
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { ClaudeEventAdapter, buildWindowsSkillsDirError, type ClaudeAdapterCallbacks } from '../backend/claude/event-adapter.ts';
+import { ClaudeEventAdapter, DETACHED_TOOL_CALL_RESULT, buildWindowsSkillsDirError, type ClaudeAdapterCallbacks } from '../backend/claude/event-adapter.ts';
 import type { AgentEvent } from '@craft-agent/core/types';
 
 // Helper: create default callbacks
@@ -212,6 +212,37 @@ describe('ClaudeEventAdapter', () => {
       });
     });
 
+    it('should prefer SDK structured context_usage for occupancy when present', async () => {
+      const events = await adapter.adapt({
+        type: 'assistant',
+        context_usage: {
+          total_tokens: 419_000,
+          raw_max_tokens: 200_000,
+          percentage: 210,
+          over_limit: { tokens_over: 219_000, kind: 'compaction_window' },
+        },
+        message: {
+          content: [],
+          usage: { input_tokens: 1000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        },
+        parent_tool_use_id: null,
+        session_id: 'sess-1',
+        isReplay: false,
+      } as any);
+
+      expect(events.find(e => e.type === 'context_usage')).toEqual({
+        type: 'context_usage',
+        contextUsage: {
+          usedTokens: 419_000,
+          limitTokens: 200_000,
+          limitKind: 'compaction',
+          isEstimate: true,
+          isStale: false,
+          canCompact: true,
+        },
+      });
+    });
+
     it('should not emit usage_update for sidechain messages', async () => {
       const events = await adapter.adapt({
         type: 'assistant',
@@ -248,6 +279,25 @@ describe('ClaudeEventAdapter', () => {
   });
 
   describe('user message (tool results)', () => {
+    it('shows a status instead of the model-directed placeholder for a detached call (SDK >=0.3.287)', async () => {
+      await adapter.adapt({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'toolu_wf', name: 'WebFetch', input: { url: 'https://example.com' } }], usage: {} },
+        parent_tool_use_id: null,
+        session_id: 'sess-1',
+      } as any);
+      const events = await adapter.adapt({
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_wf', content: '[This call is still running. Its result will arrive in a later turn; never say you cancelled it.]' }] },
+        tool_use_result: { detachedToolCall: true },
+        parent_tool_use_id: null,
+        session_id: 'sess-1',
+      } as any);
+
+      const result = events.find(e => e.type === 'tool_result');
+      expect(result).toMatchObject({ type: 'tool_result', toolUseId: 'toolu_wf', result: DETACHED_TOOL_CALL_RESULT, isError: false });
+    });
+
     it('should skip replayed user messages', async () => {
       const events = await adapter.adapt({
         type: 'user',
@@ -279,6 +329,28 @@ describe('ClaudeEventAdapter', () => {
         toolUseId: 'parent-1', // Uses parent_tool_use_id
         elapsedSeconds: 5.2,
       });
+    });
+
+    // SDK 0.3.280 sends a heartbeat every 30 s for a long tool; each one used to add a
+    // "Running call_llm…" row that never finished.
+    it('reports heartbeat progress on the running tool without adding a tool row', async () => {
+      await adapter.adapt({
+        type: 'assistant',
+        message: { id: 'msg-1', content: [{ type: 'tool_use', id: 'toolu_1', name: 'mcp__session__call_llm', input: { prompt: 'x' } }] },
+        parent_tool_use_id: null,
+        session_id: 'sess-1',
+      } as any);
+      const events = await adapter.adapt({
+        type: 'tool_progress',
+        tool_use_id: 'toolu_1-heartbeat-0',
+        tool_name: 'mcp__session__call_llm',
+        parent_tool_use_id: 'toolu_1',
+        elapsed_time_seconds: 30,
+        session_id: 'sess-1',
+      } as any);
+
+      expect(events.filter(e => e.type === 'tool_start')).toEqual([]);
+      expect(events.find(e => e.type === 'task_progress')).toMatchObject({ toolUseId: 'toolu_1', elapsedSeconds: 30 });
     });
 
     it('should use tool_use_id when no parent', async () => {
@@ -326,6 +398,23 @@ describe('ClaudeEventAdapter', () => {
           contextWindow: 200000,
         },
       });
+    });
+
+    it('reports the SDK running totals, subagent models included', async () => {
+      const events = await adapter.adapt({
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 10, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        total_cost_usd: 4.2,
+        modelUsage: {
+          'claude-opus-5-5[1m]': { outputTokens: 9000, contextWindow: 1000000 },
+          'claude-sonnet-5-5': { outputTokens: 3000, contextWindow: 1000000 },
+        },
+        session_id: 'sess-1',
+      } as any);
+
+      const completeEvent = events.find(e => e.type === 'complete') as any;
+      expect(completeEvent.usage.runningTotals).toEqual({ costUsd: 4.2, outputTokens: 12000 });
     });
 
     it('should emit error then complete on failure', async () => {
@@ -406,17 +495,23 @@ describe('ClaudeEventAdapter', () => {
       expect(adapter.sdkTools).toEqual(['Read', 'Write', 'Bash']);
     });
 
-    it('should emit info for compact_boundary', async () => {
+    it('should emit occupancy and info for automatic compact_boundary', async () => {
       const events = await adapter.adapt({
         type: 'system',
         subtype: 'compact_boundary',
+        compact_metadata: { trigger: 'auto', pre_tokens: 50_000, post_tokens: 8_000 },
         session_id: 'sess-1',
       } as any);
 
-      expect(events).toHaveLength(1);
+      expect(events).toHaveLength(2);
       expect(events[0]).toMatchObject({
+        type: 'context_usage',
+        contextUsage: { usedTokens: 8_000, isStale: false },
+      });
+      expect(events[1]).toMatchObject({
         type: 'info',
         message: 'Compacted Conversation',
+        compactionTrigger: 'auto',
       });
     });
 
@@ -896,5 +991,17 @@ describe('buildWindowsSkillsDirError', () => {
   it('should return null for non-matching errors', () => {
     expect(buildWindowsSkillsDirError('Connection refused')).toBeNull();
     expect(buildWindowsSkillsDirError('ENOENT: no such file, /tmp/other')).toBeNull();
+  });
+});
+
+describe('ClaudeEventAdapter manual compaction flag', () => {
+  it('reports a requested manual compaction until the next turn starts (#1058)', () => {
+    const adapter = new ClaudeEventAdapter(createCallbacks());
+    adapter.startTurn();
+    expect(adapter.isManualCompactionRequested()).toBe(false);
+    adapter.expectManualCompaction();
+    expect(adapter.isManualCompactionRequested()).toBe(true);
+    adapter.startTurn();
+    expect(adapter.isManualCompactionRequested()).toBe(false);
   });
 });

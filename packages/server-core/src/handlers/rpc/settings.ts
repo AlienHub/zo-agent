@@ -12,6 +12,10 @@ import { requestClientOpenFileDialog } from '@craft-agent/server-core/transport'
 import { isValidWorkingDirectory } from '../../utils/path-validation'
 
 export const HANDLED_CHANNELS = [
+  RPC_CHANNELS.settings.GET_SENSITIVE_CONTEXT_PROTECTION,
+  RPC_CHANNELS.settings.SET_SENSITIVE_CONTEXT_PROTECTION,
+  RPC_CHANNELS.settings.GET_SENSITIVE_PATH_ALLOW_RULES,
+  RPC_CHANNELS.settings.REMOVE_SENSITIVE_PATH_ALLOW_RULE,
   RPC_CHANNELS.workspace.SETTINGS_GET,
   RPC_CHANNELS.workspace.SETTINGS_UPDATE,
   RPC_CHANNELS.preferences.READ,
@@ -37,17 +41,13 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.sessions.SET_MODEL,
   RPC_CHANNELS.settings.GET_DEFAULT_THINKING_LEVEL,
   RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL,
+  RPC_CHANNELS.settings.GET_AUTO_COMPACT_WINDOW,
+  RPC_CHANNELS.settings.SET_AUTO_COMPACT_WINDOW,
+  RPC_CHANNELS.settings.GET_SUBAGENT_MODEL,
+  RPC_CHANNELS.settings.SET_SUBAGENT_MODEL,
   RPC_CHANNELS.tools.GET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.tools.SET_BROWSER_TOOL_ENABLED,
-  RPC_CHANNELS.rtk.GET_ENABLED,
-  RPC_CHANNELS.rtk.SET_ENABLED,
-  RPC_CHANNELS.rtk.GET_STATUS,
-  RPC_CHANNELS.rtk.GET_GAIN,
   RPC_CHANNELS.settings.GET_NETWORK_PROXY,
-  RPC_CHANNELS.settings.GET_SENSITIVE_CONTEXT_PROTECTION,
-  RPC_CHANNELS.settings.SET_SENSITIVE_CONTEXT_PROTECTION,
-  RPC_CHANNELS.settings.GET_SENSITIVE_PATH_ALLOW_RULES,
-  RPC_CHANNELS.settings.REMOVE_SENSITIVE_PATH_ALLOW_RULE,
   RPC_CHANNELS.dialog.OPEN_FOLDER,
   RPC_CHANNELS.rtk.GET_ENABLED,
   RPC_CHANNELS.rtk.SET_ENABLED,
@@ -73,6 +73,34 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       throw new Error('Failed to persist default thinking level')
     }
     return { success: true }
+  })
+
+  // Claude auto-compact window (tokens); null = the SDK default. Applies to new and restarted sessions.
+  server.handle(RPC_CHANNELS.settings.GET_AUTO_COMPACT_WINDOW, async () => {
+    const { getAutoCompactWindow } = await import('@craft-agent/shared/config/storage')
+    return getAutoCompactWindow() ?? null
+  })
+
+  server.handle(RPC_CHANNELS.settings.SET_AUTO_COMPACT_WINDOW, async (_ctx, tokens: number | null) => {
+    if (tokens !== null && !(Number.isInteger(tokens) && tokens >= 100_000 && tokens <= 1_000_000)) {
+      throw new Error(`Invalid auto-compact window: ${tokens}. Use 100000–1000000 tokens, or null for the default.`)
+    }
+    const { setAutoCompactWindow } = await import('@craft-agent/shared/config/storage')
+    setAutoCompactWindow(tokens)
+  })
+
+  // Default model for Claude subagents; null = the session's model.
+  server.handle(RPC_CHANNELS.settings.GET_SUBAGENT_MODEL, async () => {
+    const { getSubagentModel } = await import('@craft-agent/shared/config/storage')
+    return getSubagentModel() ?? null
+  })
+
+  server.handle(RPC_CHANNELS.settings.SET_SUBAGENT_MODEL, async (_ctx, model: string | null) => {
+    const { SUBAGENT_MODELS, setSubagentModel } = await import('@craft-agent/shared/config/storage')
+    if (model !== null && !(SUBAGENT_MODELS as readonly string[]).includes(model)) {
+      throw new Error(`Invalid subagent model: ${model}. Valid values: ${SUBAGENT_MODELS.join(', ')}, or null`)
+    }
+    setSubagentModel(model as typeof SUBAGENT_MODELS[number] | null)
   })
 
   // ============================================================
@@ -122,22 +150,24 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       permissionMode: config?.defaults?.permissionMode,
       cyclablePermissionModes: config?.defaults?.cyclablePermissionModes,
       thinkingLevel: normalizeThinkingLevel(config?.defaults?.thinkingLevel),
-      workingDirectory: config?.defaults?.workingDirectory || workspace.rootPath,
+      codingMode: config?.defaults?.codingMode === true,
+      workingDirectory: config?.defaults?.workingDirectory,
       localMcpEnabled: config?.localMcpServers?.enabled ?? true,
       defaultLlmConnection: config?.defaults?.defaultLlmConnection,
       enabledSourceSlugs: config?.defaults?.enabledSourceSlugs ?? [],
+      chatStarters: config?.chatStarters ?? [],
     }
   })
 
   // Update a workspace setting
   server.handle(RPC_CHANNELS.workspace.SETTINGS_UPDATE, async (_ctx, workspaceId: string, key: string, value: unknown) => {
     const workspace = getWorkspaceOrThrow(workspaceId)
-    const normalizedValue = key === 'workingDirectory'
-      ? (typeof value === 'string' && value.trim() ? value.trim() : workspace.rootPath)
+    const normalizedValue = key === 'workingDirectory' && typeof value === 'string'
+      ? value.trim()
       : value
 
     // Validate key is a known workspace setting
-    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'localMcpEnabled', 'defaultLlmConnection']
+    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'codingMode', 'workingDirectory', 'localMcpEnabled', 'defaultLlmConnection', 'chatStarters']
     if (!validKeys.includes(key)) {
       throw new Error(`Invalid workspace setting key: ${key}. Valid keys: ${validKeys.join(', ')}`)
     }
@@ -170,6 +200,14 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       // Store in localMcpServers.enabled (top-level, not in defaults)
       config.localMcpServers = config.localMcpServers || { enabled: true }
       config.localMcpServers.enabled = Boolean(normalizedValue)
+    } else if (key === 'codingMode') {
+      // Stored only when on, so workspaces that never enable it keep an unchanged config
+      config.defaults = config.defaults || {}
+      if (normalizedValue === true) config.defaults.codingMode = true
+      else delete config.defaults.codingMode
+    } else if (key === 'chatStarters') {
+      // Top-level field, not in defaults
+      config.chatStarters = (normalizedValue as Array<{ label: string; prompt: string }> | undefined) ?? []
     } else {
       // Update the setting in defaults
       config.defaults = config.defaults || {}
@@ -376,10 +414,6 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     const { getNetworkProxySettings } = await import('@craft-agent/shared/config/storage')
     return getNetworkProxySettings()
   })
-
-  // ============================================================
-  // Sensitive Context Protection
-  // ============================================================
 
   server.handle(RPC_CHANNELS.settings.GET_SENSITIVE_CONTEXT_PROTECTION, async () => {
     const { getSensitiveContextProtectionSettings } = await import('@craft-agent/shared/config/storage')

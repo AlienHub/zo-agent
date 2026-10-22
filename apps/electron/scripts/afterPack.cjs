@@ -229,15 +229,6 @@ function bundleHelperServers(context) {
   const rootDir = path.resolve(electronDir, '..', '..');
   const appDir = path.join(getResourcesDir(context), 'app');
 
-  const sessionSource = path.join(rootDir, 'packages', 'session-mcp-server', 'dist', 'index.js');
-  const sessionDest = path.join(appDir, 'resources', 'session-mcp-server', 'index.js');
-  if (!fs.existsSync(sessionSource)) {
-    throw new Error(`Session MCP server build output missing: ${sessionSource}`);
-  }
-  fs.mkdirSync(path.dirname(sessionDest), { recursive: true });
-  fs.copyFileSync(sessionSource, sessionDest);
-  console.log('afterPack: session MCP server bundled');
-
   const piSource = path.join(rootDir, 'packages', 'pi-agent-server', 'dist', 'index.js');
   const piDestDir = path.join(appDir, 'resources', 'pi-agent-server');
   const piDest = path.join(piDestDir, 'index.js');
@@ -247,7 +238,8 @@ function bundleHelperServers(context) {
   fs.rmSync(piDestDir, { recursive: true, force: true });
   fs.mkdirSync(piDestDir, { recursive: true });
   fs.copyFileSync(piSource, piDest);
-  copyKoffiForTarget(rootDir, piDestDir, platform, arch);
+  // Recent Pi SDKs no longer depend on koffi. Retain bundling for versions that do.
+  if (fs.existsSync(path.join(rootDir,'node_modules','koffi'))) copyKoffiForTarget(rootDir, piDestDir, platform, arch);
   console.log('afterPack: Pi agent server bundled');
 }
 

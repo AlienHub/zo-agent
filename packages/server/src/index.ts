@@ -26,7 +26,6 @@
  */
 
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 import { readFileSync, existsSync } from 'node:fs'
 import { version as packageVersion } from '../package.json'
 import { enableDebug } from '@craft-agent/shared/utils/debug'
@@ -35,6 +34,7 @@ import { validateSession, createWebuiHandler, nodeHttpAdapter } from '@craft-age
 import type { WebuiHandler } from '@craft-agent/server-core/webui'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { getWorkspaces } from '@craft-agent/shared/config'
+import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
 import { createMessagingBootstrap, type MessagingBootstrapHandle } from '@craft-agent/messaging-gateway'
 
 // --generate-token: print a crypto-random token and exit
@@ -43,7 +43,7 @@ if (process.argv.includes('--generate-token')) {
   process.exit(0)
 }
 import type { WsRpcTlsOptions } from '@craft-agent/server-core/transport'
-import { registerCoreRpcHandlers, cleanupSessionFileWatchForClient, cleanupWorkingDirWatchForClient } from '@craft-agent/server-core/handlers/rpc'
+import { registerCoreRpcHandlers, cleanupRpcClientResources } from '@craft-agent/server-core/handlers/rpc'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@craft-agent/server-core/sessions'
 import { initModelRefreshService, setFetcherPlatform } from '@craft-agent/server-core/model-fetchers'
 import { setSearchPlatform, setImageProcessor } from '@craft-agent/server-core/services'
@@ -211,7 +211,7 @@ const instance = await (async () => {
           sessionManager,
           credentialManager: getCredentialManager(),
           getMessagingDir: (wsId: string) =>
-            join(homedir(), '.craft-agent', 'workspaces', wsId, 'messaging'),
+            join(CONFIG_DIR, 'workspaces', wsId, 'messaging'),
           // Headless has no legacy messaging dir — workspaces start clean.
           whatsapp: {
             workerEntry: waWorkerEntry,
@@ -246,10 +246,7 @@ const instance = await (async () => {
           sessionManager.cleanup()
         }
       },
-      cleanupClientResources: (clientId) => {
-        cleanupSessionFileWatchForClient(clientId)
-        cleanupWorkingDirWatchForClient(clientId)
-      },
+      cleanupClientResources: cleanupRpcClientResources,
     })
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
