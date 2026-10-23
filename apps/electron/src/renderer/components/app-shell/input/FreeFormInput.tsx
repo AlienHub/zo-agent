@@ -1847,7 +1847,7 @@ export function FreeFormInput({
               never shrink, so Send stays inside the card (craft-agents-oss#798). The 4px inset
               keeps focus rings visible inside the clipping group. */}
           <div className="-m-1 flex min-w-0 shrink items-center gap-1 overflow-hidden p-1">
-          {effectiveConnectionDetails?.compose ? <span className="text-xs text-muted-foreground px-2" title={t('settings.agentCompose.remotePermissionsDescription')}>{t('settings.agentCompose.remotePermissions')}</span> : compactMode
+          {!effectiveConnectionDetails?.compose && (compactMode
             ? onPermissionModeChange && (
               <CompactPermissionModeSelector
                 permissionMode={permissionMode}
@@ -1860,10 +1860,17 @@ export function FreeFormInput({
                 onPermissionModeChange={onPermissionModeChange}
                 sessionId={sessionId}
               />
-            )}
+            ))}
 
           {/* Model/Connection selector — drawer in compact (when enabled), dropdown on desktop */}
-          {compactMode ? (
+          {effectiveConnectionDetails?.compose && !isEmptySession && !connectionUnavailable ? (
+            <span
+              className="min-w-0 truncate px-2 text-label font-medium text-secondary"
+              title={t('settings.agentCompose.remoteModelDescription')}
+            >
+              {currentModelDisplayName}
+            </span>
+          ) : compactMode ? (
             enableCompactModelPicker && (
               <CompactModelSelector
                 currentModel={currentModel}
@@ -1908,13 +1915,13 @@ export function FreeFormInput({
           </div>
 
           {/* Context usage meter. Percent text is truthful and may exceed 100%; action requires explicit canCompact. */}
-          <ContextUsageChip
+          {!effectiveConnectionDetails?.compose && <ContextUsageChip
             display={contextDisplay}
             labels={contextLabels}
             isProcessing={isProcessing}
             showMeter={!compactMode}
             onCompact={() => onSubmit('/compact', [])}
-          />
+          />}
 
           {/* Send/Stop Button - Always show stop when processing */}
           <SendButton

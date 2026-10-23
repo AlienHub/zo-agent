@@ -1173,8 +1173,19 @@ app.whenReady().then(async () => {
   }
 
   // macOS: Re-create window when dock icon is clicked
+  let restoringClientWindow = false
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0 && windowManager) {
+      // Thin clients must restore a server workspace, just as on initial launch.
+      // Local workspace IDs are unrelated to the connected server's catalog.
+      if (process.env.CRAFT_SERVER_URL) {
+        if (restoringClientWindow) return
+        restoringClientWindow = true
+        void createInitialWindows()
+          .catch((error) => mainLog.error('Failed to restore remote client window:', error))
+          .finally(() => { restoringClientWindow = false })
+        return
+      }
       // Open first workspace or last focused
       const workspaces = getWorkspaces()
       if (workspaces.length > 0) {

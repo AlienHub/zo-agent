@@ -7,7 +7,7 @@ import {
   getLlmConnections,
   updateLlmConnection,
 } from "../config/storage.ts";
-import type { ComposeAgent, ComposeBinding } from "./types.ts";
+import type { ComposeAgent, ComposeBinding, ComposeModelOption } from "./types.ts";
 
 export interface NativeProject {
   summary: {
@@ -56,10 +56,12 @@ export async function listAgents(
         let offset = 0;
         while (true) {
           const page = await client.call<{
-            projects: Array<{ projectId: string; name: string }>;
-            total: number;
+            projects?: Array<{ projectId: string; name: string }>;
+            total?: number;
           }>("ProjectService", "ListProjects", { offset, limit: 500 });
-          const eligible = page.projects.filter(
+          // Connect omits repeated fields and zero totals for an empty server.
+          const pageProjects = page.projects ?? [];
+          const eligible = pageProjects.filter(
               (p) => !/^chat-[0-9a-f]{32}$/.test(p.name),
             ),
             projects: NativeProject[] = [];
@@ -86,8 +88,8 @@ export async function listAgents(
                   p.spec.agents?.find((v: any) => v.name === a.agentName) ?? {},
                 ),
               });
-          offset += page.projects.length;
-          if (!page.projects.length || offset >= page.total) break;
+          offset += pageProjects.length;
+          if (!pageProjects.length || offset >= (page.total ?? offset)) break;
         }
       } catch {
         warnings.push(`${node.name}: unable to read agent-compose agents`);
@@ -100,6 +102,62 @@ export async function listAgents(
     warnings: results.flatMap((r) => r.warnings),
   };
 }
+/** Read model names only; provider endpoints, headers and credentials stay server-side. */
+export async function listModels(nodeId: string, agents: ComposeAgent[]) {
+  const models = new Map<string, ComposeModelOption>();
+  // Existing native definitions remain selectable on older daemons and when
+  // models are supplied by the agent's own provider environment.
+  for (const agent of agents) {
+    if (agent.nodeId === nodeId && agent.model)
+      models.set(agent.model, { id: agent.model, name: agent.model });
+  }
+  let catalogUnavailable = false;
+  try {
+    const client = new ComposeClient(getNode(nodeId));
+    let offset = 0;
+    while (true) {
+      const page = await client.call<{
+        providers?: Array<{
+          id?: string;
+          name?: string;
+          enabled?: boolean;
+          models?: ComposeModelOption[];
+          capabilities?: { models?: string[] };
+        }>;
+        total?: number;
+      }>("LLMService", "ListProviders", { offset, limit: 500 });
+      for (const provider of page.providers ?? []) {
+        if (!provider.enabled || !provider.id?.trim()) continue;
+        const providerId = provider.id.trim();
+        if (!provider.models && !provider.capabilities) catalogUnavailable = true;
+        // Keep the connection in the saved reference: the same model ID can be
+        // served by multiple providers with different credentials and routing.
+        for (const id of provider.capabilities?.models ?? []) {
+          if (typeof id !== "string" || !id.trim()) continue;
+          const modelId = id.trim();
+          const reference = `${providerId}/${modelId}`;
+          models.set(reference, { id: reference, name: `${modelId} · ${provider.name || providerId}` });
+        }
+        // Explicit display names take precedence over discovered bare IDs.
+        for (const model of provider.models ?? []) {
+          if (typeof model.id !== "string" || !model.id.trim()) continue;
+          const modelId = model.id.trim();
+          const reference = `${providerId}/${modelId}`;
+          models.set(reference, { id: reference, name: `${model.name || modelId} · ${provider.name || providerId}` });
+        }
+      }
+      offset += page.providers?.length ?? 0;
+      if (!page.providers?.length || offset >= (page.total ?? offset)) break;
+    }
+  } catch {
+    catalogUnavailable = true;
+  }
+  return {
+    models: [...models.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    catalogUnavailable,
+  };
+}
+
 /** Zo's existing connection selector is reused; the binding remains agent-compose-native. */
 export function syncAgentConnections(agents: ComposeAgent[], complete = true) {
   if (complete)
@@ -206,6 +264,7 @@ export async function createAgent(input: {
   description?: string;
   systemPrompt?: string;
   model: string;
+  enabled?: boolean;
   image?: string;
   requestId: string;
   dryRun?: boolean;
@@ -213,7 +272,8 @@ export async function createAgent(input: {
   if (!input.name.trim() || !input.model.trim())
     throw new Error("Agent name and model are required");
   const client = new ComposeClient(getNode(input.nodeId));
-  const { agents } = await listAgents(input.nodeId);
+  const { agents, warnings } = await listAgents(input.nodeId);
+  if (warnings.length) throw new Error("Unable to read the target server's agents. Reconnect and try again.");
   const template = agents.find((a) => a.provider === "pi");
   const name = `zo-${createHash("sha256").update(input.requestId).digest("hex").slice(0, 16)}`;
   const definition = {
@@ -223,7 +283,7 @@ export async function createAgent(input: {
     provider: "pi",
     model: input.model.trim(),
     systemPrompt: input.systemPrompt || "",
-    enabled: true,
+    enabled: input.enabled ?? true,
     ...(input.image ? { image: input.image } : {}),
   };
   let request: any, method: string;

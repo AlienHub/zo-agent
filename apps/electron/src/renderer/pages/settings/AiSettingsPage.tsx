@@ -1,4 +1,3 @@
-import { AgentComposeSection } from './AgentComposeSection'
 /**
  * AiSettingsPage
  *
@@ -1650,7 +1649,6 @@ export default function AiSettingsPage() {
       )}
 
       {/* Connections Management */}
-      <AgentComposeSection/>
       <SettingsSection title={t("settings.ai.connections")} description={t("settings.ai.connectionsDesc")}>
         <SettingsCard>
           {llmConnections.filter(c=>!c.compose).length === 0 ? (

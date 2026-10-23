@@ -49,8 +49,10 @@ execFileSync(
     "--config",
     "electron-builder.yml",
     "--mac",
+    "zip",
     "--arm64",
-    "--dir",
+    "--publish",
+    "never",
     "-c.mac.identity=-",
   ],
   {

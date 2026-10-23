@@ -333,7 +333,7 @@ export function ComposerModelMenu({
 
         {/* Thinking level selector — only shown when thinking levels are available
             (Claude supports extended thinking, OpenAI backends may not) */}
-        {availableThinkingLevels.length > 0 && (
+        {!effectiveConnectionDetails?.compose && availableThinkingLevels.length > 0 && (
           <>
             <StyledDropdownMenuSeparator className="my-1" />
 
@@ -369,7 +369,7 @@ export function ComposerModelMenu({
         )}
 
         {/* Context usage footer - snapshot-aware occupancy, not cumulative billing. */}
-        {contextDisplay.visible && (
+        {!effectiveConnectionDetails?.compose && contextDisplay.visible && (
           <>
             <StyledDropdownMenuSeparator className="my-1" />
             <div className="px-2 py-1.5 select-none">

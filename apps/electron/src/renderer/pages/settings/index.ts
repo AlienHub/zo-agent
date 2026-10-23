@@ -18,3 +18,5 @@ export { default as PreferencesPage, meta as PreferencesMeta } from './Preferenc
 
 // Re-export types
 export type { DetailsPageMeta } from '@/lib/navigation-registry'
+
+export { default as AgentComposeSettingsPage } from './AgentComposeSettingsPage'

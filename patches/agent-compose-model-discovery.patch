@@ -1,0 +1,359 @@
+diff --git a/pkg/agentcompose/adapters/llm_model_inventory_test.go b/pkg/agentcompose/adapters/llm_model_inventory_test.go
+new file mode 100644
+index 0000000..d9086db
+--- /dev/null
++++ b/pkg/agentcompose/adapters/llm_model_inventory_test.go
+@@ -0,0 +1,46 @@
++package adapters
++
++import (
++	"context"
++	"net/http"
++	"net/http/httptest"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	appconfig "github.com/chaitin/agent-compose/pkg/config"
++	"github.com/chaitin/agent-compose/pkg/llms"
++)
++
++func TestCapabilitiesDiscoversModelsWithNoProtocolVerdict(t *testing.T) {
++	var requests atomic.Int64
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		requests.Add(1)
++		if r.Method != http.MethodGet || r.URL.Path != "/api/coding/paas/v4/models" {
++			t.Errorf("configuration read attempted inference: %s %s", r.Method, r.URL.Path)
++			http.NotFound(w, r)
++			return
++		}
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"data":[{"id":"glm-5"}]}`))
++	}))
++	defer server.Close()
++	provider := probeUpstreamProvider(server.URL)
++	provider.BaseURL = server.URL + "/api/coding/paas/v4/chat/completions"
++	provider.DefaultWireAPI = llms.APIProtocolChatCompletions
++	provider.Enabled = true
++	prober := NewLLMUpstreamProber(&appconfig.Config{LLMUpstreamProbe: true, LLMProbeTimeout: time.Second}, discardProbeLogger())
++	for i := 0; i < 2; i++ {
++		result, ok := prober.Capabilities(context.Background(), provider)
++		if !ok || len(result.Models) != 1 || result.Models[0] != "glm-5" || len(result.Protocols) != 0 {
++			t.Fatalf("capabilities = %#v, ok=%v", result, ok)
++		}
++	}
++	if requests.Load() != 1 {
++		t.Fatal("model discovery was not cached")
++	}
++	provider.Enabled = false
++	if _, ok := prober.Capabilities(context.Background(), provider); ok || requests.Load() != 1 {
++		t.Fatal("disabled provider exposed or fetched capabilities")
++	}
++}
+diff --git a/pkg/agentcompose/adapters/llm_upstream_probe.go b/pkg/agentcompose/adapters/llm_upstream_probe.go
+index 0572e63..ea1b681 100644
+--- a/pkg/agentcompose/adapters/llm_upstream_probe.go
++++ b/pkg/agentcompose/adapters/llm_upstream_probe.go
+@@ -154,13 +154,17 @@ func (p *LLMUpstreamProber) ProbeConnection(ctx context.Context, provider llms.P
+ 	llms.ProbeUpstreamAndLog(probeCtx, p.logger, p.prober, provider, model)
+ }
+ 
+-// Capabilities reports the cached verdict for a connection. It is read-only and
+-// never probes: a client asking for configuration should not wait on an
+-// upstream, and reporting "not probed yet" is honest about what the daemon
+-// knows. Probing disabled means no verdict is ever reported.
+-func (p *LLMUpstreamProber) Capabilities(provider llms.Provider) (llms.UpstreamProbeResult, bool) {
+-	if p == nil || !p.enabled || p.prober == nil {
++// Capabilities reuses a fresh verdict, or refreshes only the model inventory.
++// Reading configuration never sends an inference request. Disabled providers
++// and deployments with probing disabled do not contact the upstream.
++func (p *LLMUpstreamProber) Capabilities(ctx context.Context, provider llms.Provider) (llms.UpstreamProbeResult, bool) {
++	if p == nil || !p.enabled || p.prober == nil || !provider.Enabled {
+ 		return llms.UpstreamProbeResult{}, false
+ 	}
+-	return p.prober.LookupUpstreamProbe(provider)
++	if result, ok := p.prober.LookupUpstreamProbe(provider); ok {
++		return result, true
++	}
++	inventoryCtx, cancel := context.WithTimeout(ctx, p.timeout)
++	defer cancel()
++	return p.prober.DiscoverModels(inventoryCtx, provider)
+ }
+diff --git a/pkg/agentcompose/api/llm.go b/pkg/agentcompose/api/llm.go
+index 59b6e07..15dcd51 100644
+--- a/pkg/agentcompose/api/llm.go
++++ b/pkg/agentcompose/api/llm.go
+@@ -26,9 +26,9 @@ type LLMHandler struct {
+ // configuration time, not at the first request. A nil prober disables the check.
+ type LLMUpstreamProber interface {
+ 	ProbeConnection(ctx context.Context, provider llms.Provider, model string)
+-	// Capabilities reports the most recent cached verdict for a connection.
+-	// Probes are advisory and in-memory, so a missing verdict is normal.
+-	Capabilities(provider llms.Provider) (llms.UpstreamProbeResult, bool)
++	// Capabilities reports a fresh verdict or refreshes its model inventory.
++	// Inventory refreshes must not send inference requests.
++	Capabilities(ctx context.Context, provider llms.Provider) (llms.UpstreamProbeResult, bool)
+ }
+ 
+ func NewLLMHandler(generator LLMGenerator, providers LLMProviderStore) *LLMHandler {
+diff --git a/pkg/agentcompose/api/llm_provider_mapping.go b/pkg/agentcompose/api/llm_provider_mapping.go
+index e9f6235..0ed616b 100644
+--- a/pkg/agentcompose/api/llm_provider_mapping.go
++++ b/pkg/agentcompose/api/llm_provider_mapping.go
+@@ -116,20 +116,20 @@ func (h *LLMHandler) providerResponse(ctx context.Context, provider llms.Provide
+ 		return nil, ConnectErrorForDomain(err)
+ 	}
+ 	target, _ := h.probeTarget(ctx, provider, bindings)
+-	converted, err := providerToV2(provider, bindings, h.cachedCapabilities(target))
++	converted, err := providerToV2(provider, bindings, h.cachedCapabilities(ctx, target))
+ 	if err != nil {
+ 		return nil, ConnectErrorForDomain(err)
+ 	}
+ 	return converted, nil
+ }
+ 
+-// cachedCapabilities returns the advisory probe verdict for the endpoint provider
+-// names, or nil when probing is disabled or that endpoint has not been probed yet.
+-func (h *LLMHandler) cachedCapabilities(provider llms.Provider) *llms.UpstreamProbeResult {
++// cachedCapabilities reports the endpoint verdict or refreshed model inventory,
++// honoring request cancellation. Disabled probing returns no capabilities.
++func (h *LLMHandler) cachedCapabilities(ctx context.Context, provider llms.Provider) *llms.UpstreamProbeResult {
+ 	if h == nil || h.prober == nil {
+ 		return nil
+ 	}
+-	result, ok := h.prober.Capabilities(provider)
++	result, ok := h.prober.Capabilities(ctx, provider)
+ 	if !ok {
+ 		return nil
+ 	}
+diff --git a/pkg/agentcompose/api/llm_providers.go b/pkg/agentcompose/api/llm_providers.go
+index 29b83e2..89ba20b 100644
+--- a/pkg/agentcompose/api/llm_providers.go
++++ b/pkg/agentcompose/api/llm_providers.go
+@@ -68,7 +68,7 @@ func (h *LLMHandler) ListProviders(ctx context.Context, req *connect.Request[age
+ 	result := make([]*agentcomposev2.LLMProvider, 0, len(page))
+ 	for _, provider := range page {
+ 		target, _ := h.probeTarget(ctx, provider, bindings)
+-		converted, err := providerToV2(provider, bindings, h.cachedCapabilities(target))
++		converted, err := providerToV2(provider, bindings, h.cachedCapabilities(ctx, target))
+ 		if err != nil {
+ 			return nil, ConnectErrorForDomain(err)
+ 		}
+@@ -108,14 +108,14 @@ func (h *LLMHandler) writtenProviderResponse(ctx context.Context, provider llms.
+ 		bindings = nil
+ 	}
+ 	target, _ := h.probeUpstream(ctx, provider, bindings)
+-	converted, err := providerToV2(provider, bindings, h.cachedCapabilities(target))
++	converted, err := providerToV2(provider, bindings, h.cachedCapabilities(ctx, target))
+ 	if err == nil {
+ 		return converted
+ 	}
+ 	slog.Warn("llm connection model list could not be reported", "connection", provider.ID, "error", err)
+ 	// The model list is the only part of the conversion that carries an error, so
+ 	// describing the connection without it cannot fail.
+-	summary, _ := providerToV2(provider, nil, h.cachedCapabilities(target))
++	summary, _ := providerToV2(provider, nil, h.cachedCapabilities(ctx, target))
+ 	return summary
+ }
+ 
+diff --git a/pkg/agentcompose/api/llm_providers_probe_test.go b/pkg/agentcompose/api/llm_providers_probe_test.go
+index d7ee05b..aa7f0a0 100644
+--- a/pkg/agentcompose/api/llm_providers_probe_test.go
++++ b/pkg/agentcompose/api/llm_providers_probe_test.go
+@@ -303,7 +303,7 @@ func (r *recordingUpstreamProber) ProbeConnection(_ context.Context, provider ll
+ 	r.calls = append(r.calls, probeCall{provider: provider, model: model})
+ }
+ 
+-func (r *recordingUpstreamProber) Capabilities(provider llms.Provider) (llms.UpstreamProbeResult, bool) {
++func (r *recordingUpstreamProber) Capabilities(_ context.Context, provider llms.Provider) (llms.UpstreamProbeResult, bool) {
+ 	r.mu.Lock()
+ 	defer r.mu.Unlock()
+ 	r.capabilityCalls = append(r.capabilityCalls, provider)
+diff --git a/pkg/llms/model_inventory.go b/pkg/llms/model_inventory.go
+new file mode 100644
+index 0000000..e3be74d
+--- /dev/null
++++ b/pkg/llms/model_inventory.go
+@@ -0,0 +1,46 @@
++package llms
++
++import (
++	"context"
++	"time"
++)
++
++// DiscoverModels refreshes the inventory without executing protocol probes or
++// model inference. Its cache is separate from protocol verdicts, so reading a
++// model list cannot suppress a subsequent real protocol check.
++func (p *UpstreamProber) DiscoverModels(ctx context.Context, provider Provider) (UpstreamProbeResult, bool) {
++	if p == nil || ctx.Err() != nil {
++		return UpstreamProbeResult{}, false
++	}
++	key := UpstreamProbeKey(provider)
++	if result, ok := p.inventory.Lookup(key); ok {
++		return result, true
++	}
++	pending := p.inventoryRequests.DoChan(key, func() (any, error) {
++		if result, ok := p.inventory.Lookup(key); ok {
++			return result, nil
++		}
++		headers, err := ProviderForwardHeaders(provider)
++		if err != nil {
++			return nil, err
++		}
++		result := UpstreamProbeResult{Endpoint: redactedProbeEndpoint(provider.BaseURL), ProbedAt: time.Now().UTC()}
++		result.Models, result.ModelsDetail = p.listModels(ctx, provider, headers)
++		if ctx.Err() != nil {
++			return nil, ctx.Err()
++		}
++		// Cache bounded negative results too; an endpoint without /models should
++		// not be hammered whenever the settings screen re-renders.
++		p.inventory.Store(key, result)
++		return result, nil
++	})
++	select {
++	case <-ctx.Done():
++		return UpstreamProbeResult{}, false
++	case result := <-pending:
++		if result.Err != nil {
++			return UpstreamProbeResult{}, false
++		}
++		return result.Val.(UpstreamProbeResult), true
++	}
++}
+diff --git a/pkg/llms/model_inventory_test.go b/pkg/llms/model_inventory_test.go
+new file mode 100644
+index 0000000..e725c57
+--- /dev/null
++++ b/pkg/llms/model_inventory_test.go
+@@ -0,0 +1,86 @@
++package llms
++
++import (
++	"context"
++	"net/http"
++	"net/http/httptest"
++	"reflect"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func TestModelInventoryRefreshesAfterExpiryWithoutInference(t *testing.T) {
++	var requests atomic.Int64
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		requests.Add(1)
++		if r.Method != http.MethodGet || r.URL.Path != "/api/coding/paas/v4/models" || r.Header.Get("Authorization") != "Bearer test-secret" {
++			t.Errorf("unexpected inventory request: %s %s", r.Method, r.URL.Path)
++			http.NotFound(w, r)
++			return
++		}
++		writeProbeJSON(w, `{"data":[{"id":"glm-5"},{"id":"glm-5.3"}]}`)
++	}))
++	defer server.Close()
++	provider := probeTestProvider(server.URL + "/api/coding/paas/v4/chat/completions")
++	provider.DefaultWireAPI = APIProtocolChatCompletions
++	provider.APIKey = "test-secret"
++	prober := NewUpstreamProber(server.Client())
++	current := time.Unix(0, 0)
++	prober.inventory.now = func() time.Time { return current }
++	for i := 0; i < 2; i++ {
++		result, ok := prober.DiscoverModels(context.Background(), provider)
++		if !ok || !reflect.DeepEqual(result.Models, []string{"glm-5", "glm-5.3"}) || len(result.Protocols) != 0 {
++			t.Fatalf("inventory = %#v, ok=%v", result, ok)
++		}
++	}
++	if requests.Load() != 1 {
++		t.Fatalf("cached inventory issued %d requests", requests.Load())
++	}
++	current = current.Add(ProbeCacheTTL)
++	if _, ok := prober.DiscoverModels(context.Background(), provider); !ok || requests.Load() != 2 {
++		t.Fatal("expired inventory did not refresh")
++	}
++	if _, ok := prober.LookupUpstreamProbe(provider); ok {
++		t.Fatal("inventory read masqueraded as a protocol probe")
++	}
++}
++
++func TestModelInventoryCancellationDoesNotCacheFailure(t *testing.T) {
++	var requests atomic.Int64
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		requests.Add(1)
++		writeProbeJSON(w, `{"data":[{"id":"glm-5"}]}`)
++	}))
++	defer server.Close()
++	prober := NewUpstreamProber(server.Client())
++	provider := probeTestProvider(server.URL + "/v1")
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	if _, ok := prober.DiscoverModels(ctx, provider); ok || requests.Load() != 0 {
++		t.Fatal("cancelled inventory was fetched or cached")
++	}
++	if result, ok := prober.DiscoverModels(context.Background(), provider); !ok || len(result.Models) != 1 || requests.Load() != 1 {
++		t.Fatal("cancelled request prevented a later successful read")
++	}
++}
++
++func TestModelInventoryCachesUnsupportedEndpoint(t *testing.T) {
++	var requests atomic.Int64
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		requests.Add(1)
++		http.NotFound(w, r)
++	}))
++	defer server.Close()
++	prober := NewUpstreamProber(server.Client())
++	provider := probeTestProvider(server.URL + "/v1")
++	for i := 0; i < 2; i++ {
++		result, ok := prober.DiscoverModels(context.Background(), provider)
++		if !ok || len(result.Models) != 0 || result.ModelsDetail != "HTTP 404" {
++			t.Fatalf("unsupported inventory = %#v, ok=%v", result, ok)
++		}
++	}
++	if requests.Load() != 1 {
++		t.Fatal("unsupported endpoint was not negatively cached")
++	}
++}
+diff --git a/pkg/llms/upstream_probe.go b/pkg/llms/upstream_probe.go
+index fac9920..697a20d 100644
+--- a/pkg/llms/upstream_probe.go
++++ b/pkg/llms/upstream_probe.go
+@@ -14,6 +14,8 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"golang.org/x/sync/singleflight"
++
+ 	appconfig "github.com/chaitin/agent-compose/pkg/config"
+ )
+ 
+@@ -139,8 +141,10 @@ func UpstreamProbeProtocols(provider Provider) []Protocol {
+ // a caller controls the transport, the proxy, and the timeout, and it owns the
+ // verdict cache so repeated triggers do not repeat identical traffic.
+ type UpstreamProber struct {
+-	client *http.Client
+-	cache  *UpstreamProbeCache
++	client            *http.Client
++	cache             *UpstreamProbeCache
++	inventory         *UpstreamProbeCache
++	inventoryRequests singleflight.Group
+ }
+ 
+ // NewUpstreamProber returns a prober that issues requests through client. A nil
+@@ -158,7 +162,7 @@ func NewUpstreamProber(client *http.Client) *UpstreamProber {
+ 		cloned.Timeout = DefaultProbeTimeout
+ 		client = &cloned
+ 	}
+-	return &UpstreamProber{client: client, cache: NewUpstreamProbeCache(ProbeCacheTTL)}
++	return &UpstreamProber{client: client, cache: NewUpstreamProbeCache(ProbeCacheTTL), inventory: NewUpstreamProbeCache(ProbeCacheTTL)}
+ }
+ 
+ // WithProbeCache replaces the verdict cache, which lets a caller choose the
+@@ -498,7 +502,7 @@ func responseMatchesProtocol(protocol Protocol, body []byte) bool {
+ // serves. The query survives the rewrite, because it is part of the deployment's
+ // address rather than of the protocol path.
+ func upstreamModelsEndpoint(provider Provider) string {
+-	protocol := ProtocolResponses
++	protocol := Protocol(NormalizeWireAPI(provider.DefaultWireAPI))
+ 	if NormalizeProviderType(provider.ProviderType) == ProviderFamilyAnthropic {
+ 		protocol = ProtocolMessages
+ 	}

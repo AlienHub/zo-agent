@@ -1,5 +1,5 @@
 import { stageUploads, uploadFiles, promptWithUploads } from "./uploads.ts";
-import { ComposeConfigurationError } from "./errors.ts";
+import { ComposeConfigurationError, composeRunError, isComposeRuntimeError } from "./errors.ts";
 import { resolve, dirname } from "node:path";
 import { claimLease, releaseLease } from "./leases.ts";
 import { randomUUID } from "node:crypto";
@@ -514,6 +514,8 @@ export class ComposeAgentBackend extends BaseAgent {
               : streamOutput;
           // Stream the current uncommitted text, then let journal text_complete commit it.
           if (
+            turn.status !== "RUN_STATUS_FAILED" &&
+            !isComposeRuntimeError(output) &&
             output.startsWith(committedText) &&
             output.startsWith(emittedText) &&
             output.length > emittedText.length
@@ -559,7 +561,7 @@ export class ComposeAgentBackend extends BaseAgent {
             } else if (turn.status === "RUN_STATUS_FAILED")
               yield {
                 type: "error",
-                message: run.summary.error || "Remote agent run failed",
+                message: composeRunError(run.summary.error, output),
               };
             yield { type: "complete" };
             return;

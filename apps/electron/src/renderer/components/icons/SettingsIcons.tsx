@@ -8,6 +8,7 @@
 
 import {
   Building2,
+  Bot,
   Keyboard,
   LockKeyhole,
   MessageSquare,
@@ -43,6 +44,7 @@ export const PreferencesIcon = ({ className }: IconProps) => <UserCircle classNa
 export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconProps>> = {
   app: AppSettingsIcon,
   ai: AiSettingsIcon,
+  'agent-compose': Bot,
   appearance: AppearanceIcon,
   input: InputIcon,
   workspace: WorkspaceIcon,

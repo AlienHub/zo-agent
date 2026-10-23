@@ -159,6 +159,7 @@ export const NavigationRegistry = {
     detailsPages: {
       app: PlaceholderComponent, // AppSettingsPage
       ai: PlaceholderComponent, // AiSettingsPage
+      'agent-compose': PlaceholderComponent, // AgentComposeSettingsPage
       appearance: PlaceholderComponent, // AppearanceSettingsPage
       input: PlaceholderComponent, // InputSettingsPage
       workspace: PlaceholderComponent, // WorkspaceSettingsPage

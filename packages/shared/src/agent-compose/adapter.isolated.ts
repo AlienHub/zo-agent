@@ -11,6 +11,13 @@ const { ComposeClient } = await import("./client.ts");
 const { ComposeAgentBackend } = await import("./agent.ts");
 const { getSessionPath } = await import("../sessions/storage.ts");
 const { claimLease } = await import("./leases.ts");
+const failureOutput = 'Error: pi model request failed: 402: {"message":"成员余额不足","type":"permission_error"}\n    at PiRunner.handleEvent (file:///usr/lib/runtime/pi.js:295:49)';
+let failed = false;
+let modelCatalogUnavailable = false;
+let emptyAgentCatalog = false;
+let appliedSpec: any;
+let patchedSpec: any;
+let probeMode = "normal";
 let starts = 0,
   stops = 0,
   reads = 0,
@@ -38,7 +45,32 @@ const daemon = Bun.serve({
         headers: { "content-type": "application/connect+json" },
       });
     const body = (await req.json()) as any;
-    if (method === "ListProjects") return Response.json({projects:[{projectId:"p",name:"native"}],total:1});
+    if (method === "ApplyProject") {
+      appliedSpec = body.spec;
+      return Response.json({ applied: true });
+    }
+    if (method === "PatchProject") {
+      patchedSpec = body.spec;
+      return Response.json({});
+    }
+    if (method === "ListProviders") {
+      if (modelCatalogUnavailable) return new Response("", { status: 404 });
+      return Response.json({
+        providers: body.offset ? [{ id: "disabled", enabled: false, models: [{ id: "disabled-model" }], capabilities: { models: ["disabled-discovered"] } }] : [{
+          id: "glm-coding", name: "GLM", enabled: true,
+          capabilities: { models: ["glm-5", "model-b", "glm-5", "", "   "] },
+          models: [{ id: "model-b", name: "Model B", headers: { authorization: "fixture-secret" } }, { id: "remote-model", name: "Current model" }],
+        }],
+        total: 2,
+      });
+    }
+    if (method === "ListProjects") {
+      if (probeMode === "timeout") await Bun.sleep(9000);
+      if (probeMode === "invalid") return new Response("not a daemon response");
+      if (probeMode === "health") return Response.json({ status: "ok" });
+      if (emptyAgentCatalog) return Response.json({});
+      return Response.json({projects:[{projectId:"p",name:"native"}],total:1});
+    }
     if (method === "GetProject")
       return Response.json({
         project: {
@@ -86,13 +118,14 @@ const daemon = Bun.serve({
           summary: {
             runId: activeRequest,
             sandboxId: "sandbox",
-            status: waiting
+            error: failed ? "agent execution failed" : undefined,
+            status: failed ? "RUN_STATUS_FAILED" : waiting
               ? "RUN_STATUS_RUNNING"
               : stops
                 ? "RUN_STATUS_CANCELED"
                 : "RUN_STATUS_SUCCEEDED",
           },
-          output: waiting ? "" : "remote answer",
+          output: failed ? failureOutput : waiting ? "" : "remote answer",
           resultJson: JSON.stringify({ finalText: "remote answer" }),
         },
       });
@@ -106,7 +139,7 @@ const daemon = Bun.serve({
                 id: "journal",
                 timestamp: created,
                 prompt,
-                events: waiting
+                events: failed ? [{ seq: 1, kind: "thinking", data: { Text: "Checking request" } }] : waiting
                   ? []
                   : [{ seq: 1, kind: "text", data: { Text: "remote answer" } }],
               },
@@ -154,11 +187,82 @@ describe("agent-compose durable adapter", () => {
       }),
     ).toThrow();
   });
+  test("connection test authenticates with a saved token without modifying saved nodes", async () => {
+    const { testNodeConnection } = await import("./connection.ts");
+    const { getNodes } = await import("./store.ts");
+    const before = JSON.stringify(getNodes());
+    const result = await testNodeConnection({ ...node, token: "" });
+    expect(result.ok).toBe(true);
+    expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(result)).not.toContain("test-token");
+    expect(JSON.stringify(getNodes())).toBe(before);
+  });
+  test("connection test distinguishes bad authentication, missing credentials and invalid URL", async () => {
+    const { testNodeConnection } = await import("./connection.ts");
+    expect(await testNodeConnection({ ...node, token: "wrong-token" })).toEqual({ ok: false, code: "unauthorized" });
+    expect(await testNodeConnection({ name: "new", url: node.url, token: "" })).toEqual({ ok: false, code: "missing_token" });
+    expect(await testNodeConnection({ ...node, url: "http://user:secret@localhost" })).toEqual({ ok: false, code: "invalid_url" });
+    expect(await testNodeConnection({ ...node, url: "http://127.0.0.1:1" })).toEqual({ ok: false, code: "unreachable" });
+  });
+  test("connection test rejects malformed responses and unrelated health endpoints", async () => {
+    const { testNodeConnection } = await import("./connection.ts");
+    try {
+      probeMode = "invalid";
+      expect(await testNodeConnection(node)).toEqual({ ok: false, code: "invalid_response" });
+      probeMode = "health";
+      expect(await testNodeConnection(node)).toEqual({ ok: false, code: "invalid_response" });
+    } finally { probeMode = "normal"; }
+  });
+  test("connection test times out rather than remaining pending", async () => {
+    const { testNodeConnection } = await import("./connection.ts");
+    try {
+      probeMode = "timeout";
+      expect(await testNodeConnection(node)).toEqual({ ok: false, code: "timeout" });
+    } finally { probeMode = "normal"; }
+  }, 12000);
   test("catalog does not expose native workspace or environment credentials", async () => {
     const {listAgents} = await import("./catalog.ts");
     const result=JSON.stringify(await listAgents());
     expect(result).not.toContain("workspace-secret");
     expect(result).not.toContain("env-secret");
+  });
+  test("model dropdown catalog includes native and enabled server models without provider secrets", async () => {
+    const { listAgents, listModels } = await import("./catalog.ts");
+    const { agents } = await listAgents();
+    const result = await listModels(node.id, [...agents, { ...agents[0]!, nodeId: "other-server", model: "other-server-model" }]);
+    expect(result.catalogUnavailable).toBe(false);
+    expect(result.models).toEqual([
+      { id: "glm-coding/remote-model", name: "Current model · GLM" },
+      { id: "glm-coding/glm-5", name: "glm-5 · GLM" },
+      { id: "glm-coding/model-b", name: "Model B · GLM" },
+      { id: "remote-model", name: "remote-model" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("fixture-secret");
+  });
+  test("older daemons preserve native model choices when the model catalog is unavailable", async () => {
+    const { listAgents, listModels } = await import("./catalog.ts");
+    modelCatalogUnavailable = true;
+    try {
+      const { agents } = await listAgents();
+      const result = await listModels(node.id, agents);
+      expect(result.catalogUnavailable).toBe(true);
+      expect(result.models).toEqual([{ id: "remote-model", name: "remote-model" }]);
+    } finally { modelCatalogUnavailable = false; }
+  });
+  test("creating an agent honors the enabled switch instead of always enabling it", async () => {
+    const { createAgent } = await import("./catalog.ts");
+    await createAgent({ nodeId: node.id, name: "Disabled agent", model: "remote-model", enabled: false, requestId: "disabled-create", dryRun: true });
+    expect(patchedSpec.agents.at(-1).enabled).toBe(false);
+  });
+  test("the first agent is created without an existing remote agent when a Pi image is supplied", async () => {
+    const { createAgent } = await import("./catalog.ts");
+    emptyAgentCatalog = true;
+    try {
+      await expect(createAgent({ nodeId: node.id, name: "First agent", model: "glm-coding/glm-5", requestId: "first-agent", dryRun: true })).rejects.toThrow("Pi runtime image");
+      await createAgent({ nodeId: node.id, name: "First agent", model: "glm-coding/glm-5", systemPrompt: "Drafted in Zo", image: "pi-runtime:test", requestId: "first-agent", dryRun: true });
+      expect(appliedSpec.agents).toHaveLength(1);
+      expect(appliedSpec.agents[0]).toMatchObject({ displayName: "First agent", model: "glm-coding/glm-5", provider: "pi", systemPrompt: "Drafted in Zo", image: "pi-runtime:test" });
+    } finally { emptyAgentCatalog = false; }
   });
   test("retries an ambiguous submission with the same idempotency key; emits one final response", async () => {
     starts = 0;
@@ -214,6 +318,23 @@ describe("agent-compose durable adapter", () => {
     expect(state.turns.at(-1)?.status).toBe("RUN_STATUS_CANCELED");
     agent.destroy();
   }, 15000);
+  test("model billing failures emit a readable error and complete without streaming stderr", async () => {
+    failed = true;
+    waiting = false;
+    stops = 0;
+    const agent = backend("billing-failure");
+    try {
+      const events = [];
+      for await (const event of agent.chat("hello")) events.push(event);
+      expect(events.filter((event) => event.type === "text_delta" || event.type === "text_complete")).toHaveLength(0);
+      expect(events.find((event) => event.type === "error")).toMatchObject({ message: "成员余额不足 (HTTP 402)" });
+      expect(events.at(-1)?.type).toBe("complete");
+      expect(readState(getSessionPath(root, "billing-failure"))?.turns.at(-1)?.status).toBe("RUN_STATUS_FAILED");
+    } finally {
+      failed = false;
+      agent.destroy();
+    }
+  });
   test("shared-workspace leases survive observer shutdown and exclude a different session", () => {
     const path = getSessionPath(root, "lease");
     writeState(path, {

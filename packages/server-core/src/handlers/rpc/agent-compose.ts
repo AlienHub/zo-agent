@@ -6,16 +6,25 @@ import {
   publicNodes,
   saveNode,
   removeNode,
+  getNode,
 } from "@craft-agent/shared/agent-compose/store";
 import { ComposeClient } from "@craft-agent/shared/agent-compose/client";
+import { testNodeConnection } from "@craft-agent/shared/agent-compose/connection";
 import {
   listAgents,
+  listModels,
   syncAgentConnections,
   editAgent,
   createAgent,
-  connectionSlug,
 } from "@craft-agent/shared/agent-compose/catalog";
 import type { ComposeRequest } from "@craft-agent/shared/agent-compose/api-types";
+
+import { getLlmConnections, getDefaultLlmConnection } from "@craft-agent/shared/config";
+import { getCredentialManager } from "@craft-agent/shared/credentials";
+import { loadWorkspaceConfig } from "@craft-agent/shared/workspaces";
+import { selectDraftConnection } from "@craft-agent/shared/agent-compose/draft";
+import { getWorkspaceOrThrow } from "../utils";
+import { startAgentDraft } from "../agent-compose-draft";
 
 export const HANDLED_CHANNELS = [RPC_CHANNELS.agentCompose.REQUEST] as const;
 export function registerAgentComposeHandlers(
@@ -27,53 +36,28 @@ export function registerAgentComposeHandlers(
     async (_ctx, request: ComposeRequest) => {
       if (!request || typeof request !== "object")
         throw new Error("Invalid agent-compose request");
-      let draftSessionId: string | undefined;
-      switch (request.action) {
-        case "draftAgent": {
-          if (!request.purpose.trim() || request.purpose.length > 12000)
-            throw new Error("Describe the agent you want to create");
-          const catalog = await listAgents(request.nodeId);
-          const source = catalog.agents.find(
-            (a) => a.enabled && a.provider === "pi",
-          );
-          if (!source)
-            throw new Error(
-              "Connect an available Pi agent to draft a configuration",
-            );
-          syncAgentConnections(catalog.agents, false);
-          const session = await deps.sessionManager.createSession(
-            request.workspaceId,
-            {
-              name: "Agent configuration draft",
-              llmConnection: connectionSlug(source),
-              hidden: true,
-            },
-          );
-          draftSessionId = session.id;
-          const prompt = `Draft an agent definition for the following user request. Do not use tools or change files or configurations. Return only a JSON object with three string fields: name (a short display name), description, systemPrompt. Use the user's language. Do not include credentials, servers, runtime settings, model names or workspace paths. User request:\n${request.purpose}`;
-          await new Promise<void>((resolve, reject) => {
-            let acked = false;
-            void deps.sessionManager
-              .sendMessage(
-                session.id,
-                prompt,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                () => {
-                  acked = true;
-                  resolve();
-                },
-              )
-              .then(() => {
-                if (!acked) resolve();
-              })
-              .catch(reject);
-          });
-          break;
+      if (request.action === "testNode") {
+        const input = "nodeId" in request ? getNode(request.nodeId) : request.node;
+        return { nodes: publicNodes(), agents: [], warnings: [], connectionTest: await testNodeConnection(input) };
+      }
+      if (request.action === "models") {
+        const result = await listAgents(request.nodeId);
+        return { nodes: publicNodes(), ...result, ...await listModels(request.nodeId, result.agents) };
+      }
+      if (request.action === "draftAgent") {
+        const workspace = getWorkspaceOrThrow(request.workspaceId);
+        const connection = selectDraftConnection(getLlmConnections(), request.llmConnection, [
+          loadWorkspaceConfig(workspace.rootPath)?.defaults?.defaultLlmConnection,
+          getDefaultLlmConnection(),
+        ]);
+        if (connection.authType !== "none" && !await getCredentialManager().hasLlmCredentials(connection.slug, connection.authType)) {
+          throw new Error("Sign in to the selected Zo AI connection in Settings → AI before drafting");
         }
+        const draftSessionId = await startAgentDraft(deps.sessionManager, workspace.id, connection, request.purpose);
+        // Drafting must work even when the daemon has no agents or is offline.
+        return { nodes: publicNodes(), agents: [], warnings: [], draftSessionId };
+      }
+      switch (request.action) {
         case "saveNode": {
           // Verify credentials before replacing a saved connection. Never return the token.
           const { getNodes } = await import(
@@ -129,7 +113,7 @@ export function registerAgentComposeHandlers(
       );
       syncAgentConnections(result.agents, result.warnings.length === 0);
       pushTyped(server, RPC_CHANNELS.llmConnections.CHANGED, { to: "all" });
-      return { nodes: publicNodes(), ...result, draftSessionId };
+      return { nodes: publicNodes(), ...result };
     },
   );
 }

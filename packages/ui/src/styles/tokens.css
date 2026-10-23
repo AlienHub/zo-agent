@@ -72,7 +72,7 @@
   --fill-selected: color-mix(in srgb, var(--fg-base) 7%, transparent);
   --fill-bubble: color-mix(in srgb, var(--fg-base) 5.5%, transparent);
   --border-subtle: color-mix(in srgb, var(--fg-base) 7%, transparent);
-  --border: color-mix(in srgb, var(--fg-base) 10%, transparent);
+  --border: color-mix(in srgb, var(--fg-base) 5%, transparent);
   --border-strong: color-mix(in srgb, var(--fg-base) 16%, transparent);
   --accent-tint: color-mix(in srgb, var(--accent-raw) 10%, transparent);
   --accent-tint-strong: color-mix(in srgb, var(--accent-raw) 20%, transparent);
@@ -208,7 +208,7 @@
   --fill-selected: color-mix(in srgb, var(--fg-base) 9%, transparent);
   --fill-bubble: color-mix(in srgb, var(--fg-base) 7%, transparent);
   --border-subtle: color-mix(in srgb, var(--fg-base) 7%, transparent);
-  --border: color-mix(in srgb, var(--fg-base) 10%, transparent);
+  --border: color-mix(in srgb, var(--fg-base) 5%, transparent);
   --border-strong: color-mix(in srgb, var(--fg-base) 16%, transparent);
   --accent-tint: color-mix(in srgb, var(--accent-raw) 14%, transparent);
   --accent-tint-strong: color-mix(in srgb, var(--accent-raw) 26%, transparent);

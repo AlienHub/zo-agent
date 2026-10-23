@@ -5,14 +5,24 @@ Zo 0.2.0 integrates Agent Compose through TypeScript. The desktop application ca
 ## Connect
 
 1. Open Zo. On a fresh installation, choose **Setup later** if local model credentials are not needed.
-2. Open **Settings → AI → Agent Compose → Connect**.
+2. Open **Settings → Agent Compose → Connect**.
 3. Enter the daemon HTTP(S) endpoint and its existing bearer token. This is the daemon API URL, not its admin UI URL.
 4. Refresh agents. Enabled native Pi agents appear in Zo's existing connection/model selector.
 5. Start a conversation and select the agent before sending the first message. Subsequent messages retain that binding and sandbox.
 
 Agent Compose projects remain transport identities. Zo does not create a project or agent per conversation. Create, edit, disable and delete operate on native project specs, preserve sibling agents and use spec hashes to reject stale writes. Existing Pi runtime settings are inherited when creating an agent. An empty server needs a compatible Pi image and model configured on its daemon.
 
+The agent editor merges each enabled provider's declared `models` with automatically discovered `capabilities.models`. Options save native `providerId/modelId` references, so identical model IDs on different services remain distinct. Existing agent model references remain selectable even if discovery is unavailable. Provider credentials and headers never travel to the renderer. Saving changes the native agent's shared default; it does not override a single session or change the daemon-wide default.
+
+The local daemon at revision `3d602e46` needs the compatibility patch in `patches/agent-compose-model-discovery.patch`: model inventory reads refresh after the protocol cache expires, use bounded GET requests and propagate cancellation without running inference. Complete chat endpoints such as `/api/coding/paas/v4/chat/completions` are respected when deriving `/models`. The patch is applied to the system daemon source; it changes no database schema, guest image or sandbox lifecycle. Reapply it when rebuilding this daemon revision, or remove it once upstream includes equivalent fixes.
+
 The remote agent currently owns its model and runtime permissions. Change its model in the Agent Compose section; Zo reads the effective model before submitting a run. This adapter supports Pi agents. Other native agent types can be listed and managed but are not presented as compatible chat connections.
+
+## Draft an agent with Zo
+
+In **Settings → Agent Compose → Create agent**, describe its purpose and choose **Draft with Zo**. Drafting uses an authenticated native Zo AI connection (workspace/global default preferred). Compose-bound connections are excluded. When multiple Zo connections are available, choose the drafting connection separately from the target agent model. Without a signed-in Zo connection, the form links to AI settings and still permits manual configuration.
+
+Drafts run as hidden Zo sessions in Explore mode, without a project directory or enabled sources. Stop uses the ordinary session cancellation path; reconnect reloads the persisted result. Only the generated name, description and system prompt are copied into the preview. The target daemon, model, runtime image and enabled switch remain user choices. Nothing is deployed until **Save**. A daemon with no existing Pi agents can receive the first agent when a compatible Pi runtime image is supplied; drafting itself does not contact the daemon.
 
 ## Remote desktop
 

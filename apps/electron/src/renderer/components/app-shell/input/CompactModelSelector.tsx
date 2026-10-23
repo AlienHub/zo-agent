@@ -406,7 +406,7 @@ export function CompactModelSelector({
           )}
 
           {/* === Thinking section === */}
-          {THINKING_LEVELS.length > 0 && pickerMode !== 'unavailable' && (
+          {!effectiveConnectionDetails?.compose && THINKING_LEVELS.length > 0 && pickerMode !== 'unavailable' && (
             <>
               <div className={SHEET_SECTION}>
                 {t('chat.modelPicker.thinkingSection')}
@@ -444,7 +444,7 @@ export function CompactModelSelector({
           )}
 
           {/* === Context section === */}
-          {contextDisplay.visible && (
+          {!effectiveConnectionDetails?.compose && contextDisplay.visible && (
             <>
               <div className={SHEET_SECTION}>
                 {t('chat.modelPicker.contextSection')}

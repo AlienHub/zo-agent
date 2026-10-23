@@ -22,6 +22,15 @@ export interface ComposeAgent extends ComposeBinding {
   specHash: string;
   spec: Record<string, unknown>;
 }
+export interface ComposeModelOption {
+  id: string;
+  name: string;
+}
+export interface ComposeConnectionTest {
+  ok: boolean;
+  code: "connected" | "invalid_url" | "missing_token" | "unauthorized" | "forbidden" | "not_daemon" | "timeout" | "unreachable" | "invalid_response" | "server_error";
+  latencyMs?: number;
+}
 export interface ComposeSummary {
   runId: string;
   sandboxId: string;

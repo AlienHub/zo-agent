@@ -1,8 +1,8 @@
-import { readdirSync, readFileSync, statSync } from 'fs';
+import { readdirSync, readFileSync, lstatSync } from 'fs';
 import { join, relative } from 'path';
 
 const ROOT_DIR = process.cwd();
-const IGNORED_DIRS = new Set(['.git', 'node_modules', 'dist', 'release']);
+const IGNORED_DIRS = new Set(['.git', '.sandboxes', 'node_modules', 'dist', 'release']);
 
 function fail(message: string): never {
   console.error(`[release-version] ${message}`);
@@ -22,7 +22,8 @@ function findPackageJsonFiles(dir: string, result: string[] = []): string[] {
     if (IGNORED_DIRS.has(entry)) continue;
 
     const path = join(dir, entry);
-    const stat = statSync(path);
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) continue;
 
     if (stat.isDirectory()) {
       findPackageJsonFiles(path, result);
