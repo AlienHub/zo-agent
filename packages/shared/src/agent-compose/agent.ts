@@ -355,6 +355,7 @@ export class ComposeAgentBackend extends BaseAgent {
       emittedText = turn.text,
       committedText = "",
       textIndex = 0;
+    let connected = false;
     let streamOutput = turn.text,
       following = false;
     const follower = new AbortController();
@@ -409,6 +410,11 @@ export class ComposeAgentBackend extends BaseAgent {
             { runId: turn.remoteId },
             signal,
           );
+          if (!connected) {
+            yield { type: "status", message: "Remote agent is working…" };
+            connected = true;
+          }
+          failures = 0;
           turn.status = run.summary.status;
           this.state.sandboxId = run.summary.sandboxId || this.state.sandboxId;
           turn.sandboxId = this.state.sandboxId;
@@ -574,6 +580,7 @@ export class ComposeAgentBackend extends BaseAgent {
             yield { type: "error", message: e.message };
             return;
           }
+          connected = false;
           if (++failures === 1)
             yield {
               type: "status",

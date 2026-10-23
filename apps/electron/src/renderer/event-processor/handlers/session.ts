@@ -247,7 +247,7 @@ export function handleRetry(state: SessionState, event: RetryEvent): ProcessResu
 
 /**
  * Handle status - status message (e.g., compacting)
- * Stores on session for ProcessingIndicator AND appends as message for TurnCard activity
+ * Runtime progress belongs only in ProcessingIndicator. Compaction retains its activity row.
  */
 export function handleStatus(
   state: SessionState,
@@ -263,7 +263,7 @@ export function handleStatus(
     statusType: event.statusType,
   }
 
-  const updatedSession = appendMessage(session, statusMessage)
+  const updatedSession = event.statusType ? appendMessage(session, statusMessage) : session
 
   return {
     state: {

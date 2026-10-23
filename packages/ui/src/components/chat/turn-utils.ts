@@ -474,6 +474,8 @@ export function groupMessagesByTurn(messages: Message[], options: GroupTurnsOpti
 
     // Status messages become activities within the current turn (don't break turn)
     if (message.role === 'status') {
+      // Connection/progress rows from older clients are transient, never completed work.
+      if (!message.statusType) continue
       if (!currentTurn) {
         // Start a new turn for this status
         currentTurn = {

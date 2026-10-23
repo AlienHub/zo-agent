@@ -120,7 +120,14 @@ export function ProcessingIndicator({ startTime, statusMessage }: ProcessingIndi
   }, [statusMessage])
 
   // Use status message if provided, otherwise cycle through default messages
-  const displayMessage = statusMessage || t(PROCESSING_MESSAGE_KEYS[messageIndex])
+  const transportStatusKeys: Record<string, string> = {
+    "Connecting to agent-compose…": "settings.agentCompose.connecting",
+    "Remote agent is working…": "chat.processing.working",
+    "Connection interrupted. Reconnecting to the remote run…": "pages.auth.reconnecting",
+  }
+  const displayMessage = statusMessage
+    ? (transportStatusKeys[statusMessage] ? t(transportStatusKeys[statusMessage]!) : statusMessage)
+    : t(PROCESSING_MESSAGE_KEYS[messageIndex])
 
   return (
     <div className="flex min-h-7 min-w-0 items-center gap-2 text-label text-secondary">
