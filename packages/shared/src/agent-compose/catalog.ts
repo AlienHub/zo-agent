@@ -130,20 +130,18 @@ export async function listModels(nodeId: string, agents: ComposeAgent[]) {
         if (!provider.enabled || !provider.id?.trim()) continue;
         const providerId = provider.id.trim();
         if (!provider.models && !provider.capabilities) catalogUnavailable = true;
-        // Keep the connection in the saved reference: the same model ID can be
-        // served by multiple providers with different credentials and routing.
+        // Native agent specs store opaque model IDs. The daemon resolves their
+        // provider; prefixing a connection ID changes the model sent upstream.
         for (const id of provider.capabilities?.models ?? []) {
           if (typeof id !== "string" || !id.trim()) continue;
           const modelId = id.trim();
-          const reference = `${providerId}/${modelId}`;
-          models.set(reference, { id: reference, name: `${modelId} · ${provider.name || providerId}` });
+          models.set(modelId, { id: modelId, name: `${modelId} · ${provider.name || providerId}` });
         }
         // Explicit display names take precedence over discovered bare IDs.
         for (const model of provider.models ?? []) {
           if (typeof model.id !== "string" || !model.id.trim()) continue;
           const modelId = model.id.trim();
-          const reference = `${providerId}/${modelId}`;
-          models.set(reference, { id: reference, name: `${model.name || modelId} · ${provider.name || providerId}` });
+          models.set(modelId, { id: modelId, name: `${model.name || modelId} · ${provider.name || providerId}` });
         }
       }
       offset += page.providers?.length ?? 0;

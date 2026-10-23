@@ -58,7 +58,7 @@ const daemon = Bun.serve({
       return Response.json({
         providers: body.offset ? [{ id: "disabled", enabled: false, models: [{ id: "disabled-model" }], capabilities: { models: ["disabled-discovered"] } }] : [{
           id: "glm-coding", name: "GLM", enabled: true,
-          capabilities: { models: ["glm-5", "model-b", "glm-5", "", "   "] },
+          capabilities: { models: ["glm-5", "model-b", "glm-5", "vendor/model", "", "   "] },
           models: [{ id: "model-b", name: "Model B", headers: { authorization: "fixture-secret" } }, { id: "remote-model", name: "Current model" }],
         }],
         total: 2,
@@ -232,10 +232,10 @@ describe("agent-compose durable adapter", () => {
     const result = await listModels(node.id, [...agents, { ...agents[0]!, nodeId: "other-server", model: "other-server-model" }]);
     expect(result.catalogUnavailable).toBe(false);
     expect(result.models).toEqual([
-      { id: "glm-coding/remote-model", name: "Current model · GLM" },
-      { id: "glm-coding/glm-5", name: "glm-5 · GLM" },
-      { id: "glm-coding/model-b", name: "Model B · GLM" },
-      { id: "remote-model", name: "remote-model" },
+      { id: "remote-model", name: "Current model · GLM" },
+      { id: "glm-5", name: "glm-5 · GLM" },
+      { id: "model-b", name: "Model B · GLM" },
+      { id: "vendor/model", name: "vendor/model · GLM" },
     ]);
     expect(JSON.stringify(result)).not.toContain("fixture-secret");
   });
@@ -258,10 +258,10 @@ describe("agent-compose durable adapter", () => {
     const { createAgent } = await import("./catalog.ts");
     emptyAgentCatalog = true;
     try {
-      await expect(createAgent({ nodeId: node.id, name: "First agent", model: "glm-coding/glm-5", requestId: "first-agent", dryRun: true })).rejects.toThrow("Pi runtime image");
-      await createAgent({ nodeId: node.id, name: "First agent", model: "glm-coding/glm-5", systemPrompt: "Drafted in Zo", image: "pi-runtime:test", requestId: "first-agent", dryRun: true });
+      await expect(createAgent({ nodeId: node.id, name: "First agent", model: "glm-5", requestId: "first-agent", dryRun: true })).rejects.toThrow("Pi runtime image");
+      await createAgent({ nodeId: node.id, name: "First agent", model: "glm-5", systemPrompt: "Drafted in Zo", image: "pi-runtime:test", requestId: "first-agent", dryRun: true });
       expect(appliedSpec.agents).toHaveLength(1);
-      expect(appliedSpec.agents[0]).toMatchObject({ displayName: "First agent", model: "glm-coding/glm-5", provider: "pi", systemPrompt: "Drafted in Zo", image: "pi-runtime:test" });
+      expect(appliedSpec.agents[0]).toMatchObject({ displayName: "First agent", model: "glm-5", provider: "pi", systemPrompt: "Drafted in Zo", image: "pi-runtime:test" });
     } finally { emptyAgentCatalog = false; }
   });
   test("retries an ambiguous submission with the same idempotency key; emits one final response", async () => {
