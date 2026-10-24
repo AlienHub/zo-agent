@@ -9,7 +9,7 @@
  *
  * Thin-client mode (CRAFT_SERVER_URL):
  *   Creates a single WsRpcClient connected to the remote server.
- *   All channels go to the remote server.
+ *   Workspace channels go to the remote server; desktop updates use local IPC.
  *
  * On localhost the WS handshake completes in <1ms. The React app takes >100ms
  * to initialise, so by the time any component calls an API method, the
@@ -21,6 +21,7 @@ import { contextBridge, ipcRenderer, shell, webUtils } from 'electron'
 import { WsRpcClient, type TransportConnectionState } from '../transport/client'
 import { RoutedClient } from '../transport/routed-client'
 import { buildClientApi } from '../transport/build-api'
+import { bindClientUpdates } from '../transport/client-updates'
 import { CHANNEL_MAP } from '../transport/channel-map'
 import {
   createSignInRunner,
@@ -72,7 +73,7 @@ let client: TransportClient
 if (isClientOnly) {
   // ── Thin-client mode ───────────────────────────────────────────────────
   // Single WsRpcClient connected directly to the remote server.
-  // No local server, no routing — all channels go to remote.
+  // No local RPC server; desktop update APIs are bound to IPC below.
 
   const wsUrl = process.env.CRAFT_SERVER_URL!
   const wsToken = process.env.CRAFT_SERVER_TOKEN ?? ''
@@ -201,6 +202,7 @@ client.handleCapability(CLIENT_BROWSER_INVOKE, async (req: BrowserCapabilityRequ
 // ---------------------------------------------------------------------------
 
 const api = buildClientApi(client, CHANNEL_MAP, (ch) => client.isChannelAvailable(ch))
+if (isClientOnly) bindClientUpdates(api, ipcRenderer)
 
 ;(api as any).getRuntimeEnvironment = (): 'electron' | 'web' => 'electron'
 

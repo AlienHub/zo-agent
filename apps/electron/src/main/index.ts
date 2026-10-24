@@ -498,6 +498,15 @@ app.whenReady().then(async () => {
 
     if (isClientOnly) {
       mainLog.info(`Client-only mode: CRAFT_SERVER_URL=${process.env.CRAFT_SERVER_URL} (server initialization skipped)`)
+      // Updater commands stay on this desktop even without a local RPC server.
+      ipcMain.handle(RPC_CHANNELS.update.GET_INFO, async () => (await import('./auto-update')).getUpdateInfo())
+      ipcMain.handle(RPC_CHANNELS.update.CHECK, async () => (await import('./auto-update')).checkForUpdates({ autoDownload: true }))
+      ipcMain.handle(RPC_CHANNELS.update.INSTALL, async () => (await import('./auto-update')).installUpdate())
+      ipcMain.handle(RPC_CHANNELS.update.GET_DISMISSED, async () => (await import('@craft-agent/shared/config')).getDismissedUpdateVersion())
+      ipcMain.handle(RPC_CHANNELS.update.DISMISS, async (_event, version: string) => {
+        if (typeof version !== 'string') throw new Error('Invalid update version')
+        ;(await import('@craft-agent/shared/config')).setDismissedUpdateVersion(version)
+      })
     }
 
     // Initialize notification service (always — triggered by server push events)
@@ -1119,6 +1128,11 @@ app.whenReady().then(async () => {
     // Initialize auto-update (check immediately on launch)
     // Skip in dev mode to avoid replacing /Applications app and launching it instead
     if (moduleSink) setAutoUpdateEventSink(moduleSink)
+    else if (isClientOnly) setAutoUpdateEventSink((channel, _target, ...args) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send(channel, ...args)
+      }
+    })
     // Snapshot multi-window state BEFORE quitAndInstall. electron-updater
     // (Squirrel.Mac) destroys BrowserWindows between quitAndInstall and
     // before-quit firing; saving from before-quit alone would overwrite
