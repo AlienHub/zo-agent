@@ -5,7 +5,7 @@ import type { ElectronAPI } from '../../shared/types'
 
 test('thin-client updates use local IPC while conversation APIs remain remote', async () => {
   const calls: unknown[][] = []
-  const remoteChat = async () => 'remote-chat'
+  const remoteChat: ElectronAPI['getSessions'] = async () => []
   const api = { getSessions: remoteChat, isChannelAvailable: (channel: string) => channel === 'sessions:get' } as unknown as ElectronAPI
   const listeners = new Map<string, (event: unknown, ...args: any[]) => void>()
   bindClientUpdates(api, {
