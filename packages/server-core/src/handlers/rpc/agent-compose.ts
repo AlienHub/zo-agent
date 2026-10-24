@@ -1,3 +1,4 @@
+import { getAgentRemoteMcp, saveAgentRemoteMcp } from "@craft-agent/shared/agent-compose/remote-mcp";
 import { nodeHasActiveRuns } from "@craft-agent/shared/agent-compose/usage";
 import { RPC_CHANNELS } from "@craft-agent/shared/protocol";
 import { pushTyped, type RpcServer } from "../../transport";
@@ -36,6 +37,11 @@ export function registerAgentComposeHandlers(
     async (_ctx, request: ComposeRequest) => {
       if (!request || typeof request !== "object")
         throw new Error("Invalid agent-compose request");
+      if (request.action === "getAgentRemoteMcp" || request.action === "saveAgentRemoteMcp") {
+        const mcp = request.action === "getAgentRemoteMcp"
+          ? await getAgentRemoteMcp(request.binding) : await saveAgentRemoteMcp(request);
+        return { nodes: publicNodes(), agents: [], warnings: [], mcp };
+      }
       if (request.action === "testNode") {
         const input = "nodeId" in request ? getNode(request.nodeId) : request.node;
         return { nodes: publicNodes(), agents: [], warnings: [], connectionTest: await testNodeConnection(input) };

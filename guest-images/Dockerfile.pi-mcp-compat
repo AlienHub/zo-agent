@@ -1,0 +1,9 @@
+# Compatibility shim for guests whose legacy Pi MCP adapter was copied as index.ts only.
+# Build against the affected guest's immutable digest, without upgrading Pi or the runtime.
+ARG BASE_IMAGE=chaitin/agent-compose-guest:latest
+FROM ${BASE_IMAGE}
+USER root
+RUN test -f /usr/lib/node_modules/pi-mcp-adapter/package.json \
+    && test -f /usr/lib/node_modules/pi-mcp-adapter/index.ts \
+    && rm -rf /usr/local/share/agent-compose/pi-mcp-adapter \
+    && ln -s /usr/lib/node_modules/pi-mcp-adapter /usr/local/share/agent-compose/pi-mcp-adapter

@@ -1,6 +1,8 @@
 import type { ComposeBinding, ComposeNode } from "./types.ts";
 export type ComposeRequest =
   | { action: "list" }
+  | { action: "getAgentRemoteMcp"; binding: ComposeBinding }
+  | { action: "saveAgentRemoteMcp"; binding: ComposeBinding; specHash: string; servers: import("./remote-mcp.ts").RemoteMcpServer[] }
   | { action: "models"; nodeId: string }
   | { action: "testNode"; nodeId: string }
   | { action: "testNode"; node: Omit<ComposeNode, "id"> & { id?: string } }
