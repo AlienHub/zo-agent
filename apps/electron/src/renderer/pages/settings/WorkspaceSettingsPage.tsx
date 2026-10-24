@@ -361,7 +361,7 @@ export default function WorkspaceSettingsPage() {
   return (
     <SettingsPage
       title={t("settings.workspace.workspaceSettings")}
-      description={t("settings.workspace.description")}
+      description={<>{t("settings.workspace.description")}<br />{t("settings.agentCompose.localSettingsScope")}</>}
       actions={headerActions}
     >
       {/* Workspace Info */}

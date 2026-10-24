@@ -4,12 +4,18 @@ export interface ComposeBinding {
   projectId: string;
   agentName: string;
 }
+export type ComposeSshErrorCode = "ssh_invalid_host" | "ssh_unavailable" | "ssh_host_key" | "ssh_auth_failed" | "ssh_unreachable" | "ssh_closed";
+export interface ComposeSshStatus {
+  state: "idle" | "connecting" | "connected" | "reconnecting" | "error";
+  error?: ComposeSshErrorCode;
+}
 export interface ComposeNode {
   id: string;
   name: string;
   url: string;
   token: string;
   adminUrl?: string;
+  ssh?: { host: string };
 }
 export type PublicComposeNode = Omit<ComposeNode, "token"> & {
   hasToken: boolean;
@@ -26,9 +32,15 @@ export interface ComposeModelOption {
   id: string;
   name: string;
 }
+export interface ComposeImageOption {
+  ref: string;
+  local: boolean;
+  usedByPi: boolean;
+  platform?: string;
+}
 export interface ComposeConnectionTest {
   ok: boolean;
-  code: "connected" | "invalid_url" | "missing_token" | "unauthorized" | "forbidden" | "not_daemon" | "timeout" | "unreachable" | "invalid_response" | "server_error";
+  code: ComposeSshErrorCode | "connected" | "invalid_url" | "missing_token" | "unauthorized" | "forbidden" | "not_daemon" | "timeout" | "unreachable" | "invalid_response" | "server_error";
   latencyMs?: number;
 }
 export interface ComposeSummary {

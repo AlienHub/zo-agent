@@ -61,6 +61,8 @@ import { agentDocument } from "./BackgroundTaskChip"
 import { runCommandMessage } from "@/lib/run-command-message"
 import { useTurnCardExpansion } from "@/hooks/useTurnCardExpansion"
 import { useNavigation } from "@/contexts/NavigationContext"
+import { getExecutionCapabilities } from "@craft-agent/shared/agent-compose/capabilities"
+import { resolveEffectiveConnectionSlug } from "@config/llm-connections"
 import { useAppShellContext } from "@/context/AppShellContext"
 import { navigate, routes } from "@/lib/navigate"
 import { CHAT_LAYOUT } from "@/config/layout"
@@ -357,6 +359,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
 
   // Panel focus state (for multi-panel auto-scroll behavior)
   const appShellContext = useAppShellContext()
+  const effectiveSlug = resolveEffectiveConnectionSlug(session?.llmConnection, appShellContext.workspaceDefaultLlmConnection, appShellContext.llmConnections)
+  const execution = getExecutionCapabilities(appShellContext.llmConnections.find(connection => connection.slug === effectiveSlug), workingDirectory ?? session?.workingDirectory)
   const isFocusedPanel = appShellContext?.isFocusedPanel ?? true
 
   // Input is only disabled when explicitly disabled (e.g., agent needs activation)
@@ -1410,7 +1414,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   const showTranscriptSkeleton = useDelayedLoading(messagesLoading)
 
   return (
-    <RunCommandProvider value={session ? handleRunCommand : null}>
+    <RunCommandProvider value={session && execution.backgroundCommands ? handleRunCommand : null}>
     <div ref={zoneRef} className="flex h-full flex-col min-w-0" data-focus-zone="chat">
       {session ? (
         <div className="flex flex-1 flex-col min-h-0 min-w-0 relative">
@@ -1466,8 +1470,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                       compact/mobile chats share compactMode but are not edits */}
                   {compactMode && emptyStateLabel !== undefined && turns.length === 0 && <CompactEmptyState />}
                   {emptyStateLabel === undefined && !messagesLoading && !messagesLoadError && turns.length === 0 && !hasUnrenderedLoadedMessages && (
-                    <NewChatEmptyState compact={compactMode}>
-                      {canRunSuggestion && <NewChatSuggestions suggestions={newChatSuggestions} onSelect={handleRunSuggestion} />}
+                    <NewChatEmptyState compact={compactMode} description={execution.remote ? t('settings.agentCompose.remoteExecutionDescription') : undefined}>
+                      {execution.localTools && canRunSuggestion && <NewChatSuggestions suggestions={newChatSuggestions} onSelect={handleRunSuggestion} />}
                     </NewChatEmptyState>
                   )}
                   {!compactMode && hasUnrenderedLoadedMessages && <NoRenderableMessages />}
@@ -1800,7 +1804,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
             onStopTask={stopTask}
             onDismissTask={dismissTask}
             onOpenTaskOutput={handleOpenTaskOutput}
-            onRunCommand={handleRunCommand}
+            onRunCommand={execution.backgroundCommands ? handleRunCommand : undefined}
             sessionLabels={session.labels}
             labels={labels}
             onLabelsChange={onLabelsChange}

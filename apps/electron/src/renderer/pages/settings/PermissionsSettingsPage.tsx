@@ -205,7 +205,7 @@ export default function PermissionsSettingsPage() {
   return (
     <SettingsPage
       title={t("settings.permissions.title")}
-      description={t("settings.permissions.description")}
+      description={<>{t("settings.permissions.description")}<br />{t("settings.agentCompose.localSettingsScope")}</>}
       actions={<HeaderMenu route={routes.view.settings('permissions')} helpFeature="permissions" />}
     >
       {isLoading ? (

@@ -100,12 +100,12 @@ export function CompactEmptyState() {
  * serif only at display size). The composer stays where it is; `children` (the suggestion chips)
  * sit under the copy and take clicks, the rest of the overlay lets them through.
  */
-export function NewChatEmptyState({ compact = false, children }: { compact?: boolean; children?: React.ReactNode }) {
+export function NewChatEmptyState({ compact = false, description, children }: { compact?: boolean; description?: string; children?: React.ReactNode }) {
   const { t } = useTranslation()
   return (
     <div className="pointer-events-none absolute inset-0 flex select-none flex-col items-center justify-center gap-2 px-6 text-center">
       <h2 className={cn('font-serif text-foreground', compact ? 'text-title' : 'text-display')}>{t('chat.newChatTitle')}</h2>
-      <p className="max-w-md text-label text-secondary">{t('chat.newChatSubtitle')}</p>
+      <p className="max-w-md text-label text-secondary">{description ?? t('chat.newChatSubtitle')}</p>
       {children && <div className="pointer-events-auto mt-4 flex justify-center">{children}</div>}
     </div>
   )

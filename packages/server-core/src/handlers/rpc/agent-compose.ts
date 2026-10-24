@@ -1,3 +1,4 @@
+import { composeSshTunnels, listSshHosts, sshFingerprint } from "@craft-agent/shared/agent-compose/ssh";
 import { nodeHasActiveRuns } from "@craft-agent/shared/agent-compose/usage";
 import { RPC_CHANNELS } from "@craft-agent/shared/protocol";
 import { pushTyped, type RpcServer } from "../../transport";
@@ -8,7 +9,7 @@ import {
   removeNode,
   getNode,
 } from "@craft-agent/shared/agent-compose/store";
-import { ComposeClient } from "@craft-agent/shared/agent-compose/client";
+import { listImages } from "@craft-agent/shared/agent-compose/images";
 import { testNodeConnection } from "@craft-agent/shared/agent-compose/connection";
 import {
   listAgents,
@@ -36,9 +37,22 @@ export function registerAgentComposeHandlers(
     async (_ctx, request: ComposeRequest) => {
       if (!request || typeof request !== "object")
         throw new Error("Invalid agent-compose request");
+      if (request.action === "sshHosts")
+        return { nodes: publicNodes(), agents: [], warnings: [], sshHosts: listSshHosts() };
+      if (request.action === "sshStatus") {
+        const { getNodes } = await import("@craft-agent/shared/agent-compose/store");
+        const nodes = getNodes().filter((node) => node.ssh);
+        for (const node of nodes) composeSshTunnels.maintain(node);
+        return { nodes: publicNodes(), agents: [], warnings: [], sshStatuses: Object.fromEntries(
+          nodes.map((node) => [node.id, composeSshTunnels.status(node.id)])) };
+      }
       if (request.action === "testNode") {
         const input = "nodeId" in request ? getNode(request.nodeId) : request.node;
         return { nodes: publicNodes(), agents: [], warnings: [], connectionTest: await testNodeConnection(input) };
+      }
+      if (request.action === "images") {
+        const result = await listAgents(request.nodeId);
+        return { nodes: publicNodes(), ...result, ...await listImages(getNode(request.nodeId), result.agents) };
       }
       if (request.action === "models") {
         const result = await listAgents(request.nodeId);
@@ -64,28 +78,10 @@ export function registerAgentComposeHandlers(
             "@craft-agent/shared/agent-compose/store"
           );
           const old = getNodes().find((n) => n.id === request.node.id);
-          const node = {
-            ...request.node,
-            id: request.node.id || "probe",
-            token: request.node.token || old?.token || "",
-            url: request.node.url.trim().replace(/\/$/, ""),
-          };
-          if (old && old.url !== node.url && nodeHasActiveRuns(old.id))
-            throw new Error(
-              "Stop active runs before changing this server address",
-            );
-          const url = new URL(node.url);
-          if (
-            !["http:", "https:"].includes(url.protocol) ||
-            url.username ||
-            url.password ||
-            url.search ||
-            url.hash
-          )
-            throw new Error("Invalid server URL");
-          await new ComposeClient(node).call("ProjectService", "ListProjects", {
-            limit: 1,
-          });
+          if (old && sshFingerprint(old) !== sshFingerprint(request.node) && nodeHasActiveRuns(old.id))
+            throw new Error("Stop active runs before changing this server connection");
+          const result = await testNodeConnection(request.node);
+          if (!result.ok) throw new Error(result.code);
           saveNode(request.node);
           break;
         }

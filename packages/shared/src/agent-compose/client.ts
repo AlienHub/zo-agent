@@ -1,3 +1,4 @@
+import { sshFetch } from "./ssh.ts";
 import type { ComposeNode } from "./types.ts";
 
 /** Connect JSON client; credentials never travel to a renderer. */
@@ -10,23 +11,18 @@ export class ComposeClient {
     signal?: AbortSignal,
     timeout = 20_000,
   ): Promise<T> {
-    const res = await fetch(
-      `${this.node.url.replace(/\/$/, "")}/agentcompose.v2.${service}/${method}`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "connect-protocol-version": "1",
-          authorization: `Bearer ${this.node.token}`,
-        },
-        body: JSON.stringify(body),
-        signal: signal
-          ? AbortSignal.any([signal, AbortSignal.timeout(timeout)])
-          : AbortSignal.timeout(timeout),
-      },
-    );
+    const deadline = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
+    const res = await this.request(`/agentcompose.v2.${service}/${method}`, JSON.stringify(body), {
+      "content-type": "application/json", "connect-protocol-version": "1",
+    }, deadline);
     if (!res.ok) throw new ComposeRpcError(method, res.status);
     return (await res.json()) as T;
+  }
+  private request(path: string, body: string | Uint8Array, headers: Record<string, string>, signal: AbortSignal) {
+    const authenticated = { ...headers, authorization: `Bearer ${this.node.token}` };
+    return this.node.ssh
+      ? sshFetch(this.node, path, body, authenticated, signal)
+      : fetch(this.node.url.replace(/\/$/, "") + path, { method: "POST", body: typeof body === "string" ? body : new Uint8Array(body).buffer, headers: authenticated, signal });
   }
   async exec(sandboxId: string, code: string, args: string[] = []) {
     const { result } = await this.call<{
@@ -57,19 +53,9 @@ export class ComposeClient {
     const frame = new Uint8Array(body.length + 5);
     new DataView(frame.buffer).setUint32(1, body.length);
     frame.set(body, 5);
-    const res = await fetch(
-      `${this.node.url}/agentcompose.v2.RunService/FollowRunLogs`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/connect+json",
-          "connect-protocol-version": "1",
-          authorization: `Bearer ${this.node.token}`,
-        },
-        body: frame,
-        signal,
-      },
-    );
+    const res = await this.request("/agentcompose.v2.RunService/FollowRunLogs", frame, {
+      "content-type": "application/connect+json", "connect-protocol-version": "1",
+    }, signal);
     if (!res.ok || !res.body)
       throw new ComposeRpcError("FollowRunLogs", res.status);
     const reader = res.body.getReader();

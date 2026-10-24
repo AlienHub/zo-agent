@@ -1,3 +1,4 @@
+import { composeSshTunnels, sshFingerprint, validateSshHost } from "./ssh.ts";
 import {
   readFileSync,
   mkdirSync,
@@ -69,7 +70,7 @@ export function saveNode(input: Omit<ComposeNode, "id"> & { id?: string }) {
     old =
       nodes.find((n) => n.id === input.id) ??
       (!input.id
-        ? nodes.find((n) => n.url === url.toString().replace(/\/$/, ""))
+        ? nodes.find((n) => sshFingerprint(n) === sshFingerprint({ url: url.toString().replace(/\/$/, ""), ssh: input.ssh }))
         : undefined);
   const node: ComposeNode = {
     id: old?.id ?? randomUUID(),
@@ -77,13 +78,16 @@ export function saveNode(input: Omit<ComposeNode, "id"> & { id?: string }) {
     url: url.toString().replace(/\/$/, ""),
     token: input.token || old?.token || "",
     adminUrl: input.adminUrl,
+    ...(input.ssh ? { ssh: { host: validateSshHost(input.ssh.host) } } : {}),
   };
   if (!node.name || !node.token)
     throw new Error("Server name and token are required");
   atomicJson(nodesPath(), [...nodes.filter((n) => n.id !== node.id), node]);
+  if (old && sshFingerprint(old) !== sshFingerprint(node)) composeSshTunnels.close(old.id);
   return node;
 }
 export function removeNode(id: string) {
+  composeSshTunnels.close(id);
   atomicJson(
     nodesPath(),
     getNodes().filter((n) => n.id !== id),

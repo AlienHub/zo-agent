@@ -251,8 +251,10 @@ describe("agent-compose durable adapter", () => {
   });
   test("creating an agent honors the enabled switch instead of always enabling it", async () => {
     const { createAgent } = await import("./catalog.ts");
-    await createAgent({ nodeId: node.id, name: "Disabled agent", model: "remote-model", enabled: false, requestId: "disabled-create", dryRun: true });
+    await createAgent({ nodeId: node.id, name: "Disabled agent", model: "remote-model", enabled: false, image: "registry/pi:selected", requestId: "disabled-create", dryRun: true });
     expect(patchedSpec.agents.at(-1).enabled).toBe(false);
+    expect(patchedSpec.agents.at(-1).image).toBe("registry/pi:selected");
+    expect(patchedSpec.agents[0].name).toBe("pi");
   });
   test("the first agent is created without an existing remote agent when a Pi image is supplied", async () => {
     const { createAgent } = await import("./catalog.ts");

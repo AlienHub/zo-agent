@@ -571,6 +571,7 @@ function getFolderName(path: string): string {
 }
 
 export interface UseInlineSlashCommandOptions {
+  enabled?: boolean
   /** Ref to input element (textarea or RichTextInput handle) */
   inputRef: React.RefObject<SlashCommandInputElement | null>
   /** Permission modes to offer (defaults to Explore, Ask, Execute) */
@@ -595,6 +596,7 @@ export interface UseInlineSlashCommandReturn {
 }
 
 export function useInlineSlashCommand({
+  enabled = true,
   inputRef,
   modes = DEFAULT_PERMISSION_MODES,
   onSelectCommand,
@@ -612,6 +614,7 @@ export function useInlineSlashCommand({
 
   // Build sections from commands and folders
   const sections = React.useMemo((): SlashSection[] => {
+    if (!enabled) return []
     const result: SlashSection[] = []
 
     // Modes section
@@ -651,7 +654,7 @@ export function useInlineSlashCommand({
     }
 
     return result
-  }, [modes, recentFolders, homeDir])
+  }, [enabled, modes, recentFolders, homeDir])
 
   const handleInputChange = React.useCallback((value: string, cursorPosition: number) => {
     // Store current state for handleSelect
@@ -713,6 +716,7 @@ export function useInlineSlashCommand({
   }, [inputRef, sections])
 
   const handleSelectCommand = React.useCallback((commandId: SlashCommandId): string => {
+    if (!enabled) return currentInputRef.current.value
     // Capture values BEFORE any state changes to avoid race conditions
     let result = ''
     if (slashStart >= 0) {
@@ -727,9 +731,10 @@ export function useInlineSlashCommand({
     setIsOpen(false)
 
     return result
-  }, [onSelectCommand, slashStart])
+  }, [enabled, onSelectCommand, slashStart])
 
   const handleSelectFolder = React.useCallback((path: string): string => {
+    if (!enabled) return currentInputRef.current.value
     // Capture values BEFORE any state changes to avoid race conditions
     // Folder selection directly changes working directory, doesn't insert text
     let result = ''
@@ -746,7 +751,7 @@ export function useInlineSlashCommand({
     setIsOpen(false)
 
     return result
-  }, [onSelectFolder, slashStart])
+  }, [enabled, onSelectFolder, slashStart])
 
   const close = React.useCallback(() => {
     setIsOpen(false)
@@ -755,7 +760,7 @@ export function useInlineSlashCommand({
   }, [])
 
   return {
-    isOpen,
+    isOpen: enabled && isOpen,
     filter,
     position,
     sections,

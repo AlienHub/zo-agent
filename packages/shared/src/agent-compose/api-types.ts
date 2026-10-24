@@ -1,7 +1,10 @@
 import type { ComposeBinding, ComposeNode } from "./types.ts";
 export type ComposeRequest =
   | { action: "list" }
+  | { action: "sshHosts" }
+  | { action: "sshStatus" }
   | { action: "models"; nodeId: string }
+  | { action: "images"; nodeId: string }
   | { action: "testNode"; nodeId: string }
   | { action: "testNode"; node: Omit<ComposeNode, "id"> & { id?: string } }
   | {

@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { getExecutionCapabilities } from '@craft-agent/shared/agent-compose/capabilities'
 import { useTranslation } from "react-i18next"
 import { toast } from 'sonner'
 import { checkAttachmentSizes, DEFAULT_MAX_MESSAGE_BYTES, formatAttachmentBytes, type AttachmentSizeInput, type AttachmentSizeProblem } from '@craft-agent/shared/protocol'
@@ -85,6 +86,8 @@ import { SendButton } from './SendButton'
 
 /** Platform-specific modifier key for keyboard shortcuts */
 const cmdKey = isMac ? '⌘' : 'Ctrl'
+const EMPTY_SOURCES: LoadedSource[] = []
+const EMPTY_SKILLS: LoadedSkill[] = []
 
 /** Default rotating placeholders are now generated inside FreeFormInput via useMemo + t() */
 
@@ -276,10 +279,10 @@ export function FreeFormInput({
   onHeightChange,
   maxHeight,
   onFocusChange,
-  sources = [],
+  sources = EMPTY_SOURCES,
   enabledSourceSlugs = [],
   onSourcesChange,
-  skills = [],
+  skills = EMPTY_SKILLS,
   labels = [],
   sessionLabels = [],
   onLabelAdd,
@@ -307,20 +310,6 @@ export function FreeFormInput({
   onRequestExpand,
 }: FreeFormInputProps) {
   const { t } = useTranslation()
-
-  // Default rotating placeholders for onboarding/empty state (i18n-aware). The keyboard tips are
-  // left out in compact (touch) layouts, where they are noise.
-  const defaultPlaceholders = React.useMemo(() => [
-    t("chatInput.placeholder.workOn"),
-    ...(compactMode ? [] : [t("chatInput.placeholder.shiftTab")]),
-    t("chatInput.placeholder.mention"),
-    t("chatInput.placeholder.labels"),
-    ...(compactMode ? [] : [
-      t("chatInput.placeholder.newLine"),
-      t("chatInput.placeholder.sidebar", { key: cmdKey }),
-      t("chatInput.placeholder.focusMode", { key: cmdKey }),
-    ]),
-  ], [t, compactMode])
 
   // Read connection default model, connections, and workspace info from context.
   // Uses optional variant so playground (no provider) doesn't crash.
@@ -414,6 +403,23 @@ export function FreeFormInput({
     if (!effectiveConnection) return null
     return llmConnections.find(c => c.slug === effectiveConnection) ?? null
   }, [llmConnections, effectiveConnection])
+
+  const execution = getExecutionCapabilities(effectiveConnectionDetails, workingDirectory)
+
+  // Default rotating placeholders for onboarding/empty state (i18n-aware). The keyboard tips are
+  // left out in compact (touch) layouts, where they are noise.
+  const defaultPlaceholders = React.useMemo(() => [
+    t("chatInput.placeholder.workOn"),
+    ...(!execution.permissions || compactMode ? [] : [t("chatInput.placeholder.shiftTab")]),
+    ...(execution.localTools ? [t("chatInput.placeholder.mention")] : []),
+    t("chatInput.placeholder.labels"),
+    ...(compactMode ? [] : [
+      t("chatInput.placeholder.newLine"),
+      t("chatInput.placeholder.sidebar", { key: cmdKey }),
+      t("chatInput.placeholder.focusMode", { key: cmdKey }),
+    ]),
+  ], [t, compactMode, execution.permissions, execution.localTools])
+
 
 
   // Access sessionStatuses and onSessionStatusChange from context for the # menu state picker
@@ -909,11 +915,12 @@ export function FreeFormInput({
   const [homeDir, setHomeDir] = React.useState<string>('')
 
   React.useEffect(() => {
+    if (!execution.localTools) { setRecentFolders([]); setHomeDir(''); return }
     setRecentFolders(getRecentWorkingDirs(workspaceId))
     window.electronAPI?.getHomeDir?.().then((dir: string) => {
       if (dir) setHomeDir(dir)
     })
-  }, [workspaceId])
+  }, [workspaceId, execution.localTools])
 
   // Inline slash command hook (modes, features, and folders); Guarded only while it is offered
   const availableModes = useAvailablePermissionModes(permissionMode)
@@ -937,6 +944,7 @@ export function FreeFormInput({
   } : undefined), [onWorkingDirectoryChange, workspaceId, sessionId, hasWorkingFolder, workingDirectory, pickCodingFolder])
   const inlineSlash = useInlineSlashCommand({
     inputRef: richInputRef,
+    enabled: execution.localTools,
     modes: availableModes,
     onSelectCommand: handleSlashCommand,
     onSelectFolder: handleSlashFolderSelect,
@@ -964,9 +972,9 @@ export function FreeFormInput({
   // Inline mention hook (for skills, sources, and files)
   const inlineMention = useInlineMention({
     inputRef: richInputRef,
-    skills,
-    sources,
-    basePath: workingDirectory,
+    skills: execution.localTools ? skills : EMPTY_SKILLS,
+    sources: execution.localTools ? sources : EMPTY_SOURCES,
+    basePath: execution.remote ? workingDirectory?.startsWith('/__agent_compose__/') ? workingDirectory : undefined : workingDirectory,
     onSelect: handleMentionSelect,
     // Use workspace slug (not UUID) for SDK skill qualification
     workspaceId: workspaceSlug,
@@ -1253,8 +1261,8 @@ export function FreeFormInput({
     }
 
     // Parse all @mentions (skills, sources, folders)
-    const skillSlugs = skills.map(s => s.slug)
-    const sourceSlugs = sources.map(s => s.config.slug)
+    const skillSlugs = execution.localTools ? skills.map(s => s.slug) : []
+    const sourceSlugs = execution.localTools ? sources.map(s => s.config.slug) : []
     const mentions = parseMentions(input, skillSlugs, sourceSlugs)
 
     // Enable any mentioned sources that aren't already enabled
@@ -1287,7 +1295,7 @@ export function FreeFormInput({
     })
 
     return true
-  }, [input, attachments, followUpItems, disabled, disableSend, onInputChange, onAttachmentsChange, onSubmit, skills, sources, optimisticSourceSlugs, onSourcesChange, onWorkingDirectoryChange, homeDir, showAttachmentSizeProblem])
+  }, [input, attachments, followUpItems, disabled, disableSend, onInputChange, onAttachmentsChange, onSubmit, skills, sources, optimisticSourceSlugs, onSourcesChange, onWorkingDirectoryChange, homeDir, showAttachmentSizeProblem, execution.localTools])
 
   // Listen for craft:submit-input events (simulate pressing the Send button)
   React.useEffect(() => {
@@ -1426,7 +1434,7 @@ export function FreeFormInput({
 
     // Sync source selection when mentions are removed from input
     if (onSourcesChange) {
-      const sourceSlugs = sources.map(s => s.config.slug)
+      const sourceSlugs = execution.localTools ? sources.map(s => s.config.slug) : []
 
       // Parse mentions from previous and current input
       const prevMentions = parseMentions(prevValue, [], sourceSlugs)
@@ -1440,7 +1448,7 @@ export function FreeFormInput({
         onSourcesChange(newSlugs)
       }
     }
-  }, [syncToParent, sources, optimisticSourceSlugs, onSourcesChange])
+  }, [syncToParent, sources, optimisticSourceSlugs, onSourcesChange, execution.localTools])
 
   // Handle input with cursor position (for menu detection)
   const handleRichInput = React.useCallback((value: string, cursorPosition: number) => {
@@ -1716,8 +1724,8 @@ export function FreeFormInput({
           }}
           placeholder={effectivePlaceholder}
           disabled={disabled}
-          skills={skills}
-          sources={sources}
+          skills={execution.localTools ? skills : EMPTY_SKILLS}
+          sources={execution.localTools ? sources : EMPTY_SOURCES}
           workspaceId={workspaceSlug}
           // Copy type (15/24; 16/26 in compact so iOS never zooms), placeholder in tertiary.
           // Narrow panels reserve two lines so a wrapped rotating tip is never clipped.
@@ -1778,10 +1786,10 @@ export function FreeFormInput({
           />
 
           {/* Source selector chip - only show if onSourcesChange is provided */}
-          {onSourcesChange && (
+          {execution.localTools && onSourcesChange && (
             <ComposerSourcesChip
               compact={compactMode}
-              sources={sources}
+              sources={execution.localTools ? sources : EMPTY_SOURCES}
               selectedSlugs={optimisticSourceSlugs}
               onToggleSlug={handleToggleSourceSlug}
               open={sourceDropdownOpen}
@@ -1792,8 +1800,10 @@ export function FreeFormInput({
             />
           )}
 
+          {execution.remote && <span className="truncate px-2 text-label-sm text-tertiary" title={t('settings.agentCompose.remoteExecutionDescription')}>{t('settings.agentCompose.remoteSandbox')}</span>}
+
           {/* Working directory chip */}
-          {onWorkingDirectoryChange && (compactMode ? (
+          {execution.workingDirectory && onWorkingDirectoryChange && (compactMode ? (
             <CompactWorkingDirectorySelector
               workingDirectory={workingDirectory}
               onWorkingDirectoryChange={onWorkingDirectoryChange}
@@ -1812,7 +1822,7 @@ export function FreeFormInput({
           ))}
 
           {/* Coding mode chip — next to the folder: the mode is about the folder's code */}
-          {!effectiveConnectionDetails?.compose && onCodingModeChange && onContinueWithCodingMode && (
+          {execution.codingMode && onCodingModeChange && onContinueWithCodingMode && (
             <ComposerCodingChip
               enabled={codingMode}
               locked={!isEmptySession}
@@ -1847,7 +1857,7 @@ export function FreeFormInput({
               never shrink, so Send stays inside the card (craft-agents-oss#798). The 4px inset
               keeps focus rings visible inside the clipping group. */}
           <div className="-m-1 flex min-w-0 shrink items-center gap-1 overflow-hidden p-1">
-          {!effectiveConnectionDetails?.compose && (compactMode
+          {execution.permissions && (compactMode
             ? onPermissionModeChange && (
               <CompactPermissionModeSelector
                 permissionMode={permissionMode}
@@ -1915,7 +1925,7 @@ export function FreeFormInput({
           </div>
 
           {/* Context usage meter. Percent text is truthful and may exceed 100%; action requires explicit canCompact. */}
-          {!effectiveConnectionDetails?.compose && <ContextUsageChip
+          {execution.compaction && <ContextUsageChip
             display={contextDisplay}
             labels={contextLabels}
             isProcessing={isProcessing}

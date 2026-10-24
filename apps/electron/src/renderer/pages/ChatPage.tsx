@@ -22,6 +22,7 @@ import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loaded
 import { getSessionTitle } from '@/utils/session'
 import { usePrWatch } from '@/hooks/usePrWatch'
 // Model resolution: connection.defaultModel (no hardcoded defaults)
+import { getExecutionCapabilities } from '@craft-agent/shared/agent-compose/capabilities'
 import { resolveEffectiveConnectionSlug, isSessionConnectionUnavailable } from '@config/llm-connections'
 
 export interface ChatPageProps {
@@ -291,6 +292,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
   // Effective model for this session (session-specific or global fallback)
   const effectiveModel = React.useMemo(() => {
+    const bound = llmConnections.find(connection => connection.slug === session?.llmConnection)
+    if (bound?.compose) return bound.defaultModel ?? session?.model ?? ''
     if (session?.model) return session.model
 
     // When connection is unavailable, don't resolve through a different connection
@@ -304,11 +307,14 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     return connection?.defaultModel ?? ''
   }, [session?.id, session?.model, session?.llmConnection, workspaceDefaultLlmConnection, llmConnections, connectionUnavailable])
 
+  const effectiveConnectionSlug = resolveEffectiveConnectionSlug(session?.llmConnection ?? sessionMeta?.llmConnection, workspaceDefaultLlmConnection, llmConnections)
+  const execution = getExecutionCapabilities(llmConnections.find(connection => connection.slug === effectiveConnectionSlug), session?.workingDirectory ?? sessionMeta?.workingDirectory)
+
   // Working directory for this session
-  const workingDirectory = session?.workingDirectory
+  const workingDirectory = execution.remote ? `/__agent_compose__/${sessionId}/workspace` : session?.workingDirectory
   // Coding mode's header PR chip: desktop only, with a folder. The chip itself renders only once that
   // folder is a git repo whose branch has a PR (see ChatHeaderPrChip).
-  const prWatch = usePrWatch(sessionId, !!sessionOpts.codingMode && !!workingDirectory && !isCompactMode, workingDirectory)
+  const prWatch = usePrWatch(sessionId, execution.codingMode && !!sessionOpts.codingMode && !!workingDirectory && !isCompactMode, workingDirectory)
   const activeWorkspace = React.useMemo(
     () => workspaces.find((w) => w.id === activeWorkspaceId) || null,
     [workspaces, activeWorkspaceId]
@@ -447,24 +453,24 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
               pendingCredential={undefined}
               onRespondToCredential={onRespondToCredential}
               thinkingLevel={sessionOpts.thinkingLevel}
-              onThinkingLevelChange={(level) => setOption('thinkingLevel', level)}
+              onThinkingLevelChange={execution.thinking ? (level) => setOption('thinkingLevel', level) : undefined}
               codingMode={sessionOpts.codingMode}
-              onCodingModeChange={(enabled) => setOption('codingMode', enabled)}
+              onCodingModeChange={execution.codingMode ? (enabled) => setOption('codingMode', enabled) : undefined}
               permissionMode={sessionOpts.permissionMode}
               previousPermissionMode={sessionOpts.previousPermissionMode}
-              onPermissionModeChange={setPermissionMode}
+              onPermissionModeChange={execution.permissions ? setPermissionMode : undefined}
               enabledModes={enabledModes}
               inputValue={inputValue}
               onInputChange={handleInputChange}
               attachmentsValue={attachmentsValue}
               onAttachmentsChange={handleAttachmentsChange}
-              sources={enabledSources}
-              skills={skills}
-              chatStarters={chatStarters}
+              sources={execution.localTools ? enabledSources : undefined}
+              skills={execution.localTools ? skills : undefined}
+              chatStarters={execution.localTools ? chatStarters : undefined}
               workspaceId={activeWorkspaceId || undefined}
-              onSourcesChange={(slugs) => onSessionSourcesChange?.(sessionId, slugs)}
+              onSourcesChange={execution.localTools ? (slugs) => onSessionSourcesChange?.(sessionId, slugs) : undefined}
               workingDirectory={sessionMeta.workingDirectory}
-              onWorkingDirectoryChange={handleWorkingDirectoryChange}
+              onWorkingDirectoryChange={execution.workingDirectory ? handleWorkingDirectoryChange : undefined}
               messagesLoading={messageLoadState.messagesLoading || (messagesRetrying && !messageLoadState.messagesReady)}
               messagesLoadError={messageLoadState.error}
               messagesRetrying={messagesRetrying}
@@ -526,26 +532,26 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
           pendingCredential={pendingCredential}
           onRespondToCredential={onRespondToCredential}
           thinkingLevel={sessionOpts.thinkingLevel}
-          onThinkingLevelChange={(level) => setOption('thinkingLevel', level)}
+          onThinkingLevelChange={execution.thinking ? (level) => setOption('thinkingLevel', level) : undefined}
           codingMode={sessionOpts.codingMode}
-          onCodingModeChange={(enabled) => setOption('codingMode', enabled)}
+          onCodingModeChange={execution.codingMode ? (enabled) => setOption('codingMode', enabled) : undefined}
           permissionMode={sessionOpts.permissionMode}
           previousPermissionMode={sessionOpts.previousPermissionMode}
-          onPermissionModeChange={setPermissionMode}
+          onPermissionModeChange={execution.permissions ? setPermissionMode : undefined}
           enabledModes={enabledModes}
           inputValue={inputValue}
           onInputChange={handleInputChange}
           attachmentsValue={attachmentsValue}
           onAttachmentsChange={handleAttachmentsChange}
-          sources={enabledSources}
-          skills={skills}
-          chatStarters={chatStarters}
+          sources={execution.localTools ? enabledSources : undefined}
+          skills={execution.localTools ? skills : undefined}
+          chatStarters={execution.localTools ? chatStarters : undefined}
           labels={labels}
           onLabelsChange={(newLabels) => onSessionLabelsChange?.(sessionId, newLabels)}
           workspaceId={activeWorkspaceId || undefined}
-          onSourcesChange={(slugs) => onSessionSourcesChange?.(sessionId, slugs)}
+          onSourcesChange={execution.localTools ? (slugs) => onSessionSourcesChange?.(sessionId, slugs) : undefined}
           workingDirectory={workingDirectory}
-          onWorkingDirectoryChange={handleWorkingDirectoryChange}
+          onWorkingDirectoryChange={execution.workingDirectory ? handleWorkingDirectoryChange : undefined}
           sessionFolderPath={session?.sessionFolderPath}
           messagesLoading={messageLoadState.messagesLoading || (messagesRetrying && !messageLoadState.messagesReady)}
           messagesLoadError={messageLoadState.error}

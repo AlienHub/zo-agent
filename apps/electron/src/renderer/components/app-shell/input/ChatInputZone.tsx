@@ -148,7 +148,7 @@ export function ChatInputZone({
         <ActiveOptionBadges
           // The permission-mode chip lives in the composer toolbar next to the model (spec §7.5).
           // A decision prompt replaces that toolbar, so the chip moves up here while one is shown.
-          showPermissionMode={!!inputProps.structuredInput}
+          showPermissionMode={!!inputProps.structuredInput && !!onPermissionModeChange}
           permissionMode={permissionMode}
           onPermissionModeChange={onPermissionModeChange}
           tasks={tasks}
@@ -185,7 +185,7 @@ export function ChatInputZone({
       </InputErrorBoundary>
 
       {/* Desktop shortcut hints: reserved height, shown while the composer has focus */}
-      {!compactMode && <ComposerHintLine empty={!!inputProps.structuredInput} />}
+      {!compactMode && <ComposerHintLine empty={!!inputProps.structuredInput} showPermissionHint={!!onPermissionModeChange} />}
     </div>
   )
 }

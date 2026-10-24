@@ -16,8 +16,10 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { Plus, RefreshCw, Pencil, Trash2, Bot, Server } from "lucide-react";
+import { Plus, RefreshCw, Pencil, Trash2, Bot, Server, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button, IconButton } from "@/components/ui/button";
 import {
   SettingsSection,
@@ -36,13 +38,19 @@ import {
 } from "@/components/ui/dialog";
 import type {
   ComposeAgent,
+  ComposeSshStatus,
   ComposeModelOption,
+  ComposeImageOption,
   ComposeConnectionTest,
   PublicComposeNode,
 } from "@craft-agent/shared/agent-compose/types";
 import type { ComposeRequest } from "@craft-agent/shared/agent-compose/api-types";
 
 const draftStorage = "zo.compose.agent-draft";
+// Native image references can be hundreds of characters: never size a menu from its content.
+const composeSelectContentClass = "w-[var(--radix-select-trigger-width)] min-w-0 max-w-[calc(100vw-2rem)] max-h-[min(20rem,var(--radix-select-content-available-height))] [&_[data-radix-select-viewport]]:min-w-0";
+// Keep the shared field material, with a quiet inset focus line inside these large editor panes.
+const agentTextareaClass = "rounded-xl p-3 [--focus-ring:var(--border-strong)] [--accent-tint:transparent]";
 function savedDraft(): any {
   try {
     return JSON.parse(localStorage.getItem(draftStorage) || "null");
@@ -78,15 +86,46 @@ export default function AgentComposeSettingsPage() {
     name: string;
     url: string;
     token: string;
+    ssh?: { host: string };
   } | null>(null);
+  const [connectionDialogContainer, setConnectionDialogContainer] = useState<HTMLFormElement | null>(null);
+  const [sshHosts, setSshHosts] = useState<string[]>([]);
+  const [sshStatuses, setSshStatuses] = useState<Record<string, ComposeSshStatus>>({});
+  useEffect(() => {
+    if (!form) return;
+    let active = true;
+    void window.electronAPI.agentCompose({ action: "sshHosts" })
+      .then((result) => { if (active) setSshHosts(result.sshHosts ?? []); }).catch(() => {});
+    return () => { active = false; };
+  }, [!!form]);
+  const hasSshNodes = nodes.some((node) => !!node.ssh);
+  useEffect(() => {
+    if (!hasSshNodes) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const update = async () => {
+      try {
+        if (document.visibilityState === "visible") {
+          const result = await window.electronAPI.agentCompose({ action: "sshStatus" });
+          if (active) setSshStatuses((previous) => {
+            const next = result.sshStatuses ?? {};
+            return JSON.stringify(previous) === JSON.stringify(next) ? previous : next;
+          });
+        }
+      } catch { /* transport reconnection is owned by the app */ }
+      finally { if (active) timer = setTimeout(() => void update(), 3000); }
+    };
+    void update();
+    return () => { active = false; clearTimeout(timer); };
+  }, [hasSshNodes]);
   const [testingKey, setTestingKey] = useState<string | null>(null);
-  const [nodeTests, setNodeTests] = useState<Record<string, { url: string; result: ComposeConnectionTest }>>({});
+  const [nodeTests, setNodeTests] = useState<Record<string, { url: string; sshHost?: string; result: ComposeConnectionTest }>>({});
   const [formTest, setFormTest] = useState<ComposeConnectionTest | null>(null);
   const formTestGeneration = useRef(0);
   useEffect(() => {
     formTestGeneration.current++;
     setFormTest(null);
-  }, [form?.id, form?.url, form?.token]);
+  }, [form?.id, form?.url, form?.token, form?.ssh?.host]);
   const connectionTestMessage = (result: ComposeConnectionTest) => result.ok
     ? t("settings.agentCompose.testConnected", { ms: result.latencyMs ?? 0 })
     : t(`settings.agentCompose.testError.${result.code}`);
@@ -106,7 +145,7 @@ export default function AgentComposeSettingsPage() {
     } catch {
       result = { ok: false, code: "server_error" };
     }
-    if (node) setNodeTests((previous) => ({ ...previous, [node.id]: { url: node.url, result } }));
+    if (node) setNodeTests((previous) => ({ ...previous, [node.id]: { url: node.url, sshHost: node.ssh?.host, result } }));
     else if (generation === formTestGeneration.current) setFormTest(result);
     setTestingKey(null);
   };
@@ -144,6 +183,32 @@ export default function AgentComposeSettingsPage() {
   const modelNodeId = creating?.nodeId ?? editing?.nodeId;
   const [modelOptions, setModelOptions] = useState<ComposeModelOption[]>([]);
   const [agentDialogContainer, setAgentDialogContainer] = useState<HTMLFormElement | null>(null);
+  const [imageOptions, setImageOptions] = useState<ComposeImageOption[]>([]);
+  const [imagesLoading, setImagesLoading] = useState(false);
+  const [imagesUnavailable, setImagesUnavailable] = useState(false);
+  const [manualImage, setManualImage] = useState(false);
+  const [imageRefresh, setImageRefresh] = useState(0);
+  useEffect(() => {
+    setManualImage(false);
+    setImageOptions([]);
+    setImagesUnavailable(false);
+    setImagesLoading(!!modelNodeId);
+    if (!modelNodeId) return;
+    let active = true;
+    void window.electronAPI.agentCompose({ action: "images", nodeId: modelNodeId })
+      .then((result) => {
+        if (!active) return;
+        setImageOptions(result.images ?? []);
+        setImagesUnavailable(!!result.imagesUnavailable);
+      })
+      .catch(() => { if (active) setImagesUnavailable(true); })
+      .finally(() => { if (active) setImagesLoading(false); });
+    return () => { active = false; };
+  }, [modelNodeId, imageRefresh]);
+  const selectedImageOptions = image && !imageOptions.some((option) => option.ref === image)
+    ? [{ ref: image, local: false, usedByPi: false }, ...imageOptions]
+    : imageOptions;
+  const canInheritImage = !!creating && agents.some((agent) => agent.nodeId === creating.nodeId && agent.provider === "pi");
   const [modelsLoading, setModelsLoading] = useState(false);
   const [manualModel, setManualModel] = useState(false);
   const [catalogUnavailable, setCatalogUnavailable] = useState(false);
@@ -179,12 +244,12 @@ export default function AgentComposeSettingsPage() {
       return result;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      setError(message);
+      setError(t(`settings.agentCompose.testError.${message}`, { defaultValue: message }));
       throw e;
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [t]);
   useEffect(() => {
     void request({ action: "list" }).catch(() => {});
   }, [request]);
@@ -290,7 +355,11 @@ export default function AgentComposeSettingsPage() {
       cell: ({ row }) => (
         <div className={`${cellClass} break-all text-secondary`}>
           {row.original.url}
-          {nodeTests[row.original.id]?.url === row.original.url && (
+          {row.original.ssh && <div role="status" className="mt-1 text-label-sm text-tertiary">
+            SSH · {row.original.ssh.host} · {label(`sshState.${sshStatuses[row.original.id]?.state ?? "idle"}`)}
+            {sshStatuses[row.original.id]?.error && <span className="block text-destructive">{label(`testError.${sshStatuses[row.original.id]!.error}`)}</span>}
+          </div>}
+          {nodeTests[row.original.id]?.url === row.original.url && nodeTests[row.original.id]?.sshHost === row.original.ssh?.host && (!row.original.ssh || sshStatuses[row.original.id]?.state === "connected") && (
             <div role="status" className={`mt-1 text-label-sm ${nodeTests[row.original.id]!.result.ok ? "text-secondary" : "text-destructive"}`}>
               {connectionTestMessage(nodeTests[row.original.id]!.result)}
             </div>
@@ -318,7 +387,7 @@ export default function AgentComposeSettingsPage() {
           <IconButton
             aria-label={`${label("editServer")} ${row.original.name}`}
             disabled={busy}
-            onClick={() => setForm({ id: row.original.id, name: row.original.name, url: row.original.url, token: "" })}
+            onClick={() => setForm({ id: row.original.id, name: row.original.name, url: row.original.url, token: "", ssh: row.original.ssh })}
             icon={<Pencil className="size-3.5" />}
           />
         </div>
@@ -389,6 +458,7 @@ export default function AgentComposeSettingsPage() {
             onClick={() => {
               const agent = row.original;
               setEditing(agent);
+              setImage(String(agent.spec.image || ""));
               setAgentForm({
                 name: agent.name,
                 description: String(agent.spec.description || ""),
@@ -512,6 +582,7 @@ export default function AgentComposeSettingsPage() {
             <DialogDescription>{label("tokenDescription")}</DialogDescription>
           </DialogHeader>
           <form
+            ref={setConnectionDialogContainer}
             onSubmit={(e) => {
               e.preventDefault();
               if (form)
@@ -533,10 +604,28 @@ export default function AgentComposeSettingsPage() {
                 }
               />
             </label>
+            <div className="space-y-1">
+              <span className="text-sm" id="compose-transport-label">{label("connectionType")}</span>
+              <Select value={form?.ssh ? "ssh" : "direct"} onValueChange={(value) => setForm((v) => v ? { ...v, ssh: value === "ssh" ? { host: "" } : undefined, url: value === "ssh" && !v.url ? "http://127.0.0.1:8080" : v.url } : v)}>
+                <SelectTrigger aria-labelledby="compose-transport-label" className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent container={connectionDialogContainer}><SelectItem value="direct">{label("directConnection")}</SelectItem><SelectItem value="ssh">{label("sshConnection")}</SelectItem></SelectContent>
+              </Select>
+            </div>
+            {form?.ssh && <label className="block text-sm space-y-1">
+              <span>{label("sshHost")}</span>
+              <div className="relative">
+                <Input list="compose-ssh-hosts" placeholder="my-server" value={form.ssh.host}
+                  className="pr-9 [&::-webkit-calendar-picker-indicator]:opacity-0"
+                  onChange={(event) => setForm((v) => v?.ssh ? { ...v, ssh: { host: event.target.value } } : v)} />
+                {sshHosts.length > 0 && <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-tertiary" />}
+              </div>
+              <datalist id="compose-ssh-hosts">{sshHosts.map((host) => <option key={host} value={host} />)}</datalist>
+              <span className="block text-label-sm text-secondary">{label("sshDescription")}</span>
+            </label>}
             <label className="block text-sm space-y-1">
-              <span>{label("url")}</span>
+              <span>{label(form?.ssh ? "sshDaemonUrl" : "url")}</span>
               <SettingsInput
-                placeholder="http://192.168.1.10:8080"
+                placeholder={form?.ssh ? "http://127.0.0.1:8080" : "http://192.168.1.10:8080"}
                 value={form?.url || ""}
                 onChange={(value) =>
                   setForm((v) => (v ? { ...v, url: value } : v))
@@ -599,7 +688,7 @@ export default function AgentComposeSettingsPage() {
           }
         }}
       >
-        <DialogContent>
+        <DialogContent className={creating ? "flex max-h-[88vh] flex-col overflow-hidden sm:max-w-[1020px]" : "flex max-h-[88vh] flex-col overflow-hidden sm:max-w-xl"}>
           <DialogHeader>
             <DialogTitle>
               {label(creating ? "createAgent" : "editAgent")}
@@ -608,7 +697,7 @@ export default function AgentComposeSettingsPage() {
           </DialogHeader>
           <form
             ref={setAgentDialogContainer}
-            className="space-y-4"
+            className="flex min-h-0 min-w-0 w-full flex-1 flex-col gap-4"
             onSubmit={(e) => {
               e.preventDefault();
               const input: ComposeRequest | null = creating
@@ -616,7 +705,7 @@ export default function AgentComposeSettingsPage() {
                     action: "createAgent",
                     ...creating,
                     ...agentForm,
-                    image: image || undefined,
+                    image: image.trim() || undefined,
                   }
                 : editing
                   ? {
@@ -630,6 +719,7 @@ export default function AgentComposeSettingsPage() {
                         model: agentForm.model,
                         systemPrompt: agentForm.systemPrompt,
                         enabled: agentForm.enabled,
+                        ...(image.trim() ? { image: image.trim() } : {}),
                       },
                     }
                   : null;
@@ -646,17 +736,30 @@ export default function AgentComposeSettingsPage() {
                   .catch(() => {});
             }}
           >
+            <div className={creating ? "grid min-h-0 min-w-0 w-full flex-1 gap-5 overflow-y-auto md:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] md:overflow-hidden" : "min-h-0 min-w-0 w-full overflow-y-auto"}>
             {creating && (
-              <div className="space-y-2">
-                <SettingsInput
-                  label={label("purpose")}
-                  value={purpose}
-                  onChange={setPurpose}
-                />
+              <section className="flex min-h-0 min-w-0 flex-col gap-4 md:overflow-y-auto md:border-r md:border-border/50 md:pr-5">
+                {nodes.length > 1 && <div className="space-y-1.5">
+                  <label id="compose-create-server-label" className="text-sm">{label("servers")}</label>
+                  <Select value={creating.nodeId} disabled={busy || generating} onValueChange={(nodeId) => {
+                    setCreating((previous) => previous ? { ...previous, nodeId } : previous);
+                    setImage("");
+                    setAgentForm((previous) => ({ ...previous, model: agents.find((agent) => agent.nodeId === nodeId && agent.provider === "pi")?.model || "" }));
+                  }}>
+                    <SelectTrigger aria-labelledby="compose-create-server-label"><SelectValue /></SelectTrigger>
+                    <SelectContent container={agentDialogContainer} className={composeSelectContentClass}>
+                      {nodes.map((node) => <SelectItem key={node.id} value={node.id}>{node.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>}
+                <label htmlFor="compose-agent-purpose" className="text-sm font-medium">{label("purpose")}</label>
+                <Textarea id="compose-agent-purpose" style={{ fieldSizing: "fixed" }} className={`${agentTextareaClass} min-h-40 flex-1 resize-none md:min-h-56`}
+                  placeholder={label("purposePlaceholder")} value={purpose} disabled={generating || busy}
+                  onChange={(event) => setPurpose(event.target.value)} />
                 {draftConnections.length > 1 ? (
                   <Select value={draftConnection?.slug} onValueChange={setDraftConnectionSlug} disabled={generating}>
                     <SelectTrigger aria-label={label("draftConnection")}><SelectValue /></SelectTrigger>
-                    <SelectContent container={agentDialogContainer}>
+                    <SelectContent container={agentDialogContainer} className={composeSelectContentClass}>
                       {draftConnections.map((connection) => <SelectItem key={connection.slug} value={connection.slug}>{connection.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
@@ -703,27 +806,10 @@ export default function AgentComposeSettingsPage() {
                     </Button>
                   )}
                 </div>
-              </div>
+              </section>
             )}
-            {creating && nodes.length > 1 && (
-              <Select
-                value={creating.nodeId}
-                onValueChange={(value) =>
-                  setCreating((v) => (v ? { ...v, nodeId: value } : v))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent container={agentDialogContainer}>
-                  {nodes.map((node) => (
-                    <SelectItem key={node.id} value={node.id}>
-                      {node.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
+            <section className="min-w-0 space-y-4 md:overflow-y-auto md:pr-1">
+              {creating && <h3 className="text-sm font-medium">{label("configuration")}</h3>}
             {(["name", "description"] as const).map((key) => (
               <label key={key} className="block text-sm space-y-1">
                 <span>
@@ -753,9 +839,9 @@ export default function AgentComposeSettingsPage() {
                 <SelectTrigger aria-labelledby="compose-agent-model-label" className="w-full">
                   <SelectValue placeholder={label(modelsLoading ? "loadingModels" : "selectModel")} />
                 </SelectTrigger>
-                <SelectContent container={agentDialogContainer}>
+                <SelectContent container={agentDialogContainer} className={composeSelectContentClass}>
                   {selectedModelOptions.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>
+                    <SelectItem key={model.id} value={model.id} title={model.name} className="min-w-0 [&>span:last-child]:min-w-0 [&>span:last-child]:truncate">{model.name}</SelectItem>
                   ))}
                   <SelectItem value="__zo_custom_model__">{label("customModel")}</SelectItem>
                 </SelectContent>
@@ -770,22 +856,46 @@ export default function AgentComposeSettingsPage() {
             </div>
             <label className="block text-sm space-y-1">
               <span>{label("systemPrompt")}</span>
-              <textarea
-                className="w-full rounded-lg border bg-background p-3 text-sm min-h-32"
+              <Textarea
+                style={{ fieldSizing: "fixed" }}
+                aria-label={label("systemPrompt")}
+                className={`${agentTextareaClass} min-h-40 resize-y`}
                 value={agentForm.systemPrompt}
                 onChange={(e) =>
                   setAgentForm((v) => ({ ...v, systemPrompt: e.target.value }))
                 }
               />
             </label>
-            {creating && (
-              <SettingsInput
-                label={label("image")}
-                description={label("imageDescription")}
-                value={image}
-                onChange={setImage}
-              />
-            )}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <label id="compose-agent-image-label" className="text-sm">{label("image")}</label>
+                <IconButton type="button" aria-label={label("refreshImages")} disabled={busy || imagesLoading} onClick={() => setImageRefresh((value) => value + 1)} icon={<RefreshCw className={`size-3.5 ${imagesLoading ? "animate-spin" : ""}`} />} />
+              </div>
+              <Select value={manualImage ? "__zo_custom_image__" : image || (canInheritImage ? "__zo_inherit_image__" : "")} disabled={busy || imagesLoading}
+                onValueChange={(value) => {
+                  setManualImage(value === "__zo_custom_image__");
+                  if (value !== "__zo_custom_image__") setImage(value === "__zo_inherit_image__" ? "" : value);
+                }}>
+                <SelectTrigger aria-labelledby="compose-agent-image-label" title={image || undefined} className="w-full min-w-0 [&>span]:min-w-0 [&>span]:truncate [&>svg]:shrink-0">
+                  <SelectValue placeholder={label(imagesLoading ? "loadingImages" : "selectImage")}>
+                    {manualImage ? label("customImage") : image || (canInheritImage ? label("inheritImage") : undefined)}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent container={agentDialogContainer} className={composeSelectContentClass}>
+                  {canInheritImage && <SelectItem value="__zo_inherit_image__">{label("inheritImage")}</SelectItem>}
+                  {selectedImageOptions.map((option) => <SelectItem key={option.ref} value={option.ref} textValue={option.ref} title={option.ref}
+                    className="min-w-0 [&>span:last-child]:min-w-0 [&>span:last-child]:flex-1">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate">{option.ref}</span>
+                      {(option.usedByPi || option.platform) && <span className="shrink-0 text-xs text-tertiary">{option.usedByPi ? label("piImage") : option.platform}</span>}
+                    </span>
+                  </SelectItem>)}
+                  <SelectItem value="__zo_custom_image__">{label("customImage")}</SelectItem>
+                </SelectContent>
+              </Select>
+              {manualImage && <SettingsInput aria-label={label("customImage")} placeholder={label("imageReference")} value={image} onChange={setImage} />}
+              <p role={imagesUnavailable ? "status" : undefined} className="text-label-sm text-tertiary">{label(imagesUnavailable ? "imageCatalogUnavailable" : imageOptions.length ? "imageDescription" : "noImages")}</p>
+            </div>
             <SettingsToggle
               label={label("enabled")}
               inCard={false}
@@ -793,6 +903,8 @@ export default function AgentComposeSettingsPage() {
               disabled={busy}
               onCheckedChange={(enabled) => setAgentForm((form) => ({ ...form, enabled }))}
             />
+            </section>
+            </div>
             {error && (
               <p role="alert" className="text-sm text-destructive">
                 {error}
@@ -804,7 +916,9 @@ export default function AgentComposeSettingsPage() {
                   busy ||
                   generating ||
                   !agentForm.name.trim() ||
-                  !agentForm.model.trim()
+                  !agentForm.model.trim() ||
+                  (manualImage && !image.trim()) ||
+                  (!!creating && !canInheritImage && !image.trim())
                 }
                 type="submit"
               >

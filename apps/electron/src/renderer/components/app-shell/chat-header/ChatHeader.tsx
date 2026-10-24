@@ -13,7 +13,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSetAtom } from 'jotai'
-import { Info, MoreHorizontal, Pencil, FolderOpen } from 'lucide-react'
+import { Info, MoreHorizontal, Pencil, FolderOpen, Bot } from 'lucide-react'
 import { WorkingDirectoryPanel } from '../WorkingDirectoryPanel'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { PanelHeaderCenterButton } from '@/components/ui/PanelHeaderCenterButton'
@@ -237,8 +237,8 @@ export const ChatHeader = React.memo(function ChatHeader({
       </h1>
       {/* Truncates first: the title keeps its room until the meta has none left */}
       {meta && !compact && (
-        <span className="min-w-0 shrink-[100] truncate text-label-sm text-tertiary" title={workingDirectory}>
-          {meta}
+        <span className="min-w-0 shrink-[100] truncate text-label-sm text-tertiary" title={workingDirectory?.startsWith('/__agent_compose__/') ? t('settings.agentCompose.remoteExecutionDescription') : workingDirectory}>
+          {workingDirectory?.startsWith('/__agent_compose__/') ? 'Agent Compose' : meta}
         </span>
       )}
       {showPrChip && prWatch && (
@@ -260,6 +260,7 @@ export const ChatHeader = React.memo(function ChatHeader({
   const moreLabel = t('session.actionsFor', { title })
   const actions = (
     <div className="flex items-center gap-1">
+      {workingDirectory?.startsWith("/__agent_compose__/") && <PanelHeaderCenterButton icon={<Bot className="h-4 w-4" />} aria-label={t('settings.agentCompose.configureRemoteAgent')} tooltip={t('settings.agentCompose.configureRemoteAgent')} onClick={() => void navigate(routes.view.settings('agent-compose'))} />}
       {workingDirectory?.startsWith("/__agent_compose__/") && (
         <Popover open={sandboxFilesOpen} onOpenChange={setSandboxFilesOpen}>
           <PopoverTrigger asChild>

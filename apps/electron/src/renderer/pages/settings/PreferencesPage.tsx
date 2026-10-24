@@ -188,7 +188,7 @@ export default function PreferencesPage() {
   return (
     <SettingsPage
       title={t("settings.preferences.title")}
-      description={t("settings.preferences.description")}
+      description={<>{t("settings.preferences.description")}<br />{t("settings.agentCompose.localPreferencesScope")}</>}
       actions={<HeaderMenu route={routes.view.settings('preferences')} helpFeature="preferences" />}
     >
       {/* Basic Info */}

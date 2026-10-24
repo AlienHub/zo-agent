@@ -1,3 +1,5 @@
+import { getExecutionCapabilities } from '@craft-agent/shared/agent-compose/capabilities'
+import { composeSshTunnels } from '@craft-agent/shared/agent-compose/ssh'
 import { ComposeAgentBackend } from '@craft-agent/shared/agent-compose/agent'
 import { readState as readComposeState } from '@craft-agent/shared/agent-compose/store'
 import { expandEnvVars, parsePromptReferences, executeWithRetry, createWebhookHistoryEntry } from '@craft-agent/shared/automations';
@@ -1157,6 +1159,10 @@ function resolveSupportsBranching(managed: ManagedSession): boolean {
 
   if (getLlmConnection(managed.llmConnection || '')?.compose) return false
   return true // default: branching enabled for all backends
+}
+
+function remoteConfigurationError() {
+  return new Error(i18n.t('settings.agentCompose.remoteControlled') || 'Agent Compose controls this setting. Change it in Settings → Agent Compose.')
 }
 
 const DEFAULT_TOKEN_USAGE = {
@@ -2366,7 +2372,7 @@ export class SessionManager implements ISessionManager {
    * If agent is null (session hasn't sent any messages), skip - fresh build happens on next message.
    */
   private async reloadSessionSources(managed: ManagedSession): Promise<void> {
-    if (!managed.agent) return  // No agent = nothing to update (fresh build on next message)
+    if (!managed.agent || !this.sessionExecutionCapabilities(managed).localTools) return
 
     const workspaceRootPath = managed.workspace.rootPath
     sessionLog.info(`Reloading sources for session ${managed.id}`)
@@ -4434,7 +4440,7 @@ export class SessionManager implements ISessionManager {
 
       const sessionPath = getSessionStoragePath(managed.workspace.rootPath, managed.id)
       const enabledSlugs = managed.enabledSourceSlugs || []
-      const allSources = loadAllSources(managed.workspace.rootPath)
+      const allSources = connection?.compose ? [] : loadAllSources(managed.workspace.rootPath)
       const enabledSources = allSources.filter(s =>
         enabledSlugs.includes(s.config.slug) && isSourceUsable(s)
       )
@@ -4447,7 +4453,7 @@ export class SessionManager implements ISessionManager {
 
       // Backends that run as external subprocesses need an HTTP pool server
       let poolServerUrl: string | undefined
-      if (backendContext.capabilities.needsHttpPoolServer) {
+      if (backendContext.capabilities.needsHttpPoolServer && !connection?.compose) {
         managed.poolServer = new McpPoolServer(managed.mcpPool, { debug: (msg) => sessionLog.debug(msg) })
         managed.mcpPool.onToolsChanged = () => managed.poolServer?.notifyToolsChanged()
         poolServerUrl = await managed.poolServer.start()
@@ -5918,10 +5924,22 @@ export class SessionManager implements ISessionManager {
       throw new Error(`LLM connection "${connectionSlug}" not found`)
     }
 
+    const previousWorkingDirectory = managed.workingDirectory
+    if (connection.compose) {
+      managed.workingDirectory = `/__agent_compose__/${sessionId}/workspace`
+      managed.model = connection.defaultModel
+    } else if (managed.workingDirectory?.startsWith('/__agent_compose__/')) {
+      managed.workingDirectory = loadWorkspaceConfig(managed.workspace.rootPath)?.defaults?.workingDirectory || getSessionStoragePath(managed.workspace.rootPath, sessionId)
+    }
+    if (!managed.agent && !managed.sdkSessionId && managed.workingDirectory) managed.sdkCwd = managed.workingDirectory
     managed.llmConnection = connectionSlug
     // Persist in-memory state directly to avoid race with pending queue writes
     this.persistSession(managed)
     await this.flushSession(managed.id)
+    if (previousWorkingDirectory !== managed.workingDirectory) {
+      this.sendEvent({ type: 'working_directory_changed', sessionId, workingDirectory: managed.workingDirectory! }, managed.workspace.id)
+    }
+    if (connection.compose) this.sendEvent({ type: 'session_model_changed', sessionId, model: managed.model ?? null }, managed.workspace.id)
     sessionLog.info(`Set LLM connection for session ${sessionId} to ${connectionSlug}`)
 
     // Notify UI that connection changed (triggers capabilities refresh)
@@ -6210,6 +6228,20 @@ export class SessionManager implements ISessionManager {
   // Session Sources
   // ============================================
 
+  private sessionExecutionCapabilities(managed: ManagedSession) {
+    if (managed.workingDirectory?.startsWith('/__agent_compose__/')) return getExecutionCapabilities(undefined, managed.workingDirectory)
+    const connection = managed.llmConnection
+      ? getLlmConnection(managed.llmConnection)
+      : resolveSessionConnection(undefined, loadWorkspaceConfig(managed.workspace.rootPath)?.defaults?.defaultLlmConnection)
+    return getExecutionCapabilities(connection)
+  }
+
+  private assertLocalSessionSetting(managed: ManagedSession) {
+    if (!this.sessionExecutionCapabilities(managed).localTools) {
+      throw remoteConfigurationError()
+    }
+  }
+
   /**
    * Update session's enabled sources
    * If agent exists, builds and applies servers immediately.
@@ -6220,6 +6252,8 @@ export class SessionManager implements ISessionManager {
     if (!managed) {
       throw new Error(`Session not found: ${sessionId}`)
     }
+
+    this.assertLocalSessionSetting(managed)
 
     const workspaceRootPath = managed.workspace.rootPath
     sessionLog.info(`Setting sources for session ${sessionId}:`, sourceSlugs)
@@ -6572,6 +6606,7 @@ export class SessionManager implements ISessionManager {
   updateWorkingDirectory(sessionId: string, path: string): void {
     const managed = this.sessions.get(sessionId)
     if (managed) {
+      this.assertLocalSessionSetting(managed)
       const validation = isValidWorkingDirectory(path)
       if (!validation.valid) {
         sessionLog.warn(`Session ${sessionId}: rejected working directory "${path}" — ${validation.reason}`)
@@ -6626,6 +6661,14 @@ export class SessionManager implements ISessionManager {
     sessionLog.info(`[updateSessionModel] sessionId=${sessionId}, model=${model}, connection=${connection}`)
     const managed = this.sessions.get(sessionId)
     if (managed) {
+      const targetConnection = connection && !managed.connectionLocked
+        ? getLlmConnection(connection)
+        : managed.llmConnection ? getLlmConnection(managed.llmConnection) : resolveSessionConnection(undefined, loadWorkspaceConfig(managed.workspace.rootPath)?.defaults?.defaultLlmConnection)
+      const switchingToLocal = !!connection && !managed.connectionLocked && !!targetConnection && !targetConnection.compose
+      if (!switchingToLocal && getExecutionCapabilities(targetConnection, managed.workingDirectory).remote
+          && (!targetConnection?.compose || model !== targetConnection.defaultModel)) {
+        throw remoteConfigurationError()
+      }
       managed.model = model ?? undefined
       // Also update connection if provided and not already locked
       if (connection && !managed.connectionLocked) {
@@ -6638,7 +6681,7 @@ export class SessionManager implements ISessionManager {
       }
       await updateSessionMetadata(managed.workspace.rootPath, sessionId, updates)
       // Update agent model if it already exists (takes effect on next query)
-      if (managed.agent) {
+      if (managed.agent && !targetConnection?.compose) {
         // Fallback chain: session model > workspace default > connection default
         const wsConfig = loadWorkspaceConfig(managed.workspace.rootPath)
         const sessionConn = resolveSessionConnection(managed.llmConnection, wsConfig?.defaults?.defaultLlmConnection)
@@ -6972,6 +7015,9 @@ export class SessionManager implements ISessionManager {
     if (!managed) {
       throw new Error(`Session ${sessionId} not found`)
     }
+    if ((options?.skillSlugs?.length || /^\/compact(?:\s|$)/i.test(message.trim())) && !this.sessionExecutionCapabilities(managed).localTools) {
+      throw remoteConfigurationError()
+    }
     this.setLastMessageClientId(sessionId, rpcContext?.callerClientId)
 
     // Source-activation auto-retry dedup (craft-agents-oss#804). When the server
@@ -7234,7 +7280,7 @@ export class SessionManager implements ISessionManager {
     // Pre-enable sources required by invoked skills (Issue #249)
     // This eliminates the two-turn penalty where the agent discovers missing sources at runtime.
     // Uses targeted loadSkillBySlug() instead of loadAllSkills() to avoid O(N) filesystem scans.
-    if (options?.skillSlugs?.length) {
+    if (options?.skillSlugs?.length && this.sessionExecutionCapabilities(managed).localTools) {
       try {
         const workspaceRoot = managed.workspace.rootPath
 
@@ -7296,7 +7342,7 @@ export class SessionManager implements ISessionManager {
     const sendSpan = perf.span('session.sendMessage', { sessionId })
 
     const workspaceRootPath = managed.workspace.rootPath
-    const enabledSlugs = managed.enabledSourceSlugs ?? []
+    const enabledSlugs = this.sessionExecutionCapabilities(managed).localTools ? managed.enabledSourceSlugs ?? [] : []
     const hasSources = enabledSlugs.length > 0
 
     // Load enabled sources up-front so we can refresh tokens BEFORE getOrCreateAgent
@@ -7324,7 +7370,7 @@ export class SessionManager implements ISessionManager {
     sendSpan.mark('agent.ready')
 
     // Always set all sources for context (even if none are enabled), including built-ins
-    const allSources = loadAllSources(workspaceRootPath)
+    const allSources = agent instanceof ComposeAgentBackend ? [] : loadAllSources(workspaceRootPath)
     agent.setAllSources(allSources)
     sendSpan.mark('sources.loaded')
 
@@ -8411,6 +8457,7 @@ export class SessionManager implements ISessionManager {
   setSessionPermissionMode(sessionId: string, mode: PermissionMode): void {
     const managed = this.sessions.get(sessionId)
     if (managed) {
+      this.assertLocalSessionSetting(managed)
       const previousManagedMode = managed.permissionMode ?? 'ask'
       const diagnosticsBefore = getPermissionModeDiagnostics(sessionId)
       const previousEffectiveMode = diagnosticsBefore.permissionMode
@@ -8842,6 +8889,7 @@ export class SessionManager implements ISessionManager {
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void {
     const managed = this.sessions.get(sessionId)
     if (managed) {
+      this.assertLocalSessionSetting(managed)
       // Update thinking level in managed session
       managed.thinkingLevel = level
 
@@ -8863,6 +8911,7 @@ export class SessionManager implements ISessionManager {
    */
   setSessionCodingMode(sessionId: string, enabled: boolean): void {
     const managed = this.sessions.get(sessionId)
+    if (managed) this.assertLocalSessionSetting(managed)
     if (!managed || !!managed.codingMode === enabled) return
     if (hasConversationStarted(managed)) {
       throw new Error('Coding mode is fixed once a session has messages. Continue in a new session to switch it.')
@@ -10564,6 +10613,8 @@ export class SessionManager implements ISessionManager {
   cleanup(): void {
     sessionLog.info('Cleaning up resources...')
     for(const managed of this.sessions.values()) if(managed.agent instanceof ComposeAgentBackend) managed.agent.destroy()
+
+    composeSshTunnels.closeAll()
 
     // Stop all ConfigWatchers (file system watchers)
     for (const [path, watcher] of this.configWatchers) {

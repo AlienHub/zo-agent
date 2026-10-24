@@ -48,6 +48,7 @@ import {
   SettingsToggle,
   SettingsInput,
 } from '@/components/settings'
+import { RemoteAgentSettingsRow } from '@/components/settings/RemoteAgentSettingsRow'
 import { settingsUI } from '@/components/settings/SettingsUIConstants'
 import { useOnboarding } from '@/hooks/useOnboarding'
 import { RtkUpdateDialog, type RtkStatusInfo } from '@/components/RtkUpdateDialog'
@@ -533,10 +534,10 @@ function WorkspaceOverrideCard({ workspace, llmConnections, onSettingsChange }: 
       const conn = llmConnections.find(c => c.slug === settings.defaultLlmConnection)
       parts.push(conn?.name || settings.defaultLlmConnection)
     }
-    if (settings?.model) {
+    if (settings?.model && !workspaceEffectiveConnection?.compose) {
       parts.push(getModelShortName(settings.model))
     }
-    if (settings?.thinkingLevel) {
+    if (settings?.thinkingLevel && !workspaceEffectiveConnection?.compose) {
       const level = THINKING_LEVELS.find(l => l.id === settings.thinkingLevel)
       parts.push(level ? t(level.nameKey) : settings.thinkingLevel)
     }
@@ -601,6 +602,7 @@ function WorkspaceOverrideCard({ workspace, llmConnections, onSettingsChange }: 
                   })),
                 ]}
               />
+              {workspaceEffectiveConnection?.compose ? <RemoteAgentSettingsRow model={workspaceEffectiveConnection.defaultModel} /> : <>
               <SettingsMenuSelectRow
                 label={t("settings.ai.model")}
                 description={t("settings.ai.modelDesc")}
@@ -627,6 +629,7 @@ function WorkspaceOverrideCard({ workspace, llmConnections, onSettingsChange }: 
                   })),
                 ]}
               />
+              </>}
             </div>
       </AnimatedCollapsibleContent>
     </div>
@@ -1557,7 +1560,7 @@ export default function AiSettingsPage() {
     return (
       <SettingsPage
         title={t("settings.ai.title")}
-        description={t("settings.ai.description")}
+        description={<>{t("settings.ai.description")}<br />{t("settings.agentCompose.localSettingsScope")}</>}
         actions={<HeaderMenu route={routes.view.settings('ai')} />}
       >
         <div role="status" aria-label={t('common.loading')} className="space-y-6">
@@ -1572,7 +1575,7 @@ export default function AiSettingsPage() {
   return (
     <SettingsPage
       title={t("settings.ai.title")}
-      description={t("settings.ai.description")}
+      description={<>{t("settings.ai.description")}<br />{t("settings.agentCompose.localSettingsScope")}</>}
       actions={<HeaderMenu route={routes.view.settings('ai')} />}
     >
       {/* Credential Health Warning Banner */}
@@ -1599,6 +1602,7 @@ export default function AiSettingsPage() {
                            conn.providerType || 'Unknown',
             }))}
           />
+          {defaultConnection?.compose ? <RemoteAgentSettingsRow model={defaultConnection.defaultModel} /> : <>
           <SettingsMenuSelectRow
             label={t("settings.ai.model")}
             description={t("settings.ai.modelDesc")}
@@ -1619,6 +1623,7 @@ export default function AiSettingsPage() {
               description: t(descriptionKey),
             }))}
           />
+          </>}
         </SettingsCard>
       </SettingsSection>
       )}

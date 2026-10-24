@@ -18,7 +18,17 @@ The local daemon at revision `3d602e46` needs the compatibility patch in `patche
 
 The remote agent currently owns its model and runtime permissions. Change its model in the Agent Compose section; Zo reads the effective model before submitting a run. This adapter supports Pi agents. Other native agent types can be listed and managed but are not presented as compatible chat connections.
 
+The native image picker reads `ImageService/ListImages` from the selected server and retains image references already configured on its Pi agents. Images already used by Pi are listed first; the image catalog does not verify Pi compatibility. Custom references remain available for registries, empty inventories and older daemons. Refresh images after pulling or building an image on the server. Image labels and registry metadata stay server-side. Saving an edited image updates that native agent’s shared runtime configuration.
+
+## Execution settings
+
+Compose conversations use the native agent's server-side model, prompt, runtime, tools and permissions. Zo hides local permission modes, working-directory selection, Coding mode, local source/skill pickers, local slash-command menus, manual compaction and background-command shortcuts. Attachments, sandbox file browsing, status/labels and ordinary chat display remain available. The sandbox header links to the native agent settings.
+
+Local performance, permissions, workspace execution defaults and personal preferences are marked as local settings; they are not synchronized into Compose agents. AI defaults and workspace overrides show the remote model and a management link instead of local model/thinking editors when a Compose connection is selected. Existing saved local settings remain intact for local sessions. Unsupported remote-session mutations fail before persistence, including a missing connection with a retained sandbox identity. Old local source metadata on remote sessions is ignored rather than initializing local MCP integrations.
+
 ## Draft an agent with Zo
+
+The creation dialog places the requirements and drafting connection on the left and the editable native configuration on the right. Narrow windows stack the panels and keep Save reachable.
 
 In **Settings → Agent Compose → Create agent**, describe its purpose and choose **Draft with Zo**. Drafting uses an authenticated native Zo AI connection (workspace/global default preferred). Compose-bound connections are excluded. When multiple Zo connections are available, choose the drafting connection separately from the target agent model. Without a signed-in Zo connection, the form links to AI settings and still permits manual configuration.
 
@@ -53,3 +63,14 @@ The server defaults to loopback port 9100. Set `CRAFT_RPC_HOST=0.0.0.0` to liste
 `bun run app:package:mac` builds a macOS Apple Silicon DMG without credential synchronization or publishing. It verifies the signed application before creating the image and clears its staging directory between runs. Local builds use ad-hoc signing and are not Apple-notarized.
 
 Validation includes TypeScript checks, native create/edit/delete and stale-write rejection, actual Pi tools and file preview, first-message attachments, SIGKILL and graceful server restart, client reconnect/history, stop and subsequent continuation. Browser-only component tests require an appropriate DOM/CSS harness; a blanket Bun run also shares module mocks across files, so affected failures must be checked in isolation.
+
+
+## SSH tunnel connections
+
+In Settings → Agent Compose → Connect, select **SSH tunnel**. Enter a host name or alias from the Zo server machine's `~/.ssh/config`, the Daemon URL as reachable from that SSH host (for example `http://127.0.0.1:43285`), and the Daemon Token. Host suggestions include literal aliases from SSH config and its Include files. Existing direct connections keep their current behavior.
+
+Zo invokes the system OpenSSH client without a shell and reuses SSH config, keys, ssh-agent and jump hosts. Encrypted keys must already be unlocked in the agent. New or changed host keys require verification in a terminal first; the app never accepts them automatically. SSH prompts are noninteractive and authentication errors are shown in connection testing.
+
+The tunnel binds an automatically allocated loopback port. JSON RPC, sandbox file operations and streaming logs all use it. HTTPS connections retain the remote SNI, certificate checks and Host header. A dropped SSH process reconnects with bounded exponential backoff; requests are not replayed by the tunnel layer. Existing run IDs and transcript offsets remain owned by the durable Agent Compose adapter.
+
+Tunnels belong to the **Zo server process**. For a thin desktop client connected to a remote Zo server, SSH config and keys must be available on that server. Closing a connection, changing its destination or shutting down Zo closes the owned tunnel. A pipe watchdog also terminates SSH if the owning process exits abruptly.

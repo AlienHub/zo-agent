@@ -1,3 +1,5 @@
+import { getExecutionCapabilities } from '@craft-agent/shared/agent-compose/capabilities'
+import { resolveEffectiveConnectionSlug } from '@config/llm-connections'
 import * as React from "react"
 import { useTranslation, Trans } from "react-i18next"
 import { useRef, useState, useEffect, useCallback, useMemo } from "react"
@@ -918,7 +920,12 @@ function AppShellContent({
       const nextMode = modes[nextIndex]
       contextValue.onSessionOptionsChange(effectiveSessionId, { permissionMode: nextMode })
     }
-  })
+  }, { enabled: () => {
+    if (!effectiveSessionId) return false
+    const meta = sessionMetaMap.get(effectiveSessionId)
+    const slug = resolveEffectiveConnectionSlug(meta?.llmConnection, contextValue.workspaceDefaultLlmConnection, contextValue.llmConnections)
+    return getExecutionCapabilities(contextValue.llmConnections.find(connection => connection.slug === slug), meta?.workingDirectory).permissions
+  } })
 
   // Whether the next sidebar/list show-hide animates: pointer toggles glide (FLIP), keyboard toggles
   // (⌘B, ⌘., menu accelerators) are instant — spec §6.1. Set in the same batch as the toggle.

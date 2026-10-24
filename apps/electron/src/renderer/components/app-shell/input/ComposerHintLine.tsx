@@ -20,7 +20,7 @@ function Hint({ keys, label }: { keys: string[]; label: string }) {
  * permission mode. Its height is always reserved and it fades in only while focus is inside the
  * composer card (`peer/composer` on InputContainer), so nothing shifts.
  */
-export function ComposerHintLine({ empty = false }: { /** Keep the reserved space but show nothing (decision prompts) */ empty?: boolean }) {
+export function ComposerHintLine({ empty = false, showPermissionHint = true }: { /** Keep the reserved space but show nothing (decision prompts) */ empty?: boolean; showPermissionHint?: boolean }) {
   const { t } = useTranslation()
   const [sendMessageKey, setSendMessageKey] = React.useState<'enter' | 'cmd-enter'>('enter')
 
@@ -50,7 +50,7 @@ export function ComposerHintLine({ empty = false }: { /** Keep the reserved spac
           <span className="contents @max-[24rem]/panel:hidden">
             <Hint keys={sendKeys.newLine} label={t('shortcuts.newLine')} />
           </span>
-          {cycleKeys.length > 0 && (
+          {showPermissionHint && cycleKeys.length > 0 && (
             <span className="contents @max-[32rem]/panel:hidden">
               <Hint keys={cycleKeys} label={t('mode.permissionMode')} />
             </span>

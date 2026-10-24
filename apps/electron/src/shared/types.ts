@@ -300,7 +300,7 @@ export interface ElectronAPI {
   getServerHomeDir(): Promise<string>
 
   // Server mode configuration
-  agentCompose(request: import('@craft-agent/shared/agent-compose/api-types').ComposeRequest): Promise<{nodes: import('@craft-agent/shared/agent-compose/types').PublicComposeNode[]; agents: import('@craft-agent/shared/agent-compose/types').ComposeAgent[]; warnings:string[]; draftSessionId?:string; models?: import('@craft-agent/shared/agent-compose/types').ComposeModelOption[]; catalogUnavailable?:boolean; connectionTest?: import('@craft-agent/shared/agent-compose/types').ComposeConnectionTest}>
+  agentCompose(request: import('@craft-agent/shared/agent-compose/api-types').ComposeRequest): Promise<{nodes: import('@craft-agent/shared/agent-compose/types').PublicComposeNode[]; agents: import('@craft-agent/shared/agent-compose/types').ComposeAgent[]; warnings:string[]; draftSessionId?:string; models?: import('@craft-agent/shared/agent-compose/types').ComposeModelOption[]; catalogUnavailable?:boolean; images?: import('@craft-agent/shared/agent-compose/types').ComposeImageOption[]; imagesUnavailable?:boolean; connectionTest?: import('@craft-agent/shared/agent-compose/types').ComposeConnectionTest; sshHosts?:string[]; sshStatuses?:Record<string,import('@craft-agent/shared/agent-compose/types').ComposeSshStatus>}>
   getServerConfig(): Promise<import('@craft-agent/shared/config/server-config').ServerConfig>
   setServerConfig(config: import('@craft-agent/shared/config/server-config').ServerConfig): Promise<void>
   getServerStatus(): Promise<import('@craft-agent/shared/config/server-config').ServerStatus>
