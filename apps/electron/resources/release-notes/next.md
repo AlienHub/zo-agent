@@ -4,15 +4,15 @@ This file accumulates release notes for the next unreleased version. PRs that ad
 
 ## Features
 
-- **Agent Compose over SSH** Connect through existing OpenSSH host aliases and keys, automatically reconnect dropped tunnels, and test SSH authentication directly in settings.
+- None.
 
 ## Improvements
 
-- **Agent creation** Describe requirements beside an editable configuration preview, and choose runtime images discovered from the selected Agent Compose server.
+- None.
 
 ## Bug Fixes
 
-- **Remote execution settings** Agent Compose chats expose sandbox capabilities instead of local tools, folders and permission controls; settings clarify their scope and unsupported remote changes are rejected before persistence.
+- None.
 
 ## Breaking Changes
 
