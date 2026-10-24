@@ -3,6 +3,8 @@ export type ComposeRequest =
   | { action: "list" }
   | { action: "sshHosts" }
   | { action: "sshStatus" }
+  | { action: "getAgentRemoteMcp"; binding: ComposeBinding }
+  | { action: "saveAgentRemoteMcp"; binding: ComposeBinding; specHash: string; servers: import("./remote-mcp.ts").RemoteMcpServer[] }
   | { action: "models"; nodeId: string }
   | { action: "images"; nodeId: string }
   | { action: "testNode"; nodeId: string }

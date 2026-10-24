@@ -1,4 +1,5 @@
 import { composeSshTunnels, listSshHosts, sshFingerprint } from "@craft-agent/shared/agent-compose/ssh";
+import { getAgentRemoteMcp, saveAgentRemoteMcp } from "@craft-agent/shared/agent-compose/remote-mcp";
 import { nodeHasActiveRuns } from "@craft-agent/shared/agent-compose/usage";
 import { RPC_CHANNELS } from "@craft-agent/shared/protocol";
 import { pushTyped, type RpcServer } from "../../transport";
@@ -45,6 +46,11 @@ export function registerAgentComposeHandlers(
         for (const node of nodes) composeSshTunnels.maintain(node);
         return { nodes: publicNodes(), agents: [], warnings: [], sshStatuses: Object.fromEntries(
           nodes.map((node) => [node.id, composeSshTunnels.status(node.id)])) };
+      }
+      if (request.action === "getAgentRemoteMcp" || request.action === "saveAgentRemoteMcp") {
+        const mcp = request.action === "getAgentRemoteMcp"
+          ? await getAgentRemoteMcp(request.binding) : await saveAgentRemoteMcp(request);
+        return { nodes: publicNodes(), agents: [], warnings: [], mcp };
       }
       if (request.action === "testNode") {
         const input = "nodeId" in request ? getNode(request.nodeId) : request.node;

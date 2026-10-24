@@ -1,3 +1,4 @@
+import { AgentRemoteMcpEditor } from "./AgentRemoteMcpEditor";
 import { useNavigation } from "@/contexts/NavigationContext";
 import { routes } from "@/lib/navigate";
 import { parseAgentDraft } from "@craft-agent/shared/agent-compose/draft";
@@ -447,11 +448,13 @@ export default function AgentComposeSettingsPage() {
       id: "actions",
       enableResizing: false,
       header: () => null,
-      size: 80,
-      minSize: 80,
+      size: 132,
+      minSize: 132,
       enableSorting: false,
       cell: ({ row }) => (
         <div className="flex items-center justify-end gap-1 pr-1.5">
+          <AgentRemoteMcpEditor agent={row.original} disabled={busy}
+            onSaved={() => { void request({ action: "list" }).catch(() => {}); }} />
           <IconButton
             aria-label={`${label("editAgent")} ${row.original.name}`}
             disabled={busy}
