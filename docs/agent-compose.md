@@ -74,3 +74,21 @@ Zo invokes the system OpenSSH client without a shell and reuses SSH config, keys
 The tunnel binds an automatically allocated loopback port. JSON RPC, sandbox file operations and streaming logs all use it. HTTPS connections retain the remote SNI, certificate checks and Host header. A dropped SSH process reconnects with bounded exponential backoff; requests are not replayed by the tunnel layer. Existing run IDs and transcript offsets remain owned by the durable Agent Compose adapter.
 
 Tunnels belong to the **Zo server process**. For a thin desktop client connected to a remote Zo server, SSH config and keys must be available on that server. Closing a connection, changing its destination or shutting down Zo closes the owned tunnel. A pipe watchdog also terminates SSH if the owning process exits abruptly.
+
+## macOS update recovery
+
+The public macOS packages use ad hoc signatures. These signatures change per build, so they cannot satisfy Squirrel.Mac’s requirement for a stable signing identity. The automatic installer for these packages uses a detached bundle handoff instead; Developer ID builds continue to use the native installer.
+
+Before quitting, Zo checks the exact ZIP’s release-manifest SHA-512, archive paths, bundle identity/version, CPU architecture and code integrity, and starts a helper that acknowledges readiness. It flushes sessions and saves window state before explicitly exiting. The helper waits for that PID to exit, swaps bundles on the same filesystem, launches the replacement, and retains the old bundle until the new app confirms initialization and window loading. Failed startup restores and relaunches the previous version. Quit timeouts leave the installed app unchanged. User configuration is outside the app bundle and is never replaced. The helper does not change signing, quarantine attributes or macOS security settings.
+
+Installer diagnostics are written to `mac-update-install.log` in Electron’s logs directory. A rollback is also reported in the relaunched client’s update state; automatic launch checking skips that failed handoff, while a manual check permits retrying. Invalid downloads fail while the existing app is still operational. Signed builds only show “Restart to update” after the native installer confirms readiness, rather than from a cache file or version metadata.
+
+**Bootstrap for affected clients:** already distributed 0.2.0/0.2.1 apps contain the broken installer. They require one manual replacement with a build containing this fix; installing a new release cannot retroactively change the old updater. Keep `~/.craft-agent` (or the configured `CRAFT_CONFIG_DIR`) when replacing the app.
+
+To run the isolated macOS upgrade test:
+
+```sh
+ZO_TEST_MAC_UPDATER=1 bun test ./apps/electron/src/main/__tests__/mac-update.integration.test.ts
+```
+
+It builds private Electron bundle copies, serves a local update feed, and exercises download, verification, replacement, relaunch, rollback, process timeout and unchanged session data. It never modifies `/Applications/Zo.app`.

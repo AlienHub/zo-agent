@@ -12,7 +12,7 @@ This file accumulates release notes for the next unreleased version. PRs that ad
 
 ## Bug Fixes
 
-- None.
+- **macOS update installation** Restore automatic macOS updates for ad hoc releases. Verify the downloaded ZIP, application identity, version, CPU and code integrity before quitting; retain the previous app until the new version confirms startup and roll back if startup fails. Signed builds wait for native installer readiness. Cached metadata no longer marks an update ready, and check failures no longer appear as “up to date”.
 
 ## Breaking Changes
 

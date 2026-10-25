@@ -100,13 +100,13 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
     // Get initial update info
     window.electronAPI.getUpdateInfo().then((info) => {
       setUpdateInfo(info)
-      checkAndNotify(info)
-    })
+      void checkAndNotify(info)
+    }).catch((error) => console.error('[useUpdateChecker] Initial state failed:', error))
 
     // Subscribe to update availability changes
     const cleanupAvailable = window.electronAPI.onUpdateAvailable((info) => {
       setUpdateInfo(info)
-      checkAndNotify(info)
+      void checkAndNotify(info)
     })
 
     // Subscribe to download progress updates
@@ -125,6 +125,8 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
     try {
       const info = await window.electronAPI.checkForUpdates()
       setUpdateInfo(info)
+
+      if (info.downloadState === 'error' || info.error) throw new Error(info.error || t('toast.failedToCheckUpdates'))
 
       if (!info.available) {
         toast.success(t('toast.upToDate'), {

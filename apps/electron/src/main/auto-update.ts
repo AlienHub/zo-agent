@@ -2,64 +2,51 @@
  * Auto-update module using electron-updater
  *
  * Handles checking for updates, downloading, and installing via the standard
- * electron-updater library. Updates are served from https://thecraftagents.com/electron/latest
- * using the generic provider (YAML manifests + binaries on R2/S3).
+ * electron-updater library. Updates use the configured publish provider (GitHub Releases for Zo).
  *
  * Platform behavior:
- * - macOS: Downloads zip, extracts and swaps app bundle atomically
+ * - macOS: Squirrel for Developer ID builds; validated bundle handoff for ad hoc builds
  * - Windows: Downloads NSIS installer, runs silently on quit
  * - Linux: Downloads AppImage, replaces current file
  *
  * All platforms support download-progress events (electron-updater v6.8.0+).
- * quitAndInstall() handles restart natively — no external scripts.
+ * The bundle installer retains the previous app until the new process confirms startup.
  */
 
 import { autoUpdater } from 'electron-updater'
 import { app, BrowserWindow } from 'electron'
 import { platform } from 'os'
 import * as path from 'path'
-import * as fs from 'fs'
 import { mainLog, autoUpdateLog } from './logger'
 import { getAppVersion } from '@craft-agent/shared/version'
 import {
   getDismissedUpdateVersion,
   clearDismissedUpdateVersion,
 } from '@craft-agent/shared/config'
-import { readJsonFileSync } from '@craft-agent/shared/utils/files'
+import { macUpdateStrategy } from './mac-update-policy'
+import { prepareMacBundleUpdate, macArtifactFromDownload, type MacUpdateArtifact } from './mac-bundle-update'
 import { RPC_CHANNELS, type UpdateInfo } from '../shared/types'
 import type { EventSink } from '@craft-agent/server-core/transport'
 
 // Platform detection
 const PLATFORM = platform()
 const IS_MAC = PLATFORM === 'darwin'
-const IS_WINDOWS = PLATFORM === 'win32'
+const macStrategy = macUpdateStrategy({
+  platform: PLATFORM, isPackaged: app.isPackaged, appPath: path.resolve(process.execPath, '../../..'),
+})
 
-// Get the update cache directory path (for file watcher fallback on macOS)
-// electron-updater uses these paths:
-// - Windows: %LOCALAPPDATA%/{appName}-updater/pending
-// - macOS: ~/Library/Caches/{appName}-updater/pending
-// - Linux: ~/.cache/{appName}-updater/pending
-function getUpdateCacheDir(): string {
-  const appName = app.getName()
-  if (IS_MAC) {
-    return path.join(app.getPath('home'), 'Library', 'Caches', `${appName}-updater`, 'pending')
-  } else if (IS_WINDOWS) {
-    // Windows uses LOCALAPPDATA, not APPDATA (roaming)
-    const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local')
-    return path.join(localAppData, `${appName}-updater`, 'pending')
-  } else {
-    // Linux
-    return path.join(app.getPath('home'), '.cache', `${appName}-updater`, 'pending')
-  }
-}
+let downloadedMacArtifact: MacUpdateArtifact | undefined
+const rollbackFailure = IS_MAC ? process.env.CRAFT_MAC_UPDATE_FAILURE : undefined
+delete process.env.CRAFT_MAC_UPDATE_FAILURE
 
 // Module state — keeps track of update info for IPC queries
 let updateInfo: UpdateInfo = {
   available: false,
   currentVersion: getAppVersion(),
   latestVersion: null,
-  downloadState: 'idle',
+  downloadState: rollbackFailure ? 'error' : 'idle',
   downloadProgress: 0,
+  error: rollbackFailure ? `Update failed; the previous application was restored. ${rollbackFailure}` : undefined,
 }
 
 let eventSink: EventSink | null = null
@@ -155,10 +142,11 @@ function broadcastDownloadProgress(progress: number): void {
 // ─── Configure electron-updater ───────────────────────────────────────────────
 
 // Auto-download updates in the background after detection
-autoUpdater.autoDownload = true
+autoUpdater.autoDownload = macStrategy !== 'disabled'
 
-// Install on app quit (if update is downloaded but user hasn't clicked "Restart")
-autoUpdater.autoInstallOnAppQuit = true
+// Ad hoc builds cannot use Squirrel's signing requirement. Only install via the
+// explicit bundle handoff; a normal quit must never start a second installer.
+autoUpdater.autoInstallOnAppQuit = !IS_MAC || macStrategy === 'native'
 
 // Use the logger for electron-updater internal logging
 autoUpdater.logger = {
@@ -177,44 +165,16 @@ autoUpdater.on('checking-for-update', () => {
 autoUpdater.on('update-available', (info) => {
   autoUpdateLog.info(`Update available: ${updateInfo.currentVersion} → ${info.version}`)
 
-  // First, check electron-updater's internal state (most reliable)
-  const internalState = checkElectronUpdaterState()
-  if (internalState.ready) {
-    mainLog.info(`[auto-update] electron-updater reports download ready`)
-    updateInfo = {
-      ...updateInfo,
-      available: true,
-      latestVersion: info.version,
-      downloadState: 'ready',
-      downloadProgress: 100,
-    }
-    broadcastUpdateInfo()
-    return
-  }
-
-  // Fallback: check if file exists in cache directory
-  const existing = checkForExistingDownload()
-  if (existing.exists) {
-    mainLog.info(`[auto-update] Update already downloaded (file check), setting state to ready`)
-    updateInfo = {
-      ...updateInfo,
-      available: true,
-      latestVersion: info.version,
-      downloadState: 'ready',
-      downloadProgress: 100,
-    }
-    broadcastUpdateInfo()
-    return
-  }
-
   updateInfo = {
     ...updateInfo,
     available: true,
     latestVersion: info.version,
-    downloadState: 'downloading',
+    downloadState: autoUpdater.autoDownload ? 'downloading' : 'idle',
     downloadProgress: 0,
+    error: undefined,
   }
   broadcastUpdateInfo()
+  void import('./menu').then(({ rebuildMenu }) => rebuildMenu())
 })
 
 autoUpdater.on('update-not-available', (info) => {
@@ -225,6 +185,7 @@ autoUpdater.on('update-not-available', (info) => {
     available: false,
     latestVersion: info.version,
     downloadState: 'idle',
+    error: undefined,
   }
   broadcastUpdateInfo()
 })
@@ -235,22 +196,35 @@ autoUpdater.on('download-progress', (progress) => {
   broadcastDownloadProgress(percent)
 })
 
-autoUpdater.on('update-downloaded', async (info) => {
-  autoUpdateLog.info(`Update downloaded: v${info.version}`)
-
-  updateInfo = {
-    ...updateInfo,
-    available: true,
-    latestVersion: info.version,
-    downloadState: 'ready',
-    downloadProgress: 100,
-  }
+async function markDownloadReady(): Promise<void> {
+  updateInfo = { ...updateInfo, downloadState: 'ready', downloadProgress: 100, error: undefined }
   broadcastUpdateInfo()
-
-  // Rebuild menu to show "Install Update..." option
   const { rebuildMenu } = await import('./menu')
   rebuildMenu()
+}
+
+autoUpdater.on('update-downloaded', async (info) => {
+  autoUpdateLog.info(`Update downloaded: v${info.version}`)
+  if (IS_MAC && macStrategy === 'disabled') return
+  updateInfo = { ...updateInfo, available: true, latestVersion: info.version, downloadProgress: 100 }
+  // electron-updater emits this before Squirrel has validated/staged the app.
+  // Only the native event below is proof that macOS can install it.
+  if (IS_MAC && macStrategy === 'bundle') {
+    try {
+      downloadedMacArtifact = macArtifactFromDownload(info)
+      await markDownloadReady()
+    } catch (error) {
+      updateInfo = { ...updateInfo, downloadState: 'error', error: error instanceof Error ? error.message : 'Invalid update artifact' }
+      broadcastUpdateInfo()
+    }
+  } else if (!IS_MAC) await markDownloadReady()
+  else broadcastUpdateInfo()
 })
+
+if (IS_MAC && macStrategy === 'native') {
+  const nativeUpdater = require('electron').autoUpdater as typeof import('electron').autoUpdater
+  nativeUpdater.on('update-downloaded', () => { void markDownloadReady() })
+}
 
 autoUpdater.on('error', (error) => {
   autoUpdateLog.error('electron-updater error', error)
@@ -265,89 +239,8 @@ autoUpdater.on('error', (error) => {
 
 // ─── Exported API ─────────────────────────────────────────────────────────────
 
-/**
- * Check if electron-updater already has a validated download ready.
- * This uses electron-updater's internal state which is more reliable than file checks.
- */
-function checkElectronUpdaterState(): { ready: boolean; version?: string } {
-  try {
-    // Access electron-updater's internal downloadedUpdateHelper
-    // @ts-expect-error - accessing internal API for reliability
-    const helper = autoUpdater.downloadedUpdateHelper
-    if (helper) {
-      mainLog.info(`[auto-update] downloadedUpdateHelper exists, cacheDir: ${helper.cacheDir}`)
-      // @ts-expect-error - accessing internal API
-      const versionInfo = helper.versionInfo
-      if (versionInfo) {
-        mainLog.info(`[auto-update] electron-updater has validated download: ${JSON.stringify(versionInfo)}`)
-        return { ready: true, version: versionInfo.version }
-      }
-    }
-  } catch (error) {
-    mainLog.warn('[auto-update] Error checking electron-updater state:', error)
-  }
-  return { ready: false }
-}
-
-/**
- * Options for checkForUpdates
- */
 interface CheckOptions {
-  /** If true, automatically start download when update is found (default: true) */
   autoDownload?: boolean
-}
-
-/**
- * Check if a downloaded update already exists in the cache directory.
- * This helps detect updates that were downloaded in a previous session.
- */
-function checkForExistingDownload(): { exists: boolean; version?: string } {
-  try {
-    const cacheDir = getUpdateCacheDir()
-    mainLog.info(`[auto-update] Checking cache directory: ${cacheDir}`)
-
-    if (!fs.existsSync(cacheDir)) {
-      mainLog.info(`[auto-update] Cache directory does not exist`)
-      return { exists: false }
-    }
-
-    const files = fs.readdirSync(cacheDir)
-    mainLog.info(`[auto-update] Files in cache: ${JSON.stringify(files)}`)
-
-    // Look for update info file that electron-updater creates
-    const updateInfoFile = files.find(f => f === 'update-info.json')
-    if (updateInfoFile) {
-      const infoPath = path.join(cacheDir, updateInfoFile)
-      const info = readJsonFileSync(infoPath) as Record<string, unknown> | null
-      mainLog.info(`[auto-update] update-info.json contents: ${JSON.stringify(info)}`)
-
-      // electron-updater uses 'fileName' (not 'path') in update-info.json
-      const fileName = (info?.fileName || info?.path) as string | undefined
-      if (fileName && fs.existsSync(path.join(cacheDir, fileName))) {
-        mainLog.info(`[auto-update] Found existing download via update-info.json: ${fileName}`)
-        return { exists: true, version: info?.version as string }
-      }
-    }
-
-    // Fallback: check for any installer/zip/dmg file
-    const downloadFile = files.find(f =>
-      f.endsWith('.zip') ||
-      f.endsWith('.exe') ||
-      f.endsWith('.AppImage') ||
-      f.endsWith('.dmg') ||
-      f.endsWith('.nupkg')
-    )
-    if (downloadFile) {
-      mainLog.info(`[auto-update] Found existing download file: ${downloadFile}`)
-      return { exists: true }
-    }
-
-    mainLog.info(`[auto-update] No existing download found in cache`)
-    return { exists: false }
-  } catch (error) {
-    mainLog.warn('[auto-update] Error checking for existing download:', error)
-    return { exists: false }
-  }
 }
 
 /**
@@ -357,37 +250,16 @@ function checkForExistingDownload(): { exists: boolean; version?: string } {
  * @param options.autoDownload - If false, only checks without downloading (for manual "Check Now")
  */
 export async function checkForUpdates(options: CheckOptions = {}): Promise<UpdateInfo> {
+  if (updateInfo.downloadState === 'installing') return getUpdateInfo()
   const { autoDownload = true } = options
 
   // Temporarily override autoDownload for this check if needed
   // (e.g., manual check from settings shouldn't auto-download on metered connections)
   const previousAutoDownload = autoUpdater.autoDownload
-  autoUpdater.autoDownload = autoDownload
+  autoUpdater.autoDownload = autoDownload && macStrategy !== 'disabled'
 
   try {
-    // Check for updates - this returns a promise that resolves with the check result
-    const result = await autoUpdater.checkForUpdates()
-
-    // If update is available and was already downloaded, the update-downloaded event
-    // should fire. Wait a moment for events to settle before returning.
-    if (result?.updateInfo) {
-      // Give electron-updater time to fire update-downloaded if file exists
-      await new Promise(resolve => setTimeout(resolve, 500))
-
-      // Double-check: if we're still showing 'downloading' but file exists, update state
-      if (updateInfo.downloadState === 'downloading') {
-        const existing = checkForExistingDownload()
-        if (existing.exists) {
-          mainLog.info('[auto-update] Update already downloaded, updating state to ready')
-          updateInfo = {
-            ...updateInfo,
-            downloadState: 'ready',
-            downloadProgress: 100,
-          }
-          broadcastUpdateInfo()
-        }
-      }
-    }
+    await autoUpdater.checkForUpdates()
   } catch (error) {
     autoUpdateLog.error('Update check failed', error)
     updateInfo = {
@@ -412,8 +284,25 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
  * Then relaunches the app automatically.
  */
 export async function installUpdate(): Promise<void> {
+  if (IS_MAC && macStrategy === 'disabled') throw new Error('Automatic installation is unavailable in this build')
   if (updateInfo.downloadState !== 'ready') {
     throw new Error('No update ready to install')
+  }
+
+  // Preflight and start the detached helper before disposing any app services.
+  // If preparation fails, the current client stays open and operational.
+  let bundleInstaller: Awaited<ReturnType<typeof prepareMacBundleUpdate>> | undefined
+  updateInfo = { ...updateInfo, downloadState: 'installing' }
+  broadcastUpdateInfo()
+  try {
+    if (IS_MAC && macStrategy === 'bundle') {
+      if (!downloadedMacArtifact) throw new Error('No verified update archive')
+      bundleInstaller = await prepareMacBundleUpdate(downloadedMacArtifact)
+    }
+  } catch (error) {
+    updateInfo = { ...updateInfo, downloadState: 'error', error: error instanceof Error ? error.message : 'Update preparation failed' }
+    broadcastUpdateInfo()
+    throw error
   }
 
   autoUpdateLog.info('Installing update and restarting...')
@@ -442,7 +331,12 @@ export async function installUpdate(): Promise<void> {
   try {
     beforeUpdateQuitHook?.()
   } catch (err) {
+    await bundleInstaller?.cancel()
+    __isUpdating = false
+    updateInfo = { ...updateInfo, downloadState: 'error', error: err instanceof Error ? err.message : 'Window snapshot failed' }
+    broadcastUpdateInfo()
     autoUpdateLog.error('beforeUpdateQuit hook failed', err)
+    throw err
   }
 
   // Run the app's quit cleanup (session flush, timers, lock release) BEFORE the
@@ -452,14 +346,28 @@ export async function installUpdate(): Promise<void> {
   try {
     await beforeUpdateInstallHook?.()
   } catch (err) {
+    await bundleInstaller?.cancel()
+    __isUpdating = false
+    updateInfo = { ...updateInfo, downloadState: 'error', error: err instanceof Error ? err.message : 'Update cleanup failed' }
+    broadcastUpdateInfo()
     autoUpdateLog.error('beforeUpdateInstall cleanup hook failed', err)
+    installQuitFailedHook?.()
+    throw err
   }
 
   try {
     // isSilent=false shows the installer UI on Windows if needed (fallback)
     // isForceRunAfter=true ensures the app relaunches after install
-    autoUpdater.quitAndInstall(false, true)
+    if (bundleInstaller) {
+      await bundleInstaller.commit()
+      // Sessions and windows were saved explicitly above. Bypass close/quit
+      // cancellation handlers so the helper can reliably observe this PID exit.
+      app.exit(0)
+    } else {
+      autoUpdater.quitAndInstall(false, true)
+    }
   } catch (error) {
+    await bundleInstaller?.cancel()
     __isUpdating = false
     autoUpdateLog.error('quitAndInstall failed', error)
     updateInfo = { ...updateInfo, downloadState: 'error' }
@@ -491,6 +399,10 @@ export interface UpdateOnLaunchResult {
  * - Auto-downloads if update available
  */
 export async function checkForUpdatesOnLaunch(): Promise<UpdateOnLaunchResult> {
+  if (rollbackFailure) {
+    autoUpdateLog.error('Previous update rolled back:', rollbackFailure)
+    return { action: 'none', reason: 'previous-update-rolled-back' }
+  }
   autoUpdateLog.info('Checking for updates on launch...')
 
   const info = await checkForUpdates({ autoDownload: true })
