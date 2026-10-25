@@ -62,7 +62,7 @@ test.skipIf(process.platform !== 'darwin' || process.env.ZO_TEST_MAC_UPDATER !==
   }
   const target = await bundle('Zo Installed', '0.2.1')
   const candidate = await bundle('Zo Candidate', '0.2.2')
-  const zip = path.join(directory, 'Zo-0.2.2-arm64.zip')
+  const zip = path.join(directory, `Zo-0.2.2-${process.arch}.zip`)
   await exec('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', candidate, zip], { timeout: 120000 })
   let sha512 = createHash('sha512').update(await readFile(zip)).digest('base64')
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {

@@ -58,6 +58,15 @@ jobs:
         if: steps.published.outputs.exists != 'true'
         run: bun run scripts/verify-release-version.ts "${{ inputs.tag || github.ref_name }}"
 
+      - name: Verify macOS update and recovery
+        if: steps.published.outputs.exists != 'true'
+        run: |
+          bun test ./apps/electron/src/main/__tests__/mac-update-policy.test.ts ./apps/electron/src/main/__tests__/mac-update-archive.test.ts
+          bun test ./apps/electron/src/main/__tests__/mac-update-artifact.isolated.ts
+          bun test ./apps/electron/src/main/__tests__/auto-update-bundle.isolated.ts
+          bun test ./apps/electron/src/main/__tests__/auto-update-signed.isolated.ts
+          ZO_TEST_MAC_UPDATER=1 bun test ./apps/electron/src/main/__tests__/mac-update.integration.test.ts
+
       - name: Build and publish
         if: steps.published.outputs.exists != 'true'
         run: |
