@@ -43,6 +43,11 @@ buildWhatsAppWorker(config);
 execFileSync("bun", ["run", "electron:build"], { cwd: root, stdio: "inherit" });
 copyInterceptorBundle(config);
 copyPiAgentServer(config);
+// This entry point explicitly builds with the ad hoc identity below. Importing
+// certificates is unnecessary, and an empty CSC_LINK resolves to cwd in builder.
+const packageEnv = { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false" };
+delete packageEnv.CSC_LINK;
+delete packageEnv.CSC_KEY_PASSWORD;
 execFileSync(
   join(root, "node_modules/.bin/electron-builder"),
   [
@@ -58,7 +63,7 @@ execFileSync(
   {
     cwd: electronDir,
     stdio: "inherit",
-    env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false" },
+    env: packageEnv,
   },
 );
 const app = join(electronDir, "release/mac-arm64/Zo.app");

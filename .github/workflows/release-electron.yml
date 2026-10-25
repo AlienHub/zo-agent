@@ -72,8 +72,10 @@ jobs:
         run: |
           bun run app:package:mac
           TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          (cd apps/electron/release && shasum -a 256 "Zo-${VERSION}-arm64.dmg" > "Zo-${VERSION}-arm64.dmg.sha256" && shasum -a 256 "Zo-${VERSION}-arm64.zip" > "Zo-${VERSION}-arm64.zip.sha256")
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "Zo ${TAG}" --notes-file "apps/electron/resources/release-notes/${TAG#v}.md"
-          gh release upload "$TAG" apps/electron/release/Zo-*.dmg apps/electron/release/Zo-*.zip apps/electron/release/latest-mac.yml --clobber
+          gh release upload "$TAG" "apps/electron/release/Zo-${VERSION}-arm64.dmg" "apps/electron/release/Zo-${VERSION}-arm64.zip" "apps/electron/release/Zo-${VERSION}-arm64.zip.blockmap" "apps/electron/release/Zo-${VERSION}-arm64.dmg.sha256" "apps/electron/release/Zo-${VERSION}-arm64.zip.sha256" apps/electron/release/latest-mac.yml --clobber
           gh release edit "$TAG" --draft=false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
