@@ -1,0 +1,4 @@
+#!/bin/sh
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+export NO_PROXY='*' no_proxy='*'
+exec "${CRAFT_BUN:-bun}" run "$CRAFT_COMPOSE_CLI_ENTRY" "$@"

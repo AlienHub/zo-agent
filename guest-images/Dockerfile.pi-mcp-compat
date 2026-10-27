@@ -5,5 +5,16 @@ FROM ${BASE_IMAGE}
 USER root
 RUN test -f /usr/lib/node_modules/pi-mcp-adapter/package.json \
     && test -f /usr/lib/node_modules/pi-mcp-adapter/index.ts \
+    && test -f /usr/lib/node_modules/pi-mcp-adapter/commands.ts \
     && rm -rf /usr/local/share/agent-compose/pi-mcp-adapter \
-    && ln -s /usr/lib/node_modules/pi-mcp-adapter /usr/local/share/agent-compose/pi-mcp-adapter
+    && ln -s /usr/lib/node_modules/pi-mcp-adapter /usr/local/share/agent-compose/pi-mcp-adapter \
+    && test -f /usr/local/share/agent-compose/pi-mcp-adapter/commands.ts
+
+# --mcp-config is registered by this extension, not by Pi's core CLI. Pi may
+# exit successfully for --help even when an extension fails, so inspect output.
+RUN PI_OFFLINE=1 pi --no-extensions \
+      --extension /usr/local/share/agent-compose/pi-mcp-adapter/index.ts \
+      --help > /tmp/zo-pi-mcp-check.txt 2>&1 \
+    && ! grep -Eq 'Failed to load extension|Unknown option' /tmp/zo-pi-mcp-check.txt \
+    && grep -q -- '--mcp-config' /tmp/zo-pi-mcp-check.txt \
+    && rm /tmp/zo-pi-mcp-check.txt

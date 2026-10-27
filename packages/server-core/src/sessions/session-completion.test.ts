@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager, createManagedSession, type SessionCompletionEvent } from './SessionManager.ts'
+import { ComposeAgentBackend } from '@craft-agent/shared/agent-compose/agent'
 
 async function waitFor(condition: () => boolean, what: string): Promise<void> {
   for (let i = 0; i < 200 && !condition(); i++) await new Promise(resolve => setTimeout(resolve, 5))
@@ -146,6 +147,60 @@ describe('session completion seam', () => {
     expect(calls).toEqual(['stopTurn', 'stopTurn', 'forceAbort'])
     await stopWith(undefined) // Pi and other backends
     expect(calls).toEqual(['stopTurn', 'stopTurn', 'forceAbort', 'forceAbort'])
+  })
+
+  it('coalesces repeated remote stops and restores queued input once after confirmation', async () => {
+    const managed = session('remote-stop')
+    const gate = Promise.withResolvers<void>()
+    const events: any[] = []
+    let stops = 0
+    const agent = Object.create(ComposeAgentBackend.prototype)
+    agent.abort = async () => { stops++; await gate.promise }
+    agent.pendingTurn = () => ({ id: 'remote-turn', stopRequested: true, status: 'RUN_STATUS_CANCELED' })
+    agent.acknowledgeDelivered = () => {}
+    managed.agent = agent
+    managed.isProcessing = true
+    managed.messages = [{ id: 'queued', role: 'user', content: 'queued input', isQueued: true, timestamp: 1 } as any]
+    managed.messageQueue = [{ message: 'queued input', messageId: 'queued' } as any]
+    sm.setEventSink((_channel, _target, ...args) => { if (args[0]?.type === 'interrupted') events.push(args[0]) })
+    const first = sm.cancelProcessing(managed.id)
+    await waitFor(() => stops === 1, 'remote stop submission')
+    await sm.cancelProcessing(managed.id)
+    expect(stops).toBe(1)
+    expect(managed.composeStoppedQueued).toEqual(['queued input'])
+    expect(managed.isProcessing).toBe(true)
+    expect(events).toHaveLength(0)
+    gate.resolve()
+    await first
+    await (sm as any).onProcessingStopped(managed.id, 'interrupted')
+    expect(events).toHaveLength(1)
+    expect(events[0].queuedMessages).toEqual(['queued input'])
+    expect(managed.isProcessing).toBe(false)
+  })
+
+  it('does not apply a late stop transport failure to the next remote turn', async () => {
+    const managed = session('late-remote-stop')
+    const gate = Promise.withResolvers<void>()
+    const statuses: string[] = []
+    let stopping = false
+    const agent = Object.create(ComposeAgentBackend.prototype)
+    agent.abort = async () => { stopping = true; await gate.promise }
+    agent.pendingTurn = () => ({ id: 'old-turn', stopRequested: true, status: 'RUN_STATUS_CANCELED' })
+    agent.acknowledgeDelivered = () => {}
+    managed.agent = agent
+    managed.isProcessing = true
+    sm.setEventSink((_channel, _target, ...args) => { if (args[0]?.type === 'status') statuses.push(args[0].message) })
+    const request = sm.cancelProcessing(managed.id)
+    await waitFor(() => stopping, 'remote stop submission')
+    await (sm as any).onProcessingStopped(managed.id, 'interrupted')
+    managed.isProcessing = true
+    managed.processingGeneration++
+    const count = statuses.length
+    gate.reject(new Error('Stop reply was lost'))
+    await request
+    expect(statuses).toHaveLength(count)
+    expect(managed.isProcessing).toBe(true)
+    managed.isProcessing = false
   })
 
   it('counts no background work when it does not outlive the turn', async () => {

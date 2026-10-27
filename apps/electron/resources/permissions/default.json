@@ -1,6 +1,10 @@
 {
-  "version": "2026-03-07",
+  "version": "2026-10-26",
   "allowedBashPatterns": [
+    {
+      "pattern": "^zo-compose\\s+(servers|read|help)\\b",
+      "comment": "Zo Agent Compose management bridge: read-only RPCs enforced by the bridge"
+    },
     {
       "pattern": "^ls\\b",
       "comment": "List directory contents"

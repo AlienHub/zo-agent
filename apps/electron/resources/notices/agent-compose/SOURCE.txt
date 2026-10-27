@@ -1,0 +1,5 @@
+Agent Compose CLI is a separate upstream executable.
+Source: https://github.com/chaitin/agent-compose
+The prepared CLI manifest records version, platform and SHA-256.
+For local model-discovery builds, see patches/agent-compose-model-discovery.patch in the Zo source distribution.
+Release CI source: v2610.2.0, commit 35c1fd5bd43594ac3ae24f8546aa3ea657cc0490.

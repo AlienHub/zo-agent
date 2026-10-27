@@ -1,7 +1,10 @@
 import { getExecutionCapabilities } from '@craft-agent/shared/agent-compose/capabilities'
 import { composeSshTunnels } from '@craft-agent/shared/agent-compose/ssh'
 import { ComposeAgentBackend } from '@craft-agent/shared/agent-compose/agent'
-import { readState as readComposeState } from '@craft-agent/shared/agent-compose/store'
+import { readState as readComposeState, writeState as writeComposeState } from '@craft-agent/shared/agent-compose/store'
+import { historyKey, historyRunPrefix, loadHistory, type HistoryTarget } from '@craft-agent/shared/agent-compose/history'
+import { connectionSlug, ensureHistoryConnection } from '@craft-agent/shared/agent-compose/catalog'
+import type { ComposeBinding } from '@craft-agent/shared/agent-compose/types'
 import { expandEnvVars, parsePromptReferences, executeWithRetry, createWebhookHistoryEntry } from '@craft-agent/shared/automations';
 import type { AutomationAction } from '@craft-agent/shared/automations';
 import { saveSessionResourceAnnotations, loadSessionResourceAnnotations, type SessionResourceRef, type SessionResourceAnnotations } from '@craft-agent/shared/sessions';
@@ -720,6 +723,7 @@ interface RunningBackgroundTask {
 }
 
 interface ManagedSession {
+  composeHistory?: { key: string; runIds: string[]; syncedAt: number }
   composeStoppedQueued?: string[]
   resourceAnnotations?: SessionResourceAnnotations[]
   id: string
@@ -1152,6 +1156,7 @@ export function createManagedSession(
  * Prefers the live agent instance; falls back to true for all backends.
  */
 function resolveSupportsBranching(managed: ManagedSession): boolean {
+  if (managed.composeHistory) return false
   // If agent is live, use its instance property (authoritative)
   if (managed.agent) {
     return managed.agent.supportsBranching
@@ -3619,6 +3624,70 @@ export class SessionManager implements ISessionManager {
     const managed = this.sessions.get(sessionId)
     if (!managed) return null
     return getSessionStoragePath(managed.workspace.rootPath, sessionId)
+  }
+
+  private composeHistoryImports = new Map<string, Promise<{ sessionId: string; existing: boolean; warnings: string[] }>>()
+
+  /** A snapshot of native history, never a new remote run or a remote-context takeover. */
+  importComposeHistory(workspaceId: string, binding: ComposeBinding, target: HistoryTarget) {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+    workspaceId = workspace.id
+    const key = historyKey(binding, target)
+    const lock = JSON.stringify([workspaceId, key])
+    const pending = this.composeHistoryImports.get(lock)
+    if (pending) return pending
+    const importing = this.importComposeHistoryImpl(workspaceId, binding, target, key)
+      .finally(() => this.composeHistoryImports.delete(lock))
+    this.composeHistoryImports.set(lock, importing)
+    return importing
+  }
+
+  private async importComposeHistoryImpl(workspaceId: string, binding: ComposeBinding, target: HistoryTarget, key: string) {
+    const slug = connectionSlug(binding)
+    let archive: ManagedSession | undefined
+    for (const managed of this.sessions.values()) {
+      if (managed.workspace.id !== workspaceId) continue
+      if (managed.composeHistory?.key === key) { archive = managed; continue }
+      if (managed.llmConnection !== slug) continue
+      const state = readComposeState(getSessionStoragePath(managed.workspace.rootPath, managed.id))
+      if (state && (target.sandboxId ? state.sandboxId === target.sandboxId || state.turns.some(turn => turn.sandboxId === target.sandboxId) : state.turns.some(turn => turn.remoteId === target.runId))) {
+        return { sessionId: managed.id, existing: true, warnings: [] }
+      }
+    }
+    const history = await loadHistory(binding, target)
+    await ensureHistoryConnection(binding)
+    const created = !archive
+    if (!archive) {
+      const session = await this.createSession(workspaceId, { name: history.title, llmConnection: slug, workingDirectory: 'none', enabledSourceSlugs: [] }, { emitCreatedEvent: false })
+      archive = this.sessions.get(session.id)!
+    }
+    try {
+      await this.ensureMessagesLoaded(archive)
+      // Terminal run snapshots are immutable locally. Remote retention/purged
+      // journals must not erase messages or tool details already imported.
+      const previousRunIds = archive.composeHistory?.runIds ?? []
+      const retained = new Set(previousRunIds.map(historyRunPrefix))
+      archive.messages = [...archive.messages, ...history.messages.filter(message => !retained.has(message.id.split(':')[0]!))]
+        .sort((a, b) => a.timestamp - b.timestamp)
+      archive.composeHistory = { key, runIds: [...new Set([...previousRunIds, ...history.runIds])], syncedAt: Date.now() }
+      archive.createdAt = created ? history.createdAt || archive.createdAt : Math.min(archive.createdAt || history.createdAt, history.createdAt || archive.createdAt!)
+      archive.lastMessageAt = created ? history.lastMessageAt || archive.lastMessageAt : Math.max(history.lastMessageAt, archive.lastMessageAt)
+      archive.hasUnread = false
+      archive.messagesLoaded = true
+      archive.messageCount = archive.messages.length
+      archive.lastFinalMessageId = this.getLastFinalAssistantMessageId(archive.messages)
+      writeComposeState(getSessionStoragePath(archive.workspace.rootPath, archive.id), {
+        version: 1, binding, sandboxId: target.sandboxId, turns: [],
+      })
+      this.persistSession(archive)
+      await this.flushSession(archive.id)
+      this.notifySessionCreated(workspaceId, archive.id)
+      return { sessionId: archive.id, existing: !created, warnings: history.warnings }
+    } catch (error) {
+      if (created) await this.deleteSession(archive.id)
+      throw error
+    }
   }
 
   async createSession(
@@ -7015,6 +7084,7 @@ export class SessionManager implements ISessionManager {
     if (!managed) {
       throw new Error(`Session ${sessionId} not found`)
     }
+    if (managed.composeHistory) throw new Error('Imported Agent Compose history is read-only. Start a new conversation with this agent.')
     if ((options?.skillSlugs?.length || /^\/compact(?:\s|$)/i.test(message.trim())) && !this.sessionExecutionCapabilities(managed).localTools) {
       throw remoteConfigurationError()
     }
@@ -7689,6 +7759,9 @@ export class SessionManager implements ISessionManager {
     if (!managed?.isProcessing) {
       return // Not processing, nothing to cancel
     }
+    // Remote completion is asynchronous. Repeated clicks must not discard the
+    // first request's queued input while the adapter confirms the terminal run.
+    if (managed.agent instanceof ComposeAgentBackend && managed.stopRequested) return
 
     sessionLog.info('Cancelling processing for session:', sessionId, silent ? '(silent)' : '')
 
@@ -7725,11 +7798,17 @@ export class SessionManager implements ISessionManager {
     managed.wasInterrupted = true
 
     if(managed.agent instanceof ComposeAgentBackend) {
+      const stoppingAgent = managed.agent
+      const stoppingGeneration = managed.processingGeneration
       managed.composeStoppedQueued=queuedTexts
       this.persistSession(managed)
       await this.processEvent(managed,{type:'status',message:'Stopping remote task…'})
-      try {await managed.agent.abort()} catch {
-        await this.processEvent(managed,{type:'status',message:'Stop request saved. Waiting to reconnect to the remote server…'})
+      try {await stoppingAgent.abort()} catch {
+        // GetRun can confirm completion before a lost StopRun response times
+        // out. Do not attach that old failure to a finished or replacement turn.
+        if (managed.isProcessing && managed.agent === stoppingAgent && managed.processingGeneration === stoppingGeneration) {
+          await this.processEvent(managed,{type:'status',message:'Stop request saved. Waiting to reconnect to the remote server…'})
+        }
       }
       return // A local timeout cannot prove that a remote process stopped.
     }

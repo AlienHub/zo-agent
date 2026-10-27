@@ -46,6 +46,7 @@ import {
   symlinkSync,
 } from 'fs';
 import { $ } from 'bun';
+import { prepareComposeCli } from './prepare-compose-cli';
 import {
   type Platform,
   type Arch,
@@ -118,7 +119,7 @@ function assembleResources(config: ServerBuildConfig): void {
   const destResources = join(outputDir, 'resources');
 
   console.log('  Copying docs, themes, permissions, tool-icons...');
-  for (const dir of ['docs', 'themes', 'permissions', 'tool-icons']) {
+  for (const dir of ['docs', 'themes', 'permissions', 'tool-icons', 'skills', 'notices']) {
     const src = join(srcResources, dir);
     if (existsSync(src)) {
       cpSync(src, join(destResources, dir), { recursive: true });
@@ -152,6 +153,10 @@ function assembleResources(config: ServerBuildConfig): void {
   const binDir = join(destResources, 'bin');
   mkdirSync(binDir, { recursive: true });
   const srcBin = join(srcResources, 'bin');
+  const cliName = 'agent-compose-cli';
+  const nativeCli = join(srcBin, `${platform}-${arch}`, cliName);
+  copyFileSync(nativeCli, join(binDir, cliName));
+  copyFileSync(`${nativeCli}.json`, join(binDir, `${cliName}.json`));
   if (existsSync(srcBin)) {
     for (const entry of readdirSync(srcBin)) {
       const src = join(srcBin, entry);
@@ -569,6 +574,7 @@ export CRAFT_RESOURCES_PATH="$ROOT/resources"
 # CLI tools (doc tools use uv + Python scripts)
 export CRAFT_UV="$ROOT/resources/bin/uv"
 export CRAFT_SCRIPTS="$ROOT/resources/scripts"
+export CRAFT_COMPOSE_CLI_ENTRY="$ROOT/resources/scripts/zo-compose-cli.js"
 
 # Prepend resource bin to PATH (makes doc tool wrappers available)
 export PATH="$ROOT/resources/bin:$ROOT/vendor/bun:$PATH"
@@ -809,6 +815,7 @@ async function main(): Promise<void> {
 
   console.log(`=== Building Craft Agent Server ${version} for ${platform}-${arch} ===`);
   console.log(`  Output: ${outputDir}`);
+  await prepareComposeCli(platform, arch);
 
   // Step 1: Clean
   console.log('\n[1/8] Cleaning output directory...');

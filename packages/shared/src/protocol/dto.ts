@@ -55,6 +55,7 @@ export interface SessionResourceAnnotations {
  * Extends core Session with messages array and processing state.
  */
 export interface Session {
+  composeHistory?: { key: string; runIds: string[]; syncedAt: number }
   id: string
   workspaceId: string
   workspaceName: string

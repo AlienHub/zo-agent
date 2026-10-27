@@ -9,6 +9,7 @@ import { join, basename } from "path";
 import { homedir } from "os";
 import * as esbuild from "esbuild";
 import { downloadUv, type Platform, type Arch } from "./build/common";
+import { prepareComposeCli } from './prepare-compose-cli';
 
 const ROOT_DIR = join(import.meta.dir, "..");
 const ELECTRON_DIR = join(ROOT_DIR, "apps/electron");
@@ -434,6 +435,7 @@ async function main(): Promise<void> {
   }
 
   await ensureBundledUvForCurrentPlatform();
+  await prepareComposeCli();
 
   copyResources();
 

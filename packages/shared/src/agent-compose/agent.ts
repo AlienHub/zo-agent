@@ -63,6 +63,8 @@ export class ComposeAgentBackend extends BaseAgent {
   private detached = false;
   private savedSnapshot?: string;
   private current?: ComposeTurn;
+  private stopRequests = new Map<string, Promise<void>>();
+  private acknowledgedStops = new Set<string>();
   constructor(
     config: BackendConfig,
     readonly binding: ComposeBinding,
@@ -143,11 +145,32 @@ export class ComposeAgentBackend extends BaseAgent {
     if (!turn || terminal(turn.status)) return;
     turn.stopRequested = true;
     this.save();
-    if (turn.remoteId || turn.setupRunId)
-      await this.client.call("RunService", "StopRun", {
-        runId: turn.remoteId || turn.setupRunId,
+    const runId = turn.remoteId || turn.setupRunId;
+    if (runId) await this.requestStop(runId);
+  }
+  private requestStop(runId: string): Promise<void> {
+    if (this.acknowledgedStops.has(runId)) return Promise.resolve();
+    const pending = this.stopRequests.get(runId);
+    if (pending) return pending;
+    const request = new ComposeClient(getNode(this.binding.nodeId))
+      .call<{ stopRequested?: boolean; run?: ComposeRun }>("RunService", "StopRun", {
+        runId,
         reason: "user_stop",
-      });
+      })
+      .then((response) => {
+        if (response.stopRequested !== false || terminal(response.run?.summary?.status || ""))
+          this.acknowledgedStops.add(runId);
+      })
+      .finally(() => this.stopRequests.delete(runId));
+    this.stopRequests.set(runId, request);
+    return request;
+  }
+  private retryStop(runId: string) {
+    // A missing StopRun reply must not block GetRun from confirming completion.
+    // Keep the durable stop intent and retry transport failures on later polls.
+    void this.requestStop(runId).catch((error) =>
+      this.onDebug?.(`Unable to stop remote run: ${error.message}`),
+    );
   }
   forceAbort(_reason: AbortReason) {
     void this.abort().catch((e) =>
@@ -177,6 +200,7 @@ export class ComposeAgentBackend extends BaseAgent {
         prompt: message,
         created: Date.now(),
         status: "submitting",
+        submissionStarted: false,
         eventCount: 0,
         text: "",
       };
@@ -270,13 +294,6 @@ export class ComposeAgentBackend extends BaseAgent {
           this.save();
         }
         while (!signal.aborted) {
-          if (turn.stopRequested)
-            await this.client.call(
-              "RunService",
-              "StopRun",
-              { runId: turn.setupRunId, reason: "user_stop" },
-              signal,
-            );
           const { run } = await this.client.call<{ run: ComposeRun }>(
             "RunService",
             "GetRun",
@@ -301,6 +318,7 @@ export class ComposeAgentBackend extends BaseAgent {
               );
             break;
           }
+          if (turn.stopRequested) this.retryStop(turn.setupRunId!);
           await delay(500, undefined, { signal });
         }
       }
@@ -318,12 +336,16 @@ export class ComposeAgentBackend extends BaseAgent {
       );
       this.save();
     }
-    if (turn.stopRequested) {
+    if (turn.stopRequested && turn.submissionStarted === false) {
       turn.status = "RUN_STATUS_CANCELED";
       this.save();
       releaseLease(turn.requestId);
       return;
     }
+    // Persist before dispatch. An ambiguous submit response may have created a
+    // remote run: resolve it with the same idempotency key even after Stop.
+    turn.submissionStarted = true;
+    this.save();
     const { run } = await this.client.call<{ run: ComposeSummary }>(
       "RunService",
       "StartAgentRun",
@@ -397,19 +419,14 @@ export class ComposeAgentBackend extends BaseAgent {
             return;
           }
           startFollowing();
-          if (turn.stopRequested)
-            await this.client.call(
-              "RunService",
-              "StopRun",
-              { runId: turn.remoteId, reason: "user_stop" },
-              signal,
-            );
           const { run } = await this.client.call<{ run: ComposeRun }>(
             "RunService",
             "GetRun",
             { runId: turn.remoteId },
             signal,
           );
+          if (turn.stopRequested && !terminal(run.summary.status))
+            this.retryStop(turn.remoteId!);
           if (!connected) {
             yield { type: "status", message: "Remote agent is working…" };
             connected = true;

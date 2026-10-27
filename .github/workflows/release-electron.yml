@@ -37,6 +37,8 @@ jobs:
       - name: Checkout
         if: steps.published.outputs.exists != 'true'
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Setup Bun
         if: steps.published.outputs.exists != 'true'
@@ -66,6 +68,39 @@ jobs:
           bun test ./apps/electron/src/main/__tests__/auto-update-bundle.isolated.ts
           bun test ./apps/electron/src/main/__tests__/auto-update-signed.isolated.ts
           ZO_TEST_MAC_UPDATER=1 bun test ./apps/electron/src/main/__tests__/mac-update.integration.test.ts
+
+      - name: Checkout pinned Agent Compose CLI source
+        if: steps.published.outputs.exists != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: chaitin/agent-compose
+          ref: 35c1fd5bd43594ac3ae24f8546aa3ea657cc0490 # v2610.2.0
+          path: .sandboxes/agent-compose-cli-source
+
+      - name: Setup Go for Agent Compose CLI
+        if: steps.published.outputs.exists != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache-dependency-path: .sandboxes/agent-compose-cli-source/go.sum
+
+      - name: Prepare native Agent Compose CLI
+        if: steps.published.outputs.exists != 'true'
+        working-directory: .sandboxes/agent-compose-cli-source
+        env:
+          CGO_ENABLED: '0'
+          GOOS: darwin
+          GOARCH: arm64
+        run: |
+          go build -trimpath -tags netgo,osusergo -ldflags '-s -w -X github.com/chaitin/agent-compose/pkg/config.BuildVersion=v2610.2.0' -o agent-compose ./cmd/agent-compose
+          echo "CRAFT_AGENT_COMPOSE_BINARY=$PWD/agent-compose" >> "$GITHUB_ENV"
+
+      - name: Verify bundled Agent Compose management
+        if: steps.published.outputs.exists != 'true'
+        run: |
+          bun run compose:prepare
+          bun test ./packages/shared/src/agent-compose/management-cli.isolated.ts
+          bun test ./packages/shared/src/agent-compose/management-skill.isolated.ts
 
       - name: Build and publish
         if: steps.published.outputs.exists != 'true'
@@ -111,6 +146,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
           fetch-tags: true
 

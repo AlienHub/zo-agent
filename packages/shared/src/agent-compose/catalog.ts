@@ -35,6 +35,21 @@ export const connectionSlug = (b: ComposeBinding) =>
     .update(JSON.stringify([b.nodeId, b.projectId, b.agentName]))
     .digest("hex")
     .slice(0, 24)}`;
+/** Keep native identity for read-only archives even if the agent cannot run in Zo. */
+export async function ensureHistoryConnection(binding: ComposeBinding) {
+  const slug = connectionSlug(binding);
+  if (getLlmConnection(slug)?.compose) return slug;
+  const project = await getProject(binding.nodeId, binding.projectId);
+  const agent = project.agents?.find((entry) => entry.agentName === binding.agentName);
+  if (!agent) throw new Error("The remote agent no longer exists");
+  const node = getNode(binding.nodeId);
+  if (getLlmConnection(slug)?.compose) return slug;
+  addLlmConnection({ slug, name: `${agent.displayName || agent.agentName} · ${node.name}`,
+    providerType: "pi", authType: "none", models: [agent.resolvedModel || agent.model || "remote"],
+    defaultModel: agent.resolvedModel || agent.model || "remote", compose: { ...binding },
+    composeUnavailable: true, createdAt: Date.now() });
+  return slug;
+}
 export async function getProject(nodeId: string, projectId: string) {
   const { project } = await new ComposeClient(getNode(nodeId)).call<{
     project: NativeProject;

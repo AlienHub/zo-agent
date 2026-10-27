@@ -17,6 +17,7 @@ import { join } from 'path';
 import matter from 'gray-matter';
 import type { LoadedSkill, SkillMetadata, SkillSource } from './types.ts';
 import { getWorkspaceSkillsPath } from '../workspaces/storage.ts';
+import { getBundledAssetsDir } from '../utils/paths.ts';
 import {
   validateIconValue,
   findIconFile,
@@ -222,6 +223,8 @@ export function loadAllSkills(workspaceRoot: string, projectRoot?: string): Load
   }
 
   const skillsBySlug = new Map<string, LoadedSkill>();
+  const bundled = getBundledAssetsDir('skills');
+  if (bundled) for (const skill of loadSkillsFromDir(bundled, 'builtin')) skillsBySlug.set(skill.slug, skill);
 
   // 1. Global skills (lowest priority): ~/.agents/skills/
   for (const skill of loadSkillsFromDir(GLOBAL_AGENT_SKILLS_DIR, 'global')) {
@@ -267,7 +270,10 @@ export function loadSkillBySlug(workspaceRoot: string, slug: string, projectRoot
   if (workspaceSkill) return workspaceSkill;
 
   // Lowest priority: global
-  return loadSkillFromDir(GLOBAL_AGENT_SKILLS_DIR, slug, 'global');
+  const global = loadSkillFromDir(GLOBAL_AGENT_SKILLS_DIR, slug, 'global');
+  if (global) return global;
+  const bundled = getBundledAssetsDir('skills');
+  return bundled ? loadSkillFromDir(bundled, slug, 'builtin') : null;
 }
 
 /**

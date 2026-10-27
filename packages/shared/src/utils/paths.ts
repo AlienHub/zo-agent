@@ -189,6 +189,8 @@ let _assetsRoot: string | undefined;
  */
 export function setBundledAssetsRoot(dir: string): void {
   _assetsRoot = dir;
+  // Native agent/CLI subprocesses need the same immutable resource root.
+  process.env.CRAFT_BUNDLED_ASSETS_ROOT = dir;
 }
 
 /**
@@ -208,6 +210,7 @@ export function getBundledAssetsDir(subfolder: string): string | undefined {
   const candidates = [
     // Electron packaged app (set via setBundledAssetsRoot at startup)
     ...(_assetsRoot ? [join(_assetsRoot, 'resources', subfolder)] : []),
+    ...(process.env.CRAFT_BUNDLED_ASSETS_ROOT ? [join(process.env.CRAFT_BUNDLED_ASSETS_ROOT, 'resources', subfolder)] : []),
     // Dev: electron app resources folder (when cwd is apps/electron)
     join(process.cwd(), 'resources', subfolder),
     // Dev: dist output (after build:copy)

@@ -21,6 +21,7 @@ import {
   sanitizePromptLine,
 } from './prompt-sanitize.ts';
 import { findGitRepositoryRoot } from './developer-context.ts';
+import { getBundledAssetsDir } from '../utils/paths.ts';
 
 /** Maximum size of CLAUDE.md file to include (10KB) */
 const MAX_CONTEXT_FILE_SIZE = 10 * 1024;
@@ -443,7 +444,12 @@ export function getSystemPrompt(
   const basePrompt = agentProfile === 'coding'
     ? getCodingAssistantPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy)
     : getCraftAssistantPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy);
-  const fullPrompt = `${basePrompt}${preferences}${projectBlock}${debugContext}${projectContextFiles}`;
+  const builtInSkills = getBundledAssetsDir('skills');
+  const composeSkill = builtInSkills && join(builtInSkills, 'agent-compose', 'SKILL.md');
+  const composeManagement = composeSkill && existsSync(composeSkill)
+    ? `\n\n## Agent Compose management\nFor managing connected Agent Compose servers, agents, sandboxes, runs or logs, read the built-in skill at ${JSON.stringify(composeSkill)} and use zo-compose. This executes on the Zo service host using saved server connections. Read mode enforces read-only RPCs; write mode follows ordinary execution permissions. The sandbox agent does not inherit this capability.\n`
+    : '';
+  const fullPrompt = `${basePrompt}${preferences}${projectBlock}${debugContext}${projectContextFiles}${composeManagement}`;
 
   debug('[getSystemPrompt] full prompt length:', fullPrompt.length);
 

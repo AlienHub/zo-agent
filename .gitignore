@@ -77,3 +77,7 @@ credentials.enc
 
 # Local acceptance state and credentials
 .sandboxes/
+
+# Prepared upstream CLI binaries (reproducible build inputs, not source files)
+apps/electron/resources/bin/*/agent-compose-cli*
+apps/electron/resources/scripts/zo-compose-cli.js

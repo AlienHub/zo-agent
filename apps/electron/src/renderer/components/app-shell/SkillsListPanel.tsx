@@ -77,7 +77,7 @@ export function SkillsListPanel({
       mapItem={(skill) => ({
         icon: <SkillAvatar skill={skill} size="sm" workspaceId={workspaceId} />,
         title: skill.metadata.name,
-        titleTrailing: skill.source === 'project' ? t('skillsList.projectBadge') : undefined,
+        titleTrailing: skill.source === 'builtin' ? t('skillInfo.sourceBuiltin') : skill.source === 'project' ? t('skillsList.projectBadge') : undefined,
         subtitle: skill.metadata.description || undefined,
         menu: (
           <SkillMenu
@@ -98,7 +98,7 @@ export function SkillsListPanel({
             canShowInFinder={canRevealLocally}
             onDelete={skill.source === 'workspace' ? () => onDeleteSkill(skill.slug) : undefined}
             canDelete={skill.source === 'workspace'}
-            deleteLabel={skill.source === 'workspace' ? t('skillsList.deleteSkill') : t('skillsList.managedByProject')}
+            deleteLabel={skill.source === 'builtin' ? t('skillInfo.sourceBuiltin') : skill.source === 'workspace' ? t('skillsList.deleteSkill') : t('skillsList.managedByProject')}
             onSendToWorkspace={hasOtherWorkspaces && skill.source === 'workspace' ? () => {
               setSendResourceSlug(skill.slug)
               setSendResourceLabel(skill.metadata.name)

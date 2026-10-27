@@ -65,6 +65,8 @@ export interface ComposeTurn {
   prompt: string;
   created: number;
   remoteId?: string;
+  /** False until first dispatch; true means even a lost reply must be resolved. */
+  submissionStarted?: boolean;
   sandboxId?: string;
   status: string;
   stopRequested?: boolean;

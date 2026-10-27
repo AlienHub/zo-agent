@@ -252,13 +252,13 @@ export const composeSshTunnels = new ComposeSshTunnels();
 process.once("exit", () => composeSshTunnels.closeAll());
 
 /** Keep the original HTTPS SNI and Host header while connecting through loopback. */
-export async function sshFetch(node: ComposeNode, path: string, body: string | Uint8Array, headers: Record<string, string>, signal: AbortSignal): Promise<Response> {
+export async function sshFetch(node: ComposeNode, path: string, body: string | Uint8Array, headers: Record<string, string>, signal: AbortSignal, method: 'POST' | 'GET' = 'POST'): Promise<Response> {
   const port = await composeSshTunnels.connect(node, signal);
   signal.throwIfAborted();
   const remote = new URL(node.url.replace(/\/$/, "") + path);
   return new Promise((resolve, reject) => {
     const request = (remote.protocol === "https:" ? httpsRequest : httpRequest)({
-      hostname: "127.0.0.1", port, method: "POST", path: remote.pathname + remote.search,
+      hostname: "127.0.0.1", port, method, path: remote.pathname + remote.search,
       servername: remote.hostname.replace(/^\[|\]$/g, ""),
       headers: { ...headers, host: remote.host, "content-length": String(Buffer.byteLength(body)) },
       signal, agent: false,

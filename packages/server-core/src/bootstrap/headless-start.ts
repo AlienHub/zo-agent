@@ -1,12 +1,13 @@
 import { writeFileSync, readFileSync, unlinkSync, existsSync, readlinkSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { uptime as osUptime } from 'node:os'
-import { join, basename } from 'node:path'
+import { join, basename, delimiter } from 'node:path'
 import { lockHolderMatchesLock, parseTasklistImageName, type LockIdentity } from './lock-identity.ts'
 import { OAuthFlowStore } from '@craft-agent/shared/auth'
 import { ensureConfigDir, loadStoredConfig, saveConfig } from '@craft-agent/shared/config'
 import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
-import { setBundledAssetsRoot } from '@craft-agent/shared/utils'
+import { ensureDefaultPermissions } from '@craft-agent/shared/agent/permissions-config'
+import { setBundledAssetsRoot, getBundledAssetsDir } from '@craft-agent/shared/utils'
 import { WsRpcServer, type WsRpcTlsOptions } from '../transport/server'
 import type { EventSink, RpcServer } from '../transport/types'
 import { createHeadlessPlatform } from '../runtime/platform-headless'
@@ -347,6 +348,9 @@ export async function bootstrapServer<TSessionManager, THandlerDeps>(
     ?? process.env.CRAFT_BUNDLED_ASSETS_ROOT
     ?? process.cwd()
   setBundledAssetsRoot(bundledAssetsRoot)
+  process.env.CRAFT_COMPOSE_CLI_ENTRY ??= join(import.meta.dir, '../../../shared/src/agent-compose/management-cli.ts')
+  const composeBin = getBundledAssetsDir('bin')
+  if (composeBin) process.env.PATH = `${composeBin}${delimiter}${process.env.PATH || ''}`
 
   if (entropy.warning) {
     platform.logger.warn(`[bootstrap] ${entropy.warning}`)
@@ -355,6 +359,8 @@ export async function bootstrapServer<TSessionManager, THandlerDeps>(
   options.applyPlatformToSubsystems?.(platform)
 
   bootstrapConfigArtifacts(platform)
+  // Headless servers must install/migrate the same read-only defaults as Electron.
+  ensureDefaultPermissions()
   ensureGlobalConfigExists(platform)
   acquireServerLock(platform.logger)
 

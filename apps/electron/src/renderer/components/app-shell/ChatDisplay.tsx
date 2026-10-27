@@ -365,7 +365,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
 
   // Input is only disabled when explicitly disabled (e.g., agent needs activation)
   // User can type during streaming - submitting will stop the stream and send
-  const isInputDisabled = disabled
+  const isInputDisabled = disabled || !!session?.composeHistory
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
   const scrollViewportRef = React.useRef<HTMLDivElement>(null)
   const prevSessionIdRef = React.useRef<string | null>(null)
@@ -385,6 +385,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   const prevMessageCountRef = React.useRef(0)
   const prevSessionIdForCommitScrollRef = React.useRef<string | null>(null)
   const internalTextareaRef = React.useRef<RichTextInputHandle>(null)
+  const restoredStopPromptRef = React.useRef<string | null>(null)
   const textareaRef = externalTextareaRef || internalTextareaRef
   const [sendMessageKey, setSendMessageKey] = useState<'enter' | 'cmd-enter'>('enter')
   const [openAnnotationRequest, setOpenAnnotationRequest] = React.useState<{
@@ -1228,9 +1229,15 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     // `restore_input` effect (App.tsx) and would otherwise double up here.
     if (!silent) {
       const lastUserMsg = [...session.messages].reverse().find(m => m.role === 'user' && !m.isQueued)
+      const promptKey = lastUserMsg ? `${session.id}:${lastUserMsg.id}` : null
       const restoredText = coerceInputText(lastUserMsg?.content)
-      if (restoredText) {
-        onInputChange?.(appendRestoredInput(inputValue, restoredText))
+      if (restoredText && promptKey !== restoredStopPromptRef.current) {
+        restoredStopPromptRef.current = promptKey
+        const draft = coerceInputText(inputValue)
+        // A draft survives reconnect/remount, whereas this ref does not.
+        if (draft !== restoredText && !draft.endsWith(`\n\n${restoredText}`)) {
+          onInputChange?.(appendRestoredInput(draft, restoredText))
+        }
       }
     }
 
@@ -1794,6 +1801,9 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
           </div>
 
           {/* === INPUT CONTAINER: FreeForm or Structured Input === */}
+          {session.composeHistory ? <div className="px-5 py-4 text-center text-sm text-secondary" role="status">
+            {t('settings.agentCompose.history.readOnly')}
+          </div> :
           <ChatInputZone
             compactMode={compactMode}
             permissionMode={permissionMode}
@@ -1855,7 +1865,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
               onFollowUpClick: handleFollowUpChipClick,
               onFollowUpIndexClick: handleFollowUpIndexClick,
             }}
-          />
+          />}
           </div>
         </div>
       ) : null}

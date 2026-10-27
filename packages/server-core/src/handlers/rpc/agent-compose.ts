@@ -20,6 +20,7 @@ import {
   createAgent,
 } from "@craft-agent/shared/agent-compose/catalog";
 import type { ComposeRequest } from "@craft-agent/shared/agent-compose/api-types";
+import { listHistory } from "@craft-agent/shared/agent-compose/history";
 
 import { getLlmConnections, getDefaultLlmConnection } from "@craft-agent/shared/config";
 import { getCredentialManager } from "@craft-agent/shared/credentials";
@@ -38,6 +39,13 @@ export function registerAgentComposeHandlers(
     async (_ctx, request: ComposeRequest) => {
       if (!request || typeof request !== "object")
         throw new Error("Invalid agent-compose request");
+      if (request.action === "history")
+        return { nodes: publicNodes(), agents: [], warnings: [], history: await listHistory(request.binding, request.offset) };
+      if (request.action === "importHistory") {
+        await deps.sessionManager.waitForInit();
+        getWorkspaceOrThrow(request.workspaceId);
+        return { nodes: publicNodes(), agents: [], warnings: [], importedHistory: await deps.sessionManager.importComposeHistory(request.workspaceId, request.binding, request.target) };
+      }
       if (request.action === "sshHosts")
         return { nodes: publicNodes(), agents: [], warnings: [], sshHosts: listSshHosts() };
       if (request.action === "sshStatus") {

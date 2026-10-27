@@ -48,6 +48,9 @@ The server defaults to loopback port 9100. Set `CRAFT_RPC_HOST=0.0.0.0` to liste
 
 ## Conversation and sandbox behavior
 
+- Settings → Agent Compose → the history icon beside an agent reads the daemon's paginated RunService history. Prompt runs sharing an agent and sandbox are grouped together; command-only maintenance runs are omitted. This is sandbox-based grouping because the native API does not expose a separate conversation ID.
+- **Open in Zo** imports completed history into a read-only conversation in the current workspace. Re-importing refreshes the same archive; if Zo already owns that sandbox's conversation it opens the original instead. Import never starts, stops or reruns a model task. Active sandboxes must finish before importing.
+- Native Pi journal text, tools and thinking are restored when the sandbox remains readable; otherwise saved run output/result is used with a missing-details notice. Deleted remote logs cannot be reconstructed. Imported history survives Zo restarts and can be read offline; it does not attach to or take over the remote agent's conversation context.
 - Streaming text, tool inputs/results and native Pi thinking use Zo's existing transcript and expandable activity controls.
 - Refreshing or quitting a client detaches observation; it does not stop the remote run.
 - Stop persists intent before contacting the daemon and waits for terminal remote status. Offline stop is retried when connectivity returns.
@@ -57,6 +60,16 @@ The server defaults to loopback port 9100. Set `CRAFT_RPC_HOST=0.0.0.0` to liste
 - **Sandbox files** in the chat header browses `/workspace` inside the session's actual sandbox. Browsing is read-only; use the agent to modify files. Symlink escapes are rejected. Text previews are limited to 1 MiB, image/PDF previews to 8 MiB.
 - Up to 20 attachments of 10 MiB each are staged privately on the Zo server and uploaded into `/workspace/.zo-attachments/<session>/<turn>/`. They are ordinary files in that workspace; they are hidden from the browsing tree. Shared MOUNT workspaces retain them in the mounted directory.
 - Node credentials stay on the Zo server in a private configuration file and are never included in the public catalog or installer.
+
+## Zo management skill and CLI
+
+Native Zo agents can use the bundled `agent-compose` skill and `zo-compose` bridge. Compose sandbox agents do not inherit it. The bridge uses a registered server ID/name, a short-lived authenticated loopback relay and the native upstream CLI; remote daemon tokens stay in the bridge process. SSH requests reuse Zo's existing OpenSSH transport, including the original HTTPS hostname. Each CLI invocation closes its owned transport and deletes its temporary CLI profile.
+
+Management uses the saved direct or SSH route and bypasses HTTP proxy variables inherited from Pi's model connection. Model-provider proxy settings do not reroute daemon traffic.
+
+`zo-compose servers` lists connection identities without credentials. `zo-compose read <server> -- <native arguments>` permits an explicit read RPC allowlist; `write` follows Zo's normal Bash execution permissions. Auth/daemon commands and endpoint overrides are rejected. Native JSON credential fields and known tokens are redacted. Remote output is still application data, not an instruction source. The bridge does not retry commands after ambiguous failures.
+
+Prepare the native executable before a build with `CRAFT_AGENT_COMPOSE_BINARY=/path/to/native/agent-compose bun run compose:prepare`. Shell shims are rejected. The prepared binary and version/platform/SHA-256 manifest are copied into server and Electron resources. Builds for another target require that target's prepared native binary and manifest; no host-specific shim is bundled. Upstream license/source notices are included under `resources/notices/agent-compose`. No daemon is bundled or installed by this feature.
 
 ## Local build
 

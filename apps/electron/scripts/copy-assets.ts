@@ -13,6 +13,9 @@
 
 import { cpSync, copyFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
+import { prepareComposeCli } from '../../../scripts/prepare-compose-cli';
+
+await prepareComposeCli();
 
 // Copy all resources (icons, themes, docs, permissions, tool-icons, etc.)
 cpSync('resources', 'dist/resources', { recursive: true });

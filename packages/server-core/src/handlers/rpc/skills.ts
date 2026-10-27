@@ -41,10 +41,10 @@ export function registerSkillsHandlers(server: RpcServer, deps: HandlerDeps): vo
       return []
     }
 
-    const { getWorkspaceSkillsPath } = await import('@craft-agent/shared/workspaces')
-
-    const skillsDir = getWorkspaceSkillsPath(workspace.rootPath)
-    const skillDir = join(skillsDir, skillSlug)
+    const { loadSkillBySlug } = await import('@craft-agent/shared/skills')
+    if (!/^[\p{L}\p{N}_-]+$/u.test(skillSlug)) return []
+    const skillDir = loadSkillBySlug(workspace.rootPath, skillSlug)?.path
+    if (!skillDir) return []
 
     function scanDirectory(dirPath: string): SkillFile[] {
       try {

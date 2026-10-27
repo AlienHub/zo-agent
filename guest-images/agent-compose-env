@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+# Keep the daemon's expected directories and exec/signal behavior. Session paths
+# and provider credentials are still supplied by Agent Compose for each run.
+mkdir -p "${HOME:-/root}/.pi/agent" /workspace /data/state /data/runtime /data/logs
+exec "$@"

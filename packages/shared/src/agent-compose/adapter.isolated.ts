@@ -18,6 +18,8 @@ let emptyAgentCatalog = false;
 let appliedSpec: any;
 let patchedSpec: any;
 let probeMode = "normal";
+let stopReplyGate: Promise<void> | undefined;
+let rejectRepeatedStop = false;
 let starts = 0,
   stops = 0,
   reads = 0,
@@ -108,7 +110,9 @@ const daemon = Bun.serve({
     }
     if (method === "StopRun") {
       stops++;
+      if (rejectRepeatedStop && stops > 1) return new Response("", { status: 409 });
       waiting = false;
+      if (stopReplyGate) await stopReplyGate;
       return Response.json({});
     }
     if (method === "GetRun") {
@@ -320,6 +324,80 @@ describe("agent-compose durable adapter", () => {
     expect(state.turns.at(-1)?.status).toBe("RUN_STATUS_CANCELED");
     agent.destroy();
   }, 15000);
+  test("a pending stop reply does not block authoritative completion or duplicate the stop", async () => {
+    waiting = true;
+    stops = 0;
+    const gate = Promise.withResolvers<void>();
+    stopReplyGate = gate.promise;
+    const agent = backend("pending-stop-reply"), events: any[] = [];
+    const collecting = (async () => { for await (const event of agent.chat("wait")) events.push(event); })();
+    let stopping: Promise<void> | undefined;
+    try {
+      await Bun.sleep(150);
+      stopping = agent.abort();
+      const duplicate = agent.abort();
+      await Promise.race([collecting, Bun.sleep(2000).then(() => { throw new Error("Stop reply blocked terminal observation"); })]);
+      expect(stops).toBe(1);
+      expect(events.at(-1)?.type).toBe("complete");
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(readState(getSessionPath(root, "pending-stop-reply"))?.turns.at(-1)?.status).toBe("RUN_STATUS_CANCELED");
+      gate.resolve();
+      await Promise.all([stopping, duplicate]);
+    } finally {
+      gate.resolve();
+      stopReplyGate = undefined;
+      agent.destroy();
+      await collecting;
+      await stopping;
+    }
+  }, 10000);
+  test("recovery reads an already stopped run without issuing another stop", async () => {
+    waiting = false;
+    stops = 1;
+    rejectRepeatedStop = true;
+    activeRequest = "already-canceled";
+    writeState(getSessionPath(root, "recover-canceled"), {
+      version: 1, binding,
+      turns: [{ id: "stopped-turn", requestId: activeRequest, remoteId: activeRequest, prompt: "stopped", created: Date.now(), status: "RUN_STATUS_RUNNING", stopRequested: true, eventCount: 0, text: "" }],
+    });
+    const agent = backend("recover-canceled");
+    try {
+      const events = [];
+      for await (const event of agent.recover()) events.push(event);
+      expect(stops).toBe(1);
+      expect(events.at(-1)?.type).toBe("complete");
+      expect(events.some(event => event.type === "error")).toBe(false);
+    } finally {
+      rejectRepeatedStop = false;
+      agent.destroy();
+    }
+  });
+  test("stop after an ambiguous submission resolves and cancels that same remote run", async () => {
+    waiting = true;
+    starts = 0;
+    stops = 0;
+    ambiguous = true;
+    const agent = backend("stop-ambiguous-submit");
+    try {
+      for await (const event of agent.chat("ambiguous stop")) {
+        if (event.type === "status" && event.message.includes("Connection interrupted")) await agent.abort();
+      }
+      const turn = readState(getSessionPath(root, "stop-ambiguous-submit"))!.turns.at(-1)!;
+      expect(starts).toBe(1);
+      expect(stops).toBe(1);
+      expect(turn.remoteId).toBeTruthy();
+      expect(turn.status).toBe("RUN_STATUS_CANCELED");
+      stops = 0;
+      const events = [];
+      for await (const event of agent.chat("continue after stop")) events.push(event);
+      expect(starts).toBe(2);
+      expect(events.some(event => event.type === "text_complete")).toBe(true);
+      expect(events.at(-1)?.type).toBe("complete");
+    } finally {
+      ambiguous = false;
+      agent.destroy();
+    }
+  }, 10000);
   test("model billing failures emit a readable error and complete without streaming stderr", async () => {
     failed = true;
     waiting = false;

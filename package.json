@@ -1,6 +1,6 @@
 {
   "name": "craft-agent",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "license": "Apache-2.0",
   "description": "Claude Code-like agent for Craft documents",
   "type": "module",
@@ -22,6 +22,7 @@
   "scripts": {
     "test": "bun test && for f in $(find . -name '*.isolated.ts' -not -path './node_modules/*'); do bun test \"$f\" || exit 1; done",
     "typecheck": "bun run typecheck:shared",
+    "compose:prepare": "bun run scripts/prepare-compose-cli.ts",
     "pages-worker:dev": "cd workers/pages && bun run dev",
     "pages-worker:test": "cd workers/pages && bun test",
     "pages-worker:deploy": "cd workers/pages && bun run deploy",

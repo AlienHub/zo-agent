@@ -1,4 +1,5 @@
 import { AgentRemoteMcpEditor } from "./AgentRemoteMcpEditor";
+import { ComposeAgentHistory } from "./ComposeAgentHistory";
 import { useNavigation } from "@/contexts/NavigationContext";
 import { routes } from "@/lib/navigate";
 import { parseAgentDraft } from "@craft-agent/shared/agent-compose/draft";
@@ -448,11 +449,12 @@ export default function AgentComposeSettingsPage() {
       id: "actions",
       enableResizing: false,
       header: () => null,
-      size: 132,
-      minSize: 132,
+      size: 164,
+      minSize: 164,
       enableSorting: false,
       cell: ({ row }) => (
         <div className="flex items-center justify-end gap-1 pr-1.5">
+          <ComposeAgentHistory agent={row.original} workspaceId={activeWorkspaceId} disabled={busy} />
           <AgentRemoteMcpEditor agent={row.original} disabled={busy}
             onSaved={() => { void request({ action: "list" }).catch(() => {}); }} />
           <IconButton

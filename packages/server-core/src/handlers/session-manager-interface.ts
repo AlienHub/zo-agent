@@ -29,6 +29,7 @@ import type { SessionBundle, DispatchMode } from '@craft-agent/shared/sessions'
 import type { EventSink } from '../transport'
 
 export interface ISessionManager {
+  importComposeHistory(workspaceId: string, binding: import('@craft-agent/shared/agent-compose/types').ComposeBinding, target: import('@craft-agent/shared/agent-compose/history').HistoryTarget): Promise<{ sessionId: string; existing: boolean; warnings: string[] }>
   respondToAutomationConfirmation(sessionId:string,messageId:string,confirmed:boolean):Promise<void>
   getSessionPermissionAllowances(sessionId:string):import('@craft-agent/shared/protocol').SessionPermissionAllowances
   addResourceAnnotation(sessionId:string,resource:import('@craft-agent/shared/sessions').SessionResourceRef,annotation:AnnotationV1):void

@@ -1,0 +1,36 @@
+# Flatten a pruned, immutable guest into a fresh image. Consumers download only
+# the retained Pi environment, not the original guest's multi-gigabyte layers.
+ARG RUNTIME_SOURCE_IMAGE=chaitin/agent-compose-guest@sha256:6cc858daf910a46a608a22e31285256cded648dc4eeb9241ecf5f246978d7f2e
+FROM ${RUNTIME_SOURCE_IMAGE} AS prepared
+COPY prepare-runtime.mjs /tmp/zo-prepare-runtime.mjs
+RUN node /tmp/zo-prepare-runtime.mjs \
+    && apt-get purge -y --auto-remove --no-download \
+       build-essential gcc g++ cpp make pkg-config protobuf-compiler \
+    && apt-get clean
+
+FROM scratch
+ARG RUNTIME_SOURCE_IMAGE
+LABEL org.opencontainers.image.title="Zo Agent Runtime" \
+      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.licenses="AGPL-3.0" \
+      io.zo.runtime.profile="pi-slim" \
+      io.agent-compose.guest-abi="1" \
+      io.zo.runtime.source-image="${RUNTIME_SOURCE_IMAGE}" \
+      org.opencontainers.image.source="https://github.com/AlienHub/zo-agent"
+COPY --from=prepared / /
+USER root
+COPY runtime-lock.json verify-runtime.mjs smoke-pi.mjs /usr/local/share/zo-runtime/
+COPY zo-runtime-check /usr/local/bin/zo-runtime-check
+COPY agent-compose-env /usr/local/bin/agent-compose-env
+RUN mkdir -p /usr/local/share/agent-compose /workspace /data/state /data/runtime /data/logs \
+    && rm -rf /usr/local/share/agent-compose/pi-mcp-adapter \
+    && ln -s /usr/lib/node_modules/pi-mcp-adapter /usr/local/share/agent-compose/pi-mcp-adapter \
+    && chmod 0755 /usr/local/bin/zo-runtime-check /usr/local/bin/agent-compose-env \
+    && zo-runtime-check \
+    && node /usr/local/share/zo-runtime/smoke-pi.mjs
+
+ENV HOME=/root PI_OFFLINE=1 PI_TELEMETRY=0 \
+    PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /workspace
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/usr/local/bin/agent-compose-env", "bash", "-lc", "sleep infinity"]

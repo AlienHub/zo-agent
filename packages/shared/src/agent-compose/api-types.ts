@@ -1,6 +1,8 @@
 import type { ComposeBinding, ComposeNode } from "./types.ts";
 export type ComposeRequest =
   | { action: "list" }
+  | { action: "history"; binding: ComposeBinding; offset?: number }
+  | { action: "importHistory"; workspaceId: string; binding: ComposeBinding; target: import("./history.ts").HistoryTarget }
   | { action: "sshHosts" }
   | { action: "sshStatus" }
   | { action: "getAgentRemoteMcp"; binding: ComposeBinding }

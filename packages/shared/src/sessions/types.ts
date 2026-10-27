@@ -30,7 +30,7 @@ export const SESSION_PERSISTENT_FIELDS = [
   // Timestamps
   'createdAt', 'lastUsedAt', 'lastMessageAt',
   // Display
-  'name', 'isFlagged', 'sessionStatus', 'labels', 'hidden',
+  'name', 'isFlagged', 'sessionStatus', 'labels', 'hidden', 'composeHistory',
   // Read tracking
   'lastReadMessageId', 'hasUnread',
   // Config
@@ -115,6 +115,8 @@ export type { StoredMessage } from '@craft-agent/core/types';
  * Session configuration (persisted metadata)
  */
 export interface SessionConfig {
+  /** Read-only native Agent Compose history, scoped to this Zo workspace. */
+  composeHistory?: { key: string; runIds: string[]; syncedAt: number };
   id: string;
   /** SDK session ID (captured after first message) */
   sdkSessionId?: string;
