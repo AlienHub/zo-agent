@@ -101,6 +101,9 @@ jobs:
           bun run compose:prepare
           bun test ./packages/shared/src/agent-compose/management-cli.isolated.ts
           bun test ./packages/shared/src/agent-compose/management-skill.isolated.ts
+          bun test ./packages/shared/src/agent-compose/catalog-secrets.isolated.ts
+          bun test ./packages/shared/src/agent-compose/remote-mcp.test.ts
+          bun test ./packages/shared/src/agent-compose/remote-mcp.isolated.ts
 
       - name: Build and publish
         if: steps.published.outputs.exists != 'true'

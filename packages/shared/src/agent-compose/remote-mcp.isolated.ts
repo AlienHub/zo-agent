@@ -33,7 +33,7 @@ test("native round-trip masks credentials, preserves them on edits, and deletes 
   const loaded = await getAgentRemoteMcp(binding);
   expect(JSON.stringify(loaded)).not.toContain(privateHeader);
   expect(JSON.stringify(loaded)).not.toContain("unrelated-secret");
-  expect(loaded.servers[0]!.headers).toEqual([{ name: "Authorization", hasValue: true }]);
+  expect(loaded.servers[0]!.headers).toEqual([{ name: "Authorization", originalName: "Authorization", hasValue: true }]);
   loaded.servers[0]!.url = "https://updated.test/mcp";
   const saved = await saveAgentRemoteMcp({ binding, ...loaded });
   expect(saved.specHash).toBe("v2");

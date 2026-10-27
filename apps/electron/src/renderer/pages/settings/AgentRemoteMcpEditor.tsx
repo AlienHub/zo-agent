@@ -28,7 +28,9 @@ export function AgentRemoteMcpEditor({ agent, disabled, onSaved }: {
     }}).then((result) => {
       if (active) {
         if (!result.mcp) throw new Error(t("settings.agentCompose.remoteMcp.loadError"));
-        setConfig(result.mcp);
+        setConfig({ ...result.mcp, servers: result.mcp.servers.map((s) => ({ ...s,
+          headers: s.headers.map((h) => ({ ...h, originalName: h.originalName ?? h.name })),
+        })) });
       }
     }).catch(() => { if (active) setError(t("settings.agentCompose.remoteMcp.loadError")); })
       .finally(() => { if (active) setLoading(false); });
@@ -47,7 +49,8 @@ export function AgentRemoteMcpEditor({ agent, disabled, onSaved }: {
         specHash: config.specHash, servers: config.servers });
       close(); onSaved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : label("saveError"));
+      const message = e instanceof Error ? e.message : "";
+      setError(message.includes("mcp_secret_value_required") ? label("reenterSecret") : message || label("saveError"));
     } finally { setSaving(false); }
   };
   return <>
@@ -94,13 +97,16 @@ export function AgentRemoteMcpEditor({ agent, disabled, onSaved }: {
                     onChange={(e) => update(index, { headers: server.headers.map((h, i) => i === headerIndex ? { ...h, name: e.target.value } : h) })} />
                   <Input aria-label={`${label("headerValue")} ${index + 1}.${headerIndex + 1}`} type="password"
                     autoComplete="new-password" spellCheck={false} value={header.value ?? ""}
-                    placeholder={header.hasValue ? label("keepValue") : "Bearer …"} required={!header.hasValue}
+                    placeholder={header.hasValue && server.name === server.originalName && header.name === header.originalName ? label("keepValue") : "Bearer …"}
+                    required={!(header.hasValue && server.name === server.originalName && header.name === header.originalName)}
                     onChange={(e) => update(index, { headers: server.headers.map((h, i) => i === headerIndex
                       ? { ...h, value: e.target.value || (h.hasValue ? undefined : "") } : h) })} />
                   <IconButton type="button" aria-label={`${label("removeHeader")} ${index + 1}.${headerIndex + 1}`} icon={<Trash2 className="size-3.5" />}
                     onClick={() => update(index, { headers: server.headers.filter((_, i) => i !== headerIndex) })} />
                 </div>)}
               </div>
+              {server.headers.some((h) => h.hasValue && (server.name !== server.originalName || h.name !== h.originalName)) &&
+                <p role="status" className="text-label-sm text-secondary">{label("reenterSecret")}</p>}
             </fieldset>)}
             <Button type="button" variant="outline" size="sm" disabled={saving || config.servers.length >= 50}
               onClick={() => setConfig((c) => c && ({ ...c, servers: [...c.servers, { name: "", url: "", headers: [] }] }))}>

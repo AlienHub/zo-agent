@@ -306,13 +306,21 @@ export async function createAgent(input: {
     const original = p.spec.agents.find(
       (a: any) => a.name === template.agentName,
     );
-    const { scheduler, ...source } = original;
+    if (!original) throw new Error("Agent configuration changed. Refresh and try again.");
+    // API reads contain reserved secret markers, not reusable credentials. A
+    // new native identity cannot restore markers from a different agent. Reuse
+    // only runtime infrastructure; tools, secrets and workspaces are its own.
+    const runtime = {
+      ...(original.image ? { image: original.image } : {}),
+      ...(original.driver ? { driver: original.driver } : {}),
+      ...(original.sandbox ? { sandbox: original.sandbox } : {}),
+    };
     request = {
       project: { projectId: template.projectId },
       expectedCurrentSpecHash: p.summary.specHash,
       spec: {
         ...p.spec,
-        agents: [...p.spec.agents, { ...source, ...definition }],
+        agents: [...p.spec.agents, { ...runtime, ...definition }],
       },
       dryRun: !!input.dryRun,
     };

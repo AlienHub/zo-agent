@@ -41,6 +41,18 @@ describe("native remote HTTP MCP patches", () => {
     expect(patch([{ ...server(), headers: [] }]).agents[0].mcpServers.at(-1).headers).toEqual([]);
     expect(patch([]).agents[0].mcpServers.map((m: any) => m.name)).toEqual(["local", "legacy"]);
   });
+  test("preserves native redaction markers only at the same server and header identity", () => {
+    const p = fixture();
+    p.spec.mcpServers[0].headers[0].value = "********";
+    expect(patch([server()], p).agents[0].mcpServers.at(-1).headers[0].value).toBe("********");
+    expect(() => patch([{ ...server(), name: "renamed" }], p)).toThrow("mcp_secret_value_required");
+    expect(() => patch([{ ...server(), headers: [{ name: "authorization" }] }], p)).toThrow("mcp_secret_value_required");
+    expect(() => patch([{ ...server(), headers: [{ name: "Authorization", value: "********" }] }], p)).toThrow("mcp_secret_value_required");
+    expect(patch([{ ...server(), name: "renamed", headers: [{ name: "Authorization", value: "new-secret" }] }], p)
+      .agents[0].mcpServers.at(-1).headers[0].value).toBe("new-secret");
+    p.spec.mcpServers[0].env = [{ name: "TOKEN", value: "********", secret: true }];
+    expect(() => patch([{ ...server(), name: "renamed", headers: [] }], p)).toThrow("mcp_secret_value_required");
+  });
   test("rejects stale edits and active runs", () => {
     expect(() => patch([server()], fixture(), "stale")).toThrow("configuration changed");
     const p = fixture(); p.agents[0]!.currentRun = { runningRunCount: 1 };

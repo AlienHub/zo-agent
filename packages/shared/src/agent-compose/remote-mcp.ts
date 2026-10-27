@@ -6,6 +6,7 @@ import type { ComposeBinding } from "./types.ts";
 /** Form values are transport DTOs; persisted definitions remain native MCPServerSpec. */
 export interface RemoteMcpHeader {
   name: string;
+  originalName?: string;
   hasValue?: boolean;
   /** Omitted keeps the saved value; removing the header row deletes it. */
   value?: string;
@@ -28,6 +29,7 @@ interface NativeMcp {
   transport?: string;
   url?: string;
   headers?: NativeHeader[];
+  env?: NativeHeader[];
   [key: string]: unknown;
 }
 function agentFor(project: NativeProject, binding: ComposeBinding) {
@@ -52,7 +54,7 @@ function publicConfig(project: NativeProject, binding: ComposeBinding): AgentRem
     servers: servers.filter(managed).map((m) => ({
       originalName: m.name, name: m.name, url: m.url ?? "",
       // Treat every header as sensitive, including imported headers not marked secret.
-      headers: (m.headers ?? []).map((h) => ({ name: h.name, hasValue: !!h.value })),
+      headers: (m.headers ?? []).map((h) => ({ name: h.name, originalName: h.name, hasValue: !!h.value })),
     })),
     unmanagedCount: servers.filter((m) => !managed(m)).length,
   };
@@ -101,12 +103,19 @@ export function buildRemoteMcpPatch(project: NativeProject, input: {
       headerNames.add(h.name.toLowerCase());
       const old = previous?.headers?.find((v) => v.name.toLowerCase() === h.name.toLowerCase());
       const value = h.value === undefined ? old?.value : h.value;
+      // The daemon restores a marker at its exact existing resource path. A
+      // server/header rename moves that path, so require a real replacement.
+      if (value === "********" && (h.value !== undefined || m.name !== previous?.name || h.name !== old?.name))
+        throw new Error("mcp_secret_value_required");
       if (typeof value !== "string" || !value || value.length > 16384 || /[\r\n\0]/.test(value))
         throw new Error("Enter a value for each new MCP header");
       return { name: h.name, value, secret: true };
     });
     // Resolve project-level references into agent-local overrides, leaving shared definitions untouched.
-    return { ...previous, name: m.name, type: "remote", transport: "http", url: url.toString(), headers };
+    const server: NativeMcp = { ...previous, name: m.name, type: "remote", transport: "http", url: url.toString(), headers };
+    if (m.name !== previous?.name && Array.isArray(server.env) && server.env.some((v: NativeHeader) => v.value === "********"))
+      throw new Error("mcp_secret_value_required");
+    return server;
   });
   return {
     ...project.spec,
